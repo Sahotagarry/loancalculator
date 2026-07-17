@@ -1,0 +1,1590 @@
+openapi: 3.1.0
+info:
+  title: Api
+  version: 0.1.0
+  description: API specification
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: clients
+    description: Client management
+  - name: files
+    description: File (fiscal year) management
+  - name: loans
+    description: Loan and lease management
+  - name: trash
+    description: Trash (soft-deleted items)
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      description: Returns server health status
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  /clients:
+    get:
+      operationId: listClients
+      tags: [clients]
+      summary: List all clients
+      responses:
+        "200":
+          description: List of clients
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Client"
+    post:
+      operationId: createClient
+      tags: [clients]
+      summary: Create a client
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateClient"
+      responses:
+        "201":
+          description: Created client
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Client"
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /clients/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getClient
+      tags: [clients]
+      summary: Get a client
+      responses:
+        "200":
+          description: Client
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Client"
+        "404":
+          description: Client not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    patch:
+      operationId: updateClient
+      tags: [clients]
+      summary: Update a client
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateClient"
+      responses:
+        "200":
+          description: Updated client
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Client"
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Client not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      operationId: deleteClient
+      tags: [clients]
+      summary: Delete a client
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: Client not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /clients/{id}/files:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: listFiles
+      tags: [files]
+      summary: List files for a client
+      responses:
+        "200":
+          description: List of files
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/File"
+    post:
+      operationId: createFile
+      tags: [files]
+      summary: Create a file for a client
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateFile"
+      responses:
+        "201":
+          description: Created file
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/File"
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /files/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getFile
+      tags: [files]
+      summary: Get a file
+      responses:
+        "200":
+          description: File
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/File"
+        "404":
+          description: File not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    patch:
+      operationId: updateFile
+      tags: [files]
+      summary: Update a file
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateFile"
+      responses:
+        "200":
+          description: Updated file
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/File"
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: File not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      operationId: deleteFile
+      tags: [files]
+      summary: Delete a file
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: File not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /files/{id}/rollforward:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      operationId: rollForwardFile
+      tags: [files]
+      summary: Roll forward all outstanding loans to next fiscal year
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RollForwardFileRequest"
+      responses:
+        "201":
+          description: Rolled forward file with created loans
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/File"
+        "404":
+          description: File not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /files/{id}/loans:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: listLoans
+      tags: [loans]
+      summary: List loans for a file
+      responses:
+        "200":
+          description: List of loans
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Loan"
+    post:
+      operationId: createLoan
+      tags: [loans]
+      summary: Create a loan
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateLoan"
+      responses:
+        "201":
+          description: Created loan
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Loan"
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /counterparties:
+    get:
+      operationId: listCounterparties
+      tags: [loans]
+      summary: List distinct counterparties used across all loans
+      responses:
+        "200":
+          description: List of counterparty names
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: string
+
+  /loans/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getLoan
+      tags: [loans]
+      summary: Get a loan
+      responses:
+        "200":
+          description: Loan
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Loan"
+        "404":
+          description: Loan not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    patch:
+      operationId: updateLoan
+      tags: [loans]
+      summary: Update a loan
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateLoan"
+      responses:
+        "200":
+          description: Updated loan
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Loan"
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Loan not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      operationId: deleteLoan
+      tags: [loans]
+      summary: Delete a loan
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: Loan not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /prime-rate:
+    get:
+      operationId: getPrimeRate
+      tags: [loans]
+      summary: Get suggested fair value rate
+      parameters:
+        - name: date
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Prime rate and suggested FV rate
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PrimeRateResponse"
+        "500":
+          description: Failed to fetch rate
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /loans/{id}/rollforward:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      operationId: rollForwardLoan
+      tags: [loans]
+      summary: Roll forward a loan to next fiscal year
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RollForwardRequest"
+      responses:
+        "201":
+          description: Rolled forward loan
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Loan"
+        "404":
+          description: Loan not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /settings/unlock:
+    post:
+      operationId: unlockSettings
+      tags: [settings]
+      summary: Exchange the admin password for a short-lived settings token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UnlockSettingsInput"
+      responses:
+        "200":
+          description: Unlocked
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UnlockSettingsResult"
+        "401":
+          description: Incorrect password
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          description: Too many attempts
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /settings/azure:
+    get:
+      operationId: getAzureSettings
+      tags: [settings]
+      summary: Get Azure integration settings status (secrets masked)
+      responses:
+        "200":
+          description: Azure settings status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AzureSettingsStatus"
+    put:
+      operationId: updateAzureSettings
+      tags: [settings]
+      summary: Save Azure integration settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AzureSettingsInput"
+      responses:
+        "200":
+          description: Updated settings status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AzureSettingsStatus"
+
+  /files/{id}/import-document:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      operationId: importDocument
+      tags: [loans]
+      summary: Upload a PDF and extract loan/lease data from it
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: "#/components/schemas/DocumentUpload"
+      responses:
+        "200":
+          description: Extraction result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DocumentImportResult"
+        "400":
+          description: Missing settings or invalid upload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Document could not be read
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /trash:
+    get:
+      operationId: listTrash
+      tags: [trash]
+      summary: List all trashed clients, year-end files, and loans/leases
+      responses:
+        "200":
+          description: Trash contents
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TrashContents"
+
+  /trash/{type}/{id}/restore:
+    parameters:
+      - name: type
+        in: path
+        required: true
+        schema:
+          type: string
+          enum: [client, file, loan]
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      operationId: restoreTrashItem
+      tags: [trash]
+      summary: Restore a trashed item (and any trashed parents needed to reach it)
+      responses:
+        "204":
+          description: Restored
+        "404":
+          description: Item not found in trash
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /trash/{type}/{id}:
+    parameters:
+      - name: type
+        in: path
+        required: true
+        schema:
+          type: string
+          enum: [client, file, loan]
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    delete:
+      operationId: purgeTrashItem
+      tags: [trash]
+      summary: Permanently delete a trashed item (cannot be undone)
+      responses:
+        "204":
+          description: Permanently deleted
+        "404":
+          description: Item not found in trash
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+components:
+  schemas:
+    TrashedClient:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        deletedAt:
+          type: string
+          format: date-time
+          nullable: true
+      required: [id, name]
+
+    TrashedFile:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        fiscalYearEnd:
+          type: string
+          nullable: true
+        clientName:
+          type: string
+        deletedAt:
+          type: string
+          format: date-time
+          nullable: true
+      required: [id, name, clientName]
+
+    TrashedLoan:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        isCapitalLease:
+          type: boolean
+        fileName:
+          type: string
+        fiscalYearEnd:
+          type: string
+          nullable: true
+        clientName:
+          type: string
+        deletedAt:
+          type: string
+          format: date-time
+          nullable: true
+      required: [id, name, isCapitalLease, fileName, clientName]
+
+    TrashContents:
+      type: object
+      properties:
+        clients:
+          type: array
+          items:
+            $ref: "#/components/schemas/TrashedClient"
+        files:
+          type: array
+          items:
+            $ref: "#/components/schemas/TrashedFile"
+        loans:
+          type: array
+          items:
+            $ref: "#/components/schemas/TrashedLoan"
+      required: [clients, files, loans]
+
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required:
+        - status
+
+    Client:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        code:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        fileCount:
+          type: integer
+          description: Number of year-end files for this client (list endpoint only)
+        loanCount:
+          type: integer
+          description: Number of loans/leases across all files (list endpoint only)
+        latestFiscalYearEnd:
+          type: string
+          format: date-time
+          nullable: true
+          description: Most recent fiscal year end among the client's files (list endpoint only)
+      required:
+        - id
+        - name
+        - code
+        - createdAt
+        - updatedAt
+
+    CreateClient:
+      type: object
+      properties:
+        name:
+          type: string
+        code:
+          type: string
+      required:
+        - name
+        - code
+
+    UpdateClient:
+      type: object
+      properties:
+        name:
+          type: string
+        code:
+          type: string
+
+    File:
+      type: object
+      properties:
+        id:
+          type: string
+        clientId:
+          type: string
+        name:
+          type: string
+        fiscalYearEnd:
+          type: string
+          format: date
+        trivialThreshold:
+          type: number
+        materiality:
+          type: number
+        dismissedFindings:
+          type: array
+          items:
+            type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - clientId
+        - name
+        - fiscalYearEnd
+        - createdAt
+        - updatedAt
+
+    CreateFile:
+      type: object
+      properties:
+        name:
+          type: string
+        fiscalYearEnd:
+          type: string
+          format: date
+        trivialThreshold:
+          type: number
+        materiality:
+          type: number
+      required:
+        - name
+        - fiscalYearEnd
+
+    UpdateFile:
+      type: object
+      properties:
+        name:
+          type: string
+        fiscalYearEnd:
+          type: string
+          format: date
+        trivialThreshold:
+          type: number
+        materiality:
+          type: number
+        dismissedFindings:
+          type: array
+          items:
+            type: string
+          nullable: true
+
+    Loan:
+      type: object
+      properties:
+        id:
+          type: string
+        fileId:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        counterparty:
+          type: string
+          nullable: true
+        isCapitalLease:
+          type: boolean
+        principal:
+          type: string
+        downPayment:
+          type: string
+        interestRate:
+          type: string
+        amortizationYears:
+          type: number
+        termYears:
+          type: number
+        startDate:
+          type: string
+          format: date
+        fiscalYearEnd:
+          type: string
+          format: date
+        paymentFrequency:
+          type: string
+        ioMonths:
+          type: integer
+        specificIoMonths:
+          type: string
+        balloonPayment:
+          type: string
+        transferOfOwnership:
+          type: boolean
+        bargainPurchaseOption:
+          type: boolean
+        leaseTermPct:
+          type: string
+        pvPctFairValue:
+          type: string
+        fairValue:
+          type: string
+        specializedAsset:
+          type: boolean
+        assetDescription:
+          type: string
+        assetCost:
+          type: string
+        assetUsefulLife:
+          type: integer
+        securityClauses:
+          type: array
+          items:
+            type: string
+          nullable: true
+        collateralType:
+          type: string
+          nullable: true
+        collateralDescription:
+          type: string
+          nullable: true
+        collateralDepreciableCost:
+          type: string
+          nullable: true
+        collateralLandCost:
+          type: string
+          nullable: true
+        collateralInServiceDate:
+          type: string
+          format: date
+          nullable: true
+        collateralMethod:
+          type: string
+          nullable: true
+        collateralUsefulLifeYears:
+          type: integer
+          nullable: true
+        collateralDecliningRate:
+          type: string
+          nullable: true
+        collateralSalvageValue:
+          type: string
+          nullable: true
+        capitalLeaseRationale:
+          type: string
+        monthlyPayment:
+          type: string
+        paymentOverride:
+          type: string
+          nullable: true
+        termMonths:
+          type: integer
+        isOfficeProperty:
+          type: boolean
+        freeRentMonths:
+          type: integer
+        rentEscalationRate:
+          type: string
+        rentSteps:
+          type: array
+          items:
+            $ref: "#/components/schemas/RentStep"
+          nullable: true
+        tenantImprovementAllowance:
+          type: string
+        otherInducements:
+          type: string
+        camMonthly:
+          type: string
+          nullable: true
+        inducementReceivedInCash:
+          type: boolean
+        covenantViolation:
+          type: boolean
+        rolledFromId:
+          type: string
+        fvRate:
+          type: string
+        fvDecision:
+          type: string
+          enum: [use_fv, trivial, immaterial]
+        fvDecisionNote:
+          type: string
+        dismissedFindings:
+          type: array
+          items:
+            type: string
+          nullable: true
+        sourceDocumentName:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - fileId
+        - name
+        - isCapitalLease
+        - principal
+        - interestRate
+        - amortizationYears
+        - termYears
+        - startDate
+        - fiscalYearEnd
+        - paymentFrequency
+        - ioMonths
+        - specificIoMonths
+        - balloonPayment
+        - transferOfOwnership
+        - bargainPurchaseOption
+        - leaseTermPct
+        - pvPctFairValue
+        - specializedAsset
+        - isOfficeProperty
+        - freeRentMonths
+        - rentEscalationRate
+        - tenantImprovementAllowance
+        - otherInducements
+        - inducementReceivedInCash
+        - covenantViolation
+        - createdAt
+        - updatedAt
+
+    CreateLoan:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        counterparty:
+          type: string
+          nullable: true
+        isCapitalLease:
+          type: boolean
+        principal:
+          type: number
+        downPayment:
+          type: number
+          nullable: true
+        interestRate:
+          type: number
+        amortizationYears:
+          type: number
+        termYears:
+          type: number
+        startDate:
+          type: string
+          format: date
+        fiscalYearEnd:
+          type: string
+          format: date
+        paymentFrequency:
+          type: string
+        ioMonths:
+          type: integer
+        specificIoMonths:
+          type: string
+        balloonPayment:
+          type: number
+        transferOfOwnership:
+          type: boolean
+        bargainPurchaseOption:
+          type: boolean
+        leaseTermPct:
+          type: number
+        pvPctFairValue:
+          type: number
+        fairValue:
+          type: number
+        specializedAsset:
+          type: boolean
+        assetDescription:
+          type: string
+        assetCost:
+          type: number
+        assetUsefulLife:
+          type: integer
+        securityClauses:
+          type: array
+          items:
+            type: string
+          nullable: true
+        collateralType:
+          type: string
+          nullable: true
+        collateralDescription:
+          type: string
+          nullable: true
+        collateralDepreciableCost:
+          type: number
+          nullable: true
+        collateralLandCost:
+          type: number
+          nullable: true
+        collateralInServiceDate:
+          type: string
+          format: date
+          nullable: true
+        collateralMethod:
+          type: string
+          nullable: true
+        collateralUsefulLifeYears:
+          type: integer
+          nullable: true
+        collateralDecliningRate:
+          type: number
+          nullable: true
+        collateralSalvageValue:
+          type: number
+          nullable: true
+        capitalLeaseRationale:
+          type: string
+        monthlyPayment:
+          type: number
+        paymentOverride:
+          type: number
+          nullable: true
+        termMonths:
+          type: integer
+        isOfficeProperty:
+          type: boolean
+        freeRentMonths:
+          type: integer
+        rentEscalationRate:
+          type: number
+        rentSteps:
+          type: array
+          items:
+            $ref: "#/components/schemas/RentStep"
+          nullable: true
+        tenantImprovementAllowance:
+          type: number
+        otherInducements:
+          type: number
+        camMonthly:
+          type: number
+          nullable: true
+        inducementReceivedInCash:
+          type: boolean
+        covenantViolation:
+          type: boolean
+        fvRate:
+          type: number
+        fvDecision:
+          type: string
+          enum: [use_fv, trivial, immaterial]
+        fvDecisionNote:
+          type: string
+        sourceDocumentBlob:
+          type: string
+          nullable: true
+        sourceDocumentName:
+          type: string
+          nullable: true
+      required:
+        - name
+        - principal
+        - interestRate
+        - amortizationYears
+        - termYears
+        - startDate
+        - fiscalYearEnd
+
+    UpdateLoan:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        counterparty:
+          type: string
+          nullable: true
+        isCapitalLease:
+          type: boolean
+        principal:
+          type: number
+        downPayment:
+          type: number
+          nullable: true
+        interestRate:
+          type: number
+        amortizationYears:
+          type: number
+        termYears:
+          type: number
+        startDate:
+          type: string
+          format: date
+        paymentFrequency:
+          type: string
+        ioMonths:
+          type: integer
+        specificIoMonths:
+          type: string
+        balloonPayment:
+          type: number
+        transferOfOwnership:
+          type: boolean
+        bargainPurchaseOption:
+          type: boolean
+        leaseTermPct:
+          type: number
+        pvPctFairValue:
+          type: number
+        fairValue:
+          type: number
+          nullable: true
+        specializedAsset:
+          type: boolean
+        assetDescription:
+          type: string
+          nullable: true
+        assetCost:
+          type: number
+          nullable: true
+        assetUsefulLife:
+          type: integer
+          nullable: true
+        securityClauses:
+          type: array
+          items:
+            type: string
+          nullable: true
+        collateralType:
+          type: string
+          nullable: true
+        collateralDescription:
+          type: string
+          nullable: true
+        collateralDepreciableCost:
+          type: number
+          nullable: true
+        collateralLandCost:
+          type: number
+          nullable: true
+        collateralInServiceDate:
+          type: string
+          format: date
+          nullable: true
+        collateralMethod:
+          type: string
+          nullable: true
+        collateralUsefulLifeYears:
+          type: integer
+          nullable: true
+        collateralDecliningRate:
+          type: number
+          nullable: true
+        collateralSalvageValue:
+          type: number
+          nullable: true
+        capitalLeaseRationale:
+          type: string
+          nullable: true
+        monthlyPayment:
+          type: number
+        paymentOverride:
+          type: number
+          nullable: true
+        termMonths:
+          type: integer
+        isOfficeProperty:
+          type: boolean
+        freeRentMonths:
+          type: integer
+        rentEscalationRate:
+          type: number
+        rentSteps:
+          type: array
+          items:
+            $ref: "#/components/schemas/RentStep"
+          nullable: true
+        tenantImprovementAllowance:
+          type: number
+        otherInducements:
+          type: number
+        camMonthly:
+          type: number
+          nullable: true
+        inducementReceivedInCash:
+          type: boolean
+        covenantViolation:
+          type: boolean
+        fvRate:
+          type: number
+        fvDecision:
+          type: string
+          enum: [use_fv, trivial, immaterial]
+        fvDecisionNote:
+          type: string
+        dismissedFindings:
+          type: array
+          items:
+            type: string
+          nullable: true
+
+    PrimeRateResponse:
+      type: object
+      properties:
+        date:
+          type: string
+          format: date
+        primeRate:
+          type: number
+        suggestedRate:
+          type: number
+        source:
+          type: string
+      required:
+        - date
+        - primeRate
+        - suggestedRate
+        - source
+
+    RollForwardRequest:
+      type: object
+      properties:
+        fileId:
+          type: string
+        newFiscalYearEnd:
+          type: string
+          format: date
+      required:
+        - fileId
+        - newFiscalYearEnd
+
+    RollForwardFileRequest:
+      type: object
+      properties:
+        newFiscalYearEnd:
+          type: string
+          format: date
+      required:
+        - newFiscalYearEnd
+
+    AzureSettingsStatus:
+      type: object
+      properties:
+        docIntelEndpoint:
+          type: string
+        openaiEndpoint:
+          type: string
+        openaiDeployment:
+          type: string
+        docIntelKeySet:
+          type: boolean
+        openaiKeySet:
+          type: boolean
+        storageConnectionSet:
+          type: boolean
+      required:
+        - docIntelEndpoint
+        - openaiEndpoint
+        - openaiDeployment
+        - docIntelKeySet
+        - openaiKeySet
+        - storageConnectionSet
+
+    AzureSettingsInput:
+      type: object
+      properties:
+        docIntelEndpoint:
+          type: string
+        docIntelKey:
+          type: string
+        openaiEndpoint:
+          type: string
+        openaiKey:
+          type: string
+        openaiDeployment:
+          type: string
+        storageConnectionString:
+          type: string
+
+    UnlockSettingsInput:
+      type: object
+      properties:
+        password:
+          type: string
+          minLength: 1
+      required:
+        - password
+
+    UnlockSettingsResult:
+      type: object
+      properties:
+        token:
+          type: string
+        expiresAt:
+          type: string
+      required:
+        - token
+        - expiresAt
+
+    DocumentUpload:
+      type: object
+      properties:
+        file:
+          type: string
+          format: binary
+      required:
+        - file
+
+    ImportedLoanFields:
+      type: object
+      properties:
+        name:
+          type: string
+          nullable: true
+        lender:
+          type: string
+          nullable: true
+        principal:
+          type: number
+          nullable: true
+        downPayment:
+          type: number
+          nullable: true
+        interestRate:
+          type: number
+          nullable: true
+        primeSpread:
+          type: number
+          nullable: true
+        statedPrimeRate:
+          type: number
+          nullable: true
+        amortizationYears:
+          type: number
+          nullable: true
+        termYears:
+          type: number
+          nullable: true
+        startDate:
+          type: string
+          nullable: true
+        paymentFrequency:
+          type: string
+          enum: [monthly, semi-monthly, bi-weekly, weekly]
+          nullable: true
+        paymentAmount:
+          type: number
+          nullable: true
+        interestOnlyMonths:
+          type: number
+          nullable: true
+        balloonPayment:
+          type: number
+          nullable: true
+        securityDescription:
+          type: string
+          nullable: true
+
+    ImportedLeaseFields:
+      type: object
+      properties:
+        name:
+          type: string
+          nullable: true
+        lessor:
+          type: string
+          nullable: true
+        assetDescription:
+          type: string
+          nullable: true
+        assetType:
+          type: string
+          enum: [vehicle, equipment, office_commercial, other]
+          nullable: true
+        startDate:
+          type: string
+          nullable: true
+        termMonths:
+          type: number
+          nullable: true
+        monthlyPayment:
+          type: number
+          nullable: true
+        downPayment:
+          type: number
+          nullable: true
+        interestRate:
+          type: number
+          nullable: true
+        fairValue:
+          type: number
+          nullable: true
+        economicLifeYears:
+          type: number
+          nullable: true
+        buyoutAmount:
+          type: number
+          nullable: true
+        transferOfOwnership:
+          type: boolean
+          nullable: true
+        bargainPurchaseOption:
+          type: boolean
+          nullable: true
+        specializedAsset:
+          type: boolean
+          nullable: true
+        paymentAtBeginning:
+          type: boolean
+          nullable: true
+        rentableSquareFeet:
+          type: number
+          nullable: true
+        rentSteps:
+          type: array
+          items:
+            $ref: "#/components/schemas/RentStep"
+          nullable: true
+        tenantImprovementAllowance:
+          type: number
+          nullable: true
+        freeRentMonths:
+          type: number
+          nullable: true
+        camAnnualPerSquareFoot:
+          type: number
+          nullable: true
+        camMonthly:
+          type: number
+          nullable: true
+        percentageRentNote:
+          type: string
+          nullable: true
+        fieldNotes:
+          type: object
+          additionalProperties:
+            type: string
+          nullable: true
+        estimates:
+          allOf:
+            - $ref: "#/components/schemas/LeaseEstimates"
+          nullable: true
+
+    LeaseEstimates:
+      type: object
+      properties:
+        economicLifeYears:
+          type: number
+          nullable: true
+        fairValue:
+          type: number
+          nullable: true
+        interestRate:
+          type: number
+          nullable: true
+        reasoning:
+          type: string
+          nullable: true
+
+    RentStep:
+      type: object
+      properties:
+        fromYear:
+          type: integer
+        toYear:
+          type: integer
+        monthlyRent:
+          type: number
+        annualRatePerSquareFoot:
+          type: number
+          nullable: true
+      required:
+        - fromYear
+        - toYear
+        - monthlyRent
+
+    DocumentImportResult:
+      type: object
+      properties:
+        classification:
+          type: string
+          enum: [loan, lease, other]
+        confidence:
+          type: number
+        reasoning:
+          type: string
+        documentBlob:
+          type: string
+          nullable: true
+        documentName:
+          type: string
+          nullable: true
+        loan:
+          allOf:
+            - $ref: "#/components/schemas/ImportedLoanFields"
+          nullable: true
+        lease:
+          allOf:
+            - $ref: "#/components/schemas/ImportedLeaseFields"
+          nullable: true
+      required:
+        - classification
+        - confidence
+        - reasoning
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
