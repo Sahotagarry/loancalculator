@@ -37,6 +37,7 @@ jobs:
           mkdir -p deploy/dist/public
           cp -r artifacts/api-server/dist/. deploy/dist/
           cp -r artifacts/loan-calculator/dist/. deploy/dist/public/
+          ls -R deploy/dist
           cat > deploy/package.json << 'EOF'
           {
             "name": "loan-calculator-server",
