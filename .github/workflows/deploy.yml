@@ -27,7 +27,7 @@ jobs:
         run: pnpm run typecheck:libs
 
       - name: Build web front end
-        run: BASE_PATH=/ pnpm --filter @workspace/loan-calculator run build
+        run: PORT=3000 BASE_PATH=/ pnpm --filter @workspace/loan-calculator run build
 
       - name: Build API server
         run: pnpm --filter @workspace/api-server run build
