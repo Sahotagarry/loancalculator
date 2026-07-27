@@ -1,0 +1,20 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "I-rkXN3RtqytiCS9xk9ZO"
+uri = "file://exports/clearline-loan-calculator-source.zip"
+type = "unspecified"
+title = "Clearline Loan Calculator — source with signed-in user name"
+
+[[outputs]]
+id = "oFWsnvWGfwlGNkf_4pRti"
+uri = "file://exports/Azure-Deployment-Guide.docx"
+type = "word_document"
+title = "Azure Deployment Guide — updated"
+
+[[outputs]]
+id = "f_JIiSMmSKhknLmfGDNEn"
+uri = "file://exports/azure-ai-kit.zip"
+type = "unspecified"
+title = "Azure AI kit for the audit vouching app"

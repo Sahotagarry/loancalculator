@@ -5,21 +5,28 @@ import path from "path";
 import runtimeErrorOverlay from "@replit/vite-plugin-runtime-error-modal";
 import { metaImagesPlugin } from "./vite-plugin-meta-images";
 
+// PORT is required when running the dev server (Replit workflows provide it),
+// but a production build doesn't listen on a port — default it so plain
+// `vite build` works outside Replit (e.g. CI on GitHub Actions).
+const isBuild = process.argv.includes("build");
+
 const rawPort = process.env.PORT;
 
-if (!rawPort) {
+if (!rawPort && !isBuild) {
   throw new Error(
     "PORT environment variable is required but was not provided.",
   );
 }
 
-const port = Number(rawPort);
+const port = rawPort ? Number(rawPort) : 5173;
 
 if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
-const basePath = process.env.BASE_PATH;
+// BASE_PATH is the URL prefix the app is served under ("/" on a standalone
+// host like Azure; a sub-path on Replit). Default to "/" for builds.
+const basePath = process.env.BASE_PATH ?? (isBuild ? "/" : undefined);
 
 if (!basePath) {
   throw new Error(

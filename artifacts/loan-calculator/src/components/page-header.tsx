@@ -1,9 +1,15 @@
 import type { ReactNode } from "react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, LogOut } from "lucide-react";
 import { HelpDialog } from "@/components/help-dialog";
-import logoWhite from "@assets/clearline-logo-white.png";
+import { useEasyAuth, EASY_AUTH_LOGOUT_URL } from "@/hooks/use-easy-auth";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import logoWhite from "../assets/clearline-logo-white.png";
 
 interface PageHeaderProps {
   backHref?: string;
@@ -14,6 +20,7 @@ interface PageHeaderProps {
 }
 
 export function PageHeader({ backHref, breadcrumb, title, meta, actions }: PageHeaderProps) {
+  const { user } = useEasyAuth();
   return (
     <header className="dark sticky top-0 z-40 border-b border-[#3a3a3a] bg-[#262626] text-foreground">
       <div className="max-w-6xl mx-auto px-4 md:px-8 py-2.5 flex flex-wrap items-center gap-x-3 gap-y-2">
@@ -46,6 +53,36 @@ export function PageHeader({ backHref, breadcrumb, title, meta, actions }: PageH
           <div className="flex flex-wrap items-center gap-2 justify-end min-w-0">
             {actions}
             <HelpDialog />
+            {user && (
+              <div className="flex items-center gap-1 min-w-0">
+                {user.displayName && (
+                  <span
+                    className="hidden md:block text-xs text-muted-foreground truncate max-w-40"
+                    data-testid="text-signed-in-user"
+                  >
+                    {user.displayName}
+                  </span>
+                )}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    asChild
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8"
+                    data-testid="button-sign-out"
+                  >
+                    <a href={EASY_AUTH_LOGOUT_URL}>
+                      <LogOut className="h-4 w-4" />
+                    </a>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  Sign out{user.displayName ? ` (${user.displayName})` : ""}
+                </TooltipContent>
+              </Tooltip>
+              </div>
+            )}
           </div>
         </div>
       </div>

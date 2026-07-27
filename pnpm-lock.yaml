@@ -688,6 +688,10 @@ importers:
         version: 0.31.10
 
   scripts:
+    dependencies:
+      docx:
+        specifier: ^9.7.1
+        version: 9.7.1
     devDependencies:
       '@types/node':
         specifier: 'catalog:'
