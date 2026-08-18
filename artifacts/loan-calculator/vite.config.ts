@@ -4,6 +4,13 @@ import tailwindcss from "@tailwindcss/vite";
 import path from "path";
 import runtimeErrorOverlay from "@replit/vite-plugin-runtime-error-modal";
 import { metaImagesPlugin } from "./vite-plugin-meta-images";
+import { readFileSync } from "fs";
+
+// App version comes from the workspace root package.json (single source of truth).
+const rootPkg = JSON.parse(
+  readFileSync(path.resolve(import.meta.dirname, "..", "..", "package.json"), "utf-8"),
+);
+const appVersion: string = rootPkg.version ?? "0.0.0";
 
 // PORT is required when running the dev server (Replit workflows provide it),
 // but a production build doesn't listen on a port — default it so plain
@@ -36,6 +43,9 @@ if (!basePath) {
 
 export default defineConfig({
   base: basePath,
+  define: {
+    __APP_VERSION__: JSON.stringify(appVersion),
+  },
   plugins: [
     react(),
     tailwindcss(),

@@ -45,11 +45,19 @@ export function PageHeader({ backHref, breadcrumb, title, meta, actions }: PageH
           </div>
         </div>
         <div className="flex flex-col items-end gap-2.5 ml-auto flex-shrink-0 min-w-0">
-          <img
-            src={logoWhite}
-            alt="Clearline Logo"
-            className="hidden sm:block h-7 w-auto object-contain flex-shrink-0"
-          />
+          <div className="hidden sm:flex items-center gap-2 flex-shrink-0">
+            <img
+              src={logoWhite}
+              alt="Clearline Logo"
+              className="h-7 w-auto object-contain"
+            />
+            <span
+              className="text-[10px] leading-none text-muted-foreground"
+              data-testid="text-app-version"
+            >
+              v{__APP_VERSION__}
+            </span>
+          </div>
           <div className="flex flex-wrap items-center gap-2 justify-end min-w-0">
             {actions}
             <HelpDialog />

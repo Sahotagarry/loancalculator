@@ -1,5 +1,7 @@
 # Auto-memory index
 
+- [App versioning](app-versioning.md) — version lives ONLY in root package.json, baked in at build via define in both vite.config and api-server build.mjs; never runtime package.json lookup (Azure dist lacks root)
+
 - [Payment grace period on loans](grace-period-loans.md) — grace rows are principal:0/payment:0, accretion grows balance directly; date-based boundaries; isGrace must survive FV transforms
 
 - [Operating lease classification](operating-lease-classification.md) — no type column; use isOperatingLeaseLoan() (termMonths is the loan-vs-lease discriminator), never re-inline the heuristic
