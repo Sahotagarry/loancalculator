@@ -20,6 +20,9 @@ export const HealthCheckResponse = zod.object({
 /**
  * @summary List all clients
  */
+export const listClientsResponseLatestFiscalYearEndRegExp = new RegExp('^\\d{4}-\\d{2}-\\d{2}$');
+
+
 export const ListClientsResponseItem = zod.object({
   "id": zod.string(),
   "name": zod.string(),
@@ -28,7 +31,7 @@ export const ListClientsResponseItem = zod.object({
   "updatedAt": zod.coerce.date(),
   "fileCount": zod.number().optional().describe('Number of year-end files for this client (list endpoint only)'),
   "loanCount": zod.number().optional().describe('Number of loans\/leases across all files (list endpoint only)'),
-  "latestFiscalYearEnd": zod.coerce.date().nullish().describe('Most recent fiscal year end among the client\'s files (list endpoint only)')
+  "latestFiscalYearEnd": zod.string().regex(listClientsResponseLatestFiscalYearEndRegExp).nullish().describe('Most recent fiscal year end among the client\'s files (list endpoint only)')
 })
 export const ListClientsResponse = zod.array(ListClientsResponseItem)
 
@@ -49,6 +52,9 @@ export const GetClientParams = zod.object({
   "id": zod.coerce.string()
 })
 
+export const getClientResponseLatestFiscalYearEndRegExp = new RegExp('^\\d{4}-\\d{2}-\\d{2}$');
+
+
 export const GetClientResponse = zod.object({
   "id": zod.string(),
   "name": zod.string(),
@@ -57,7 +63,7 @@ export const GetClientResponse = zod.object({
   "updatedAt": zod.coerce.date(),
   "fileCount": zod.number().optional().describe('Number of year-end files for this client (list endpoint only)'),
   "loanCount": zod.number().optional().describe('Number of loans\/leases across all files (list endpoint only)'),
-  "latestFiscalYearEnd": zod.coerce.date().nullish().describe('Most recent fiscal year end among the client\'s files (list endpoint only)')
+  "latestFiscalYearEnd": zod.string().regex(getClientResponseLatestFiscalYearEndRegExp).nullish().describe('Most recent fiscal year end among the client\'s files (list endpoint only)')
 })
 
 
@@ -73,6 +79,9 @@ export const UpdateClientBody = zod.object({
   "code": zod.string().optional()
 })
 
+export const updateClientResponseLatestFiscalYearEndRegExp = new RegExp('^\\d{4}-\\d{2}-\\d{2}$');
+
+
 export const UpdateClientResponse = zod.object({
   "id": zod.string(),
   "name": zod.string(),
@@ -81,7 +90,7 @@ export const UpdateClientResponse = zod.object({
   "updatedAt": zod.coerce.date(),
   "fileCount": zod.number().optional().describe('Number of year-end files for this client (list endpoint only)'),
   "loanCount": zod.number().optional().describe('Number of loans\/leases across all files (list endpoint only)'),
-  "latestFiscalYearEnd": zod.coerce.date().nullish().describe('Most recent fiscal year end among the client\'s files (list endpoint only)')
+  "latestFiscalYearEnd": zod.string().regex(updateClientResponseLatestFiscalYearEndRegExp).nullish().describe('Most recent fiscal year end among the client\'s files (list endpoint only)')
 })
 
 

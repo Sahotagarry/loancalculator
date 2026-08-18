@@ -23,7 +23,10 @@ router.get("/clients", async (_req, res): Promise<void> => {
       updatedAt: clientsTable.updatedAt,
       fileCount: sql<number>`count(distinct ${filesTable.id})::int`,
       loanCount: sql<number>`count(${loansTable.id})::int`,
-      latestFiscalYearEnd: sql<string | null>`max(${filesTable.fiscalYearEnd})`,
+      // ::text keeps this a plain "YYYY-MM-DD" date string; without it the
+      // driver returns a midnight-UTC timestamp, which western timezones
+      // display as the previous day.
+      latestFiscalYearEnd: sql<string | null>`max(${filesTable.fiscalYearEnd})::text`,
     })
     .from(clientsTable)
     .leftJoin(filesTable, and(eq(filesTable.clientId, clientsTable.id), isNull(filesTable.deletedAt)))

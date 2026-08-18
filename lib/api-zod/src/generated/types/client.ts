@@ -16,6 +16,9 @@ export interface Client {
   fileCount?: number;
   /** Number of loans/leases across all files (list endpoint only) */
   loanCount?: number;
-  /** Most recent fiscal year end among the client's files (list endpoint only) */
-  latestFiscalYearEnd?: Date | null;
+  /**
+     * Most recent fiscal year end among the client's files (list endpoint only)
+     * @pattern ^\d{4}-\d{2}-\d{2}$
+     */
+  latestFiscalYearEnd?: string | null;
 }

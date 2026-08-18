@@ -1,5 +1,6 @@
 # Auto-memory index
 
+- [One-step release](release-command.md) — `pnpm release` syncs source to GitHub via connector proxy (shell git push never works) and waits for the Azure deploy workflow; bump root version first
 - [App versioning](app-versioning.md) — version lives ONLY in root package.json, baked in at build via define in both vite.config and api-server build.mjs; never runtime package.json lookup (Azure dist lacks root)
 
 - [Payment grace period on loans](grace-period-loans.md) — grace rows are principal:0/payment:0, accretion grows balance directly; date-based boundaries; isGrace must survive FV transforms
