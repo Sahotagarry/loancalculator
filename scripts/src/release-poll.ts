@@ -8,6 +8,8 @@ export interface ActionsRun {
   status: string; // "queued" | "in_progress" | "completed"
   conclusion: string | null; // "success" | "failure" | "cancelled" | ...
   html_url: string;
+  /** Workflow file path, e.g. ".github/workflows/deploy.yml" */
+  path?: string;
 }
 
 export interface PollOptions {
