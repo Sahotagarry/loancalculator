@@ -8,6 +8,7 @@
 import type { DocumentImportResultClassification } from './documentImportResultClassification';
 import type { ImportedLeaseFields } from './importedLeaseFields';
 import type { ImportedLoanFields } from './importedLoanFields';
+import type { ImportedMasterAgreementFields } from './importedMasterAgreementFields';
 
 export interface DocumentImportResult {
   classification: DocumentImportResultClassification;
@@ -17,4 +18,6 @@ export interface DocumentImportResult {
   documentName?: string | null;
   loan?: ImportedLoanFields | null;
   lease?: ImportedLeaseFields | null;
+  masterAgreement?: ImportedMasterAgreementFields | null;
+  facilities?: ImportedLoanFields[] | null;
 }

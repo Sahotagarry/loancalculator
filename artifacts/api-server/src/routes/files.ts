@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { and, eq, isNull } from "drizzle-orm";
-import { db, filesTable, loansTable } from "@workspace/db";
+import { db, filesTable, loansTable, masterAgreementsTable } from "@workspace/db";
 import { evaluateFvDecisionsForFile } from "../lib/fv-decisions";
 import {
   CreateFileBody,
@@ -266,6 +266,35 @@ router.post("/files/:id/rollforward", async (req, res): Promise<void> => {
       })
       .returning();
 
+    // Clone the master agreements referenced by outstanding facilities so the
+    // grouping carries into the new year, and remap each facility's link.
+    const masterIds = new Set(
+      outstandingLoans
+        .map((l) => l.masterAgreementId)
+        .filter((v): v is string => v != null),
+    );
+    const masterIdMap = new Map<string, string>();
+    if (masterIds.size > 0) {
+      const masters = await tx
+        .select()
+        .from(masterAgreementsTable)
+        .where(
+          and(
+            eq(masterAgreementsTable.fileId, originalFile.id),
+            isNull(masterAgreementsTable.deletedAt),
+          ),
+        );
+      for (const master of masters) {
+        if (!masterIds.has(master.id)) continue;
+        const { id, createdAt, updatedAt, ...rest } = master;
+        const [cloned] = await tx
+          .insert(masterAgreementsTable)
+          .values({ ...rest, fileId: createdFile.id, rolledFromId: master.id })
+          .returning();
+        masterIdMap.set(master.id, cloned.id);
+      }
+    }
+
     for (const original of outstandingLoans) {
       const { id, createdAt, updatedAt, ...rest } = original;
       await tx.insert(loansTable).values({
@@ -273,6 +302,9 @@ router.post("/files/:id/rollforward", async (req, res): Promise<void> => {
         fileId: createdFile.id,
         fiscalYearEnd: newFiscalYearEnd,
         rolledFromId: original.id,
+        masterAgreementId: original.masterAgreementId
+          ? (masterIdMap.get(original.masterAgreementId) ?? null)
+          : null,
       });
     }
 

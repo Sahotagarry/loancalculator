@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { and, eq, isNotNull, isNull } from "drizzle-orm";
-import { db, loansTable, filesTable } from "@workspace/db";
+import { db, loansTable, filesTable, masterAgreementsTable } from "@workspace/db";
 import {
   CreateLoanBody,
   GetLoanParams,
@@ -21,10 +21,31 @@ import {
   type FvEvalLoanInput,
 } from "../lib/fv-decisions";
 import { validateFvRate } from "../lib/loan-validation";
+import { resolveInheritedSecurityClauses } from "../lib/master-link";
 import { loadAzureSettings, requireSettings, UserFacingError } from "../lib/azure-settings";
 import { retrieveDocument, deleteDocumentRefSafe } from "../lib/document-store";
 
 const router: IRouter = Router();
+
+// A facility can only link to a live master agreement in the same file.
+// Returns an error message, or null when the link is valid.
+const validateMasterLink = async (
+  masterAgreementId: string,
+  fileId: string,
+): Promise<{ error: string | null; securityDescription: string | null }> => {
+  const [master] = await db
+    .select({
+      id: masterAgreementsTable.id,
+      fileId: masterAgreementsTable.fileId,
+      securityDescription: masterAgreementsTable.securityDescription,
+    })
+    .from(masterAgreementsTable)
+    .where(and(eq(masterAgreementsTable.id, masterAgreementId), isNull(masterAgreementsTable.deletedAt)));
+  if (!master) return { error: "Master agreement not found", securityDescription: null };
+  if (master.fileId !== fileId)
+    return { error: "Master agreement belongs to a different year-end file", securityDescription: null };
+  return { error: null, securityDescription: master.securityDescription };
+};
 
 const stripTime = (d: string | null): string | undefined =>
   d ? d.split("T")[0] : undefined;
@@ -73,6 +94,7 @@ const cleanLoan = (loan: typeof loansTable.$inferSelect) => ({
   camMonthly: loan.camMonthly ?? undefined,
   otherInducements: loan.otherInducements ?? undefined,
   rolledFromId: loan.rolledFromId ?? undefined,
+  masterAgreementId: loan.masterAgreementId ?? undefined,
   fvRate: loan.fvRate ?? undefined,
   fvDecision: loan.fvDecision ?? undefined,
   fvDecisionNote: loan.fvDecisionNote ?? undefined,
@@ -137,6 +159,23 @@ router.post("/files/:id/loans", async (req, res): Promise<void> => {
   if (fvRateError) {
     res.status(400).json({ error: fvRateError });
     return;
+  }
+
+  let inheritedSecurityClauses: string[] | null = null;
+  if (data.masterAgreementId != null) {
+    const link = await validateMasterLink(data.masterAgreementId, params.data.id);
+    if (link.error) {
+      res.status(400).json({ error: link.error });
+      return;
+    }
+    // Copy-on-link: when the facility supplies no security wording of its own,
+    // persist the master's shared wording onto the facility so the disclosure
+    // survives a later master deletion/unlink.
+    inheritedSecurityClauses = resolveInheritedSecurityClauses(
+      data.securityClauses,
+      null,
+      link.securityDescription,
+    );
   }
 
   let fvDecision = data.fvDecision ?? null;
@@ -207,7 +246,7 @@ router.post("/files/:id/loans", async (req, res): Promise<void> => {
       assetDescription: data.assetDescription,
       assetCost: data.assetCost != null ? data.assetCost.toString() : null,
       assetUsefulLife: data.assetUsefulLife,
-      securityClauses: data.securityClauses ?? null,
+      securityClauses: data.securityClauses?.length ? data.securityClauses : (inheritedSecurityClauses ?? data.securityClauses ?? null),
       collateralType: data.collateralType ?? null,
       collateralDescription: data.collateralDescription ?? null,
       collateralDepreciableCost:
@@ -244,6 +283,7 @@ router.post("/files/:id/loans", async (req, res): Promise<void> => {
       fvDecisionNote: data.fvDecisionNote ?? null,
       sourceDocumentBlob: data.sourceDocumentBlob ?? null,
       sourceDocumentName: data.sourceDocumentName ?? null,
+      masterAgreementId: data.masterAgreementId ?? null,
     })
     .returning();
 
@@ -387,6 +427,34 @@ router.patch("/loans/:id", async (req, res): Promise<void> => {
   }
   if (data.fvDecision != null) updates.fvDecision = data.fvDecision;
   if (data.fvDecisionNote != null) updates.fvDecisionNote = data.fvDecisionNote;
+  if (data.masterAgreementId !== undefined) {
+    if (data.masterAgreementId != null) {
+      const [current] = await db
+        .select({ fileId: loansTable.fileId, securityClauses: loansTable.securityClauses })
+        .from(loansTable)
+        .where(and(eq(loansTable.id, params.data.id), isNull(loansTable.deletedAt)));
+      if (!current) {
+        res.status(404).json({ error: "Loan not found" });
+        return;
+      }
+      const link = await validateMasterLink(data.masterAgreementId, current.fileId);
+      if (link.error) {
+        res.status(400).json({ error: link.error });
+        return;
+      }
+      // Copy-on-link: persist the master's security wording onto the facility
+      // when neither the request nor the stored loan carries its own wording,
+      // so the disclosure survives a later master deletion/unlink.
+      const inherited = resolveInheritedSecurityClauses(
+        data.securityClauses,
+        current.securityClauses as string[] | null,
+        link.securityDescription,
+      );
+      if (inherited) updates.securityClauses = inherited;
+    }
+    // Explicit null unlinks the facility (back to a standalone loan).
+    updates.masterAgreementId = data.masterAgreementId;
+  }
 
   // Re-evaluate the auto-suggested treatment decision when inputs that affect
   // the FV adjustment changed and the caller didn't explicitly pick a decision.
@@ -554,9 +622,52 @@ router.post("/loans/:id/rollforward", async (req, res): Promise<void> => {
     return;
   }
 
+  // Preserve the master agreement grouping across roll-forward: reuse the
+  // target file's copy of this master (matched by roll-forward lineage or by
+  // identity when rolling within the same file), cloning it if none exists.
+  let newMasterId: string | null = null;
+  if (original.masterAgreementId) {
+    const [sourceMaster] = await db
+      .select()
+      .from(masterAgreementsTable)
+      .where(
+        and(
+          eq(masterAgreementsTable.id, original.masterAgreementId),
+          isNull(masterAgreementsTable.deletedAt),
+        ),
+      );
+    if (sourceMaster) {
+      if (sourceMaster.fileId === parsed.data.fileId) {
+        newMasterId = sourceMaster.id;
+      } else {
+        const targetMasters = await db
+          .select()
+          .from(masterAgreementsTable)
+          .where(
+            and(
+              eq(masterAgreementsTable.fileId, parsed.data.fileId),
+              isNull(masterAgreementsTable.deletedAt),
+            ),
+          );
+        const existing = targetMasters.find((m) => m.rolledFromId === sourceMaster.id);
+        if (existing) {
+          newMasterId = existing.id;
+        } else {
+          const { id, createdAt, updatedAt, ...rest } = sourceMaster;
+          const [cloned] = await db
+            .insert(masterAgreementsTable)
+            .values({ ...rest, fileId: parsed.data.fileId, rolledFromId: sourceMaster.id })
+            .returning();
+          newMasterId = cloned.id;
+        }
+      }
+    }
+  }
+
   const data = {
     fileId: parsed.data.fileId,
     name: original.name,
+    masterAgreementId: newMasterId,
     description: original.description,
     counterparty: original.counterparty,
     isCapitalLease: original.isCapitalLease,

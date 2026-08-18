@@ -262,6 +262,7 @@ export const ListLoansResponseItem = zod.object({
   "inducementReceivedInCash": zod.boolean(),
   "covenantViolation": zod.boolean(),
   "rolledFromId": zod.string().optional(),
+  "masterAgreementId": zod.string().nullish(),
   "fvRate": zod.string().optional(),
   "fvDecision": zod.enum(['use_fv', 'trivial', 'immaterial']).optional(),
   "fvDecisionNote": zod.string().optional(),
@@ -339,7 +340,122 @@ export const CreateLoanBody = zod.object({
   "fvDecision": zod.enum(['use_fv', 'trivial', 'immaterial']).optional(),
   "fvDecisionNote": zod.string().optional(),
   "sourceDocumentBlob": zod.string().nullish(),
+  "sourceDocumentName": zod.string().nullish(),
+  "masterAgreementId": zod.string().nullish()
+})
+
+
+/**
+ * @summary List master agreements for a file
+ */
+export const ListMasterAgreementsParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+export const ListMasterAgreementsResponseItem = zod.object({
+  "id": zod.string(),
+  "fileId": zod.string(),
+  "lender": zod.string(),
+  "description": zod.string().nullish(),
+  "facilityLimit": zod.string().nullish(),
+  "securityClauses": zod.array(zod.string()).nullish(),
+  "securityDescription": zod.string().nullish(),
+  "covenantDescription": zod.string().nullish(),
+  "sourceDocumentName": zod.string().nullish(),
+  "rolledFromId": zod.string().nullish(),
+  "createdAt": zod.coerce.date(),
+  "updatedAt": zod.coerce.date()
+})
+export const ListMasterAgreementsResponse = zod.array(ListMasterAgreementsResponseItem)
+
+
+/**
+ * @summary Create a master agreement
+ */
+export const CreateMasterAgreementParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+export const CreateMasterAgreementBody = zod.object({
+  "lender": zod.string(),
+  "description": zod.string().nullish(),
+  "facilityLimit": zod.number().nullish(),
+  "securityClauses": zod.array(zod.string()).nullish(),
+  "securityDescription": zod.string().nullish(),
+  "covenantDescription": zod.string().nullish(),
+  "sourceDocumentBlob": zod.string().nullish(),
   "sourceDocumentName": zod.string().nullish()
+})
+
+
+/**
+ * @summary Get a master agreement
+ */
+export const GetMasterAgreementParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+export const GetMasterAgreementResponse = zod.object({
+  "id": zod.string(),
+  "fileId": zod.string(),
+  "lender": zod.string(),
+  "description": zod.string().nullish(),
+  "facilityLimit": zod.string().nullish(),
+  "securityClauses": zod.array(zod.string()).nullish(),
+  "securityDescription": zod.string().nullish(),
+  "covenantDescription": zod.string().nullish(),
+  "sourceDocumentName": zod.string().nullish(),
+  "rolledFromId": zod.string().nullish(),
+  "createdAt": zod.coerce.date(),
+  "updatedAt": zod.coerce.date()
+})
+
+
+/**
+ * @summary Update a master agreement
+ */
+export const UpdateMasterAgreementParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+export const UpdateMasterAgreementBody = zod.object({
+  "lender": zod.string().optional(),
+  "description": zod.string().nullish(),
+  "facilityLimit": zod.number().nullish(),
+  "securityClauses": zod.array(zod.string()).nullish(),
+  "securityDescription": zod.string().nullish(),
+  "covenantDescription": zod.string().nullish()
+})
+
+export const UpdateMasterAgreementResponse = zod.object({
+  "id": zod.string(),
+  "fileId": zod.string(),
+  "lender": zod.string(),
+  "description": zod.string().nullish(),
+  "facilityLimit": zod.string().nullish(),
+  "securityClauses": zod.array(zod.string()).nullish(),
+  "securityDescription": zod.string().nullish(),
+  "covenantDescription": zod.string().nullish(),
+  "sourceDocumentName": zod.string().nullish(),
+  "rolledFromId": zod.string().nullish(),
+  "createdAt": zod.coerce.date(),
+  "updatedAt": zod.coerce.date()
+})
+
+
+/**
+ * @summary Delete a master agreement (facilities become standalone loans)
+ */
+export const DeleteMasterAgreementParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+
+/**
+ * @summary Download the master agreement's attached source document
+ */
+export const GetMasterAgreementSourceDocumentParams = zod.object({
+  "id": zod.coerce.string()
 })
 
 
@@ -415,6 +531,7 @@ export const GetLoanResponse = zod.object({
   "inducementReceivedInCash": zod.boolean(),
   "covenantViolation": zod.boolean(),
   "rolledFromId": zod.string().optional(),
+  "masterAgreementId": zod.string().nullish(),
   "fvRate": zod.string().optional(),
   "fvDecision": zod.enum(['use_fv', 'trivial', 'immaterial']).optional(),
   "fvDecisionNote": zod.string().optional(),
@@ -489,7 +606,8 @@ export const UpdateLoanBody = zod.object({
   "fvRate": zod.number().optional(),
   "fvDecision": zod.enum(['use_fv', 'trivial', 'immaterial']).optional(),
   "fvDecisionNote": zod.string().optional(),
-  "dismissedFindings": zod.array(zod.string()).nullish()
+  "dismissedFindings": zod.array(zod.string()).nullish(),
+  "masterAgreementId": zod.string().nullish()
 })
 
 export const UpdateLoanResponse = zod.object({
@@ -550,6 +668,7 @@ export const UpdateLoanResponse = zod.object({
   "inducementReceivedInCash": zod.boolean(),
   "covenantViolation": zod.boolean(),
   "rolledFromId": zod.string().optional(),
+  "masterAgreementId": zod.string().nullish(),
   "fvRate": zod.string().optional(),
   "fvDecision": zod.enum(['use_fv', 'trivial', 'immaterial']).optional(),
   "fvDecisionNote": zod.string().optional(),
@@ -659,7 +778,7 @@ export const ImportDocumentBody = zod.object({
 })
 
 export const ImportDocumentResponse = zod.object({
-  "classification": zod.enum(['loan', 'lease', 'other']),
+  "classification": zod.enum(['loan', 'lease', 'master_agreement', 'other']),
   "confidence": zod.number(),
   "reasoning": zod.string(),
   "documentBlob": zod.string().nullish(),
@@ -719,7 +838,33 @@ export const ImportDocumentResponse = zod.object({
   "interestRate": zod.number().nullish(),
   "reasoning": zod.string().nullish()
 }).nullish()
-}).nullish()
+}).nullish(),
+  "masterAgreement": zod.object({
+  "lender": zod.string().nullish(),
+  "description": zod.string().nullish(),
+  "facilityLimit": zod.number().nullish(),
+  "securityDescription": zod.string().nullish(),
+  "covenantDescription": zod.string().nullish()
+}).nullish(),
+  "facilities": zod.array(zod.object({
+  "name": zod.string().nullish(),
+  "lender": zod.string().nullish(),
+  "principal": zod.number().nullish(),
+  "downPayment": zod.number().nullish(),
+  "interestRate": zod.number().nullish(),
+  "primeSpread": zod.number().nullish(),
+  "statedPrimeRate": zod.number().nullish(),
+  "amortizationYears": zod.number().nullish(),
+  "termYears": zod.number().nullish(),
+  "startDate": zod.string().nullish(),
+  "paymentFrequency": zod.enum(['monthly', 'semi-monthly', 'bi-weekly', 'weekly']).nullish(),
+  "paymentAmount": zod.number().nullish(),
+  "interestOnlyMonths": zod.number().nullish(),
+  "graceMonths": zod.number().nullish(),
+  "graceInterestTreatment": zod.enum(['capitalized', 'none']).nullish(),
+  "balloonPayment": zod.number().nullish(),
+  "securityDescription": zod.string().nullish()
+})).nullish()
 })
 
 

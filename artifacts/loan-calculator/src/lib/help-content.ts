@@ -51,6 +51,21 @@ export const HELP_TOPICS: HelpTopic[] = [
     related: ["down-payments", "amortization-schedules", "lease-classification", "fair-value", "covenant-violations"],
   },
   {
+    id: "master-agreements",
+    title: "Master Financing Agreements",
+    screen: "Year-End File page",
+    keywords: ["master agreement", "master financing agreement", "facility", "facilities", "credit facility", "term sheet", "credit limit", "lender", "group", "grouped", "standalone"],
+    body: [
+      "A master financing agreement represents one umbrella credit agreement with a lender under which the borrower draws several facilities (individual loans). Use it when a client has, for example, a single bank agreement covering an operating facility, a term loan, and an equipment loan — the facilities stay grouped together instead of appearing as unrelated loans.",
+      "Create one from the year-end file page with 'Add Master Agreement'. The lender is required; you can also record a description (e.g. the agreement date), the overall credit limit, shared security/collateral, and covenant terms that apply across the agreement.",
+      "Link facilities in two ways: when adding or editing a loan, pick the master in the 'Master Agreement' dropdown (or leave it as a standalone loan), or import the master agreement PDF — the app detects a master financing agreement, shows the shared terms and each facility it found, and creates the master plus the facilities you keep selected in one step.",
+      "When you link a facility, the master's lender and security are used as defaults where the facility has none — anything you enter on the facility itself takes priority. Facility-specific terms like the rate, amount, and payment schedule always live on the facility, so details finalized later in a term sheet are simply edited on that facility.",
+      "On the year-end file page, linked facilities appear inside a bordered group under the master's lender and description, with the facility count, the outstanding balance subtotal, and the overall credit limit when one was entered. A master with no facilities yet stays visible so you can link or add them later.",
+      "Deleting a master agreement does not delete its facilities — they simply become standalone loans again (any security copied from the master stays with them). Roll forward carries the whole structure into the next year's file: masters are copied and the outstanding facilities stay grouped under them.",
+    ],
+    related: ["loans-leases", "pdf-import", "clients-files"],
+  },
+  {
     id: "covenant-violations",
     title: "Covenant Violations (ASPE 1510)",
     screen: "Loan forms, Year-End File, and Presentation & Disclosure",
@@ -128,9 +143,10 @@ export const HELP_TOPICS: HelpTopic[] = [
     screen: "Year-End File page — Add Loan or Lease menu",
     keywords: ["import", "pdf", "upload", "document", "agreement", "extract", "prefill", "scan", "read", "ocr", "azure"],
     body: [
-      "Instead of typing loan or lease terms by hand, choose 'Import from PDF' from the Add Loan or Lease menu and upload the signed agreement — the app reads it for you. It classifies the document as a loan or a lease (capital or operating) and extracts the key terms: names, dates, amounts, rates, term, payment frequency, and more.",
+      "Instead of typing loan or lease terms by hand, choose 'Import from PDF' from the Add Loan or Lease menu and upload the signed agreement — the app reads it for you. It classifies the document as a loan, a lease (capital or operating), or a master financing agreement, and extracts the key terms: names, dates, amounts, rates, term, payment frequency, and more.",
       "For commercial office leases it also picks up the rentable square footage, converts per-square-foot annual rates into monthly rent, builds the stepped rent schedule by lease year, and extracts the tenant improvement allowance and any free-rent period.",
       "You always review before saving: the extracted fields are shown with a confidence level and the reasoning behind the reading, then used to prefill the loan or lease form where you can correct anything before creating the item.",
+      "If the document is a master financing agreement covering several facilities, the app shows the shared terms and lists each facility it found — you choose which to keep, and it creates the master agreement with those facilities grouped under it in one step.",
       "The original PDF is stored with the item, so the source document stays attached to your workpaper trail.",
       "Extraction requires the document reading service to be configured in Settings. If the document is scanned or unusual, verify the extracted numbers against the agreement — the reasoning notes call out any conversions or assumptions made.",
     ],

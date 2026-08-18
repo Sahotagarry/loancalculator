@@ -12,7 +12,8 @@ import { Button } from "@/components/ui/button";
 import { Link } from "wouter";
 import { toast } from "@/hooks/use-toast";
 import { getErrorMessage } from "@/lib/errors";
-import { FileUp, FileText, Loader2, Landmark, Receipt, HelpCircle, Settings, AlertTriangle } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import { FileUp, FileText, Loader2, Landmark, Receipt, HelpCircle, Settings, AlertTriangle, Layers } from "lucide-react";
 import { formatCurrency } from "@/lib/format";
 
 type FieldRow = { label: string; value: string | null; optional?: boolean };
@@ -55,6 +56,16 @@ function buildFieldRows(result: DocumentImportResult): FieldRow[] {
       },
       { label: "Balloon payment", value: fmtMoney(f?.balloonPayment), optional: true },
       { label: "Security / collateral", value: fmtText(f?.securityDescription) },
+    ];
+  }
+  if (result.classification === "master_agreement") {
+    const m = result.masterAgreement;
+    return [
+      { label: "Lender", value: fmtText(m?.lender) },
+      { label: "Description", value: fmtText(m?.description), optional: true },
+      { label: "Overall facility limit", value: fmtMoney(m?.facilityLimit), optional: true },
+      { label: "Security / collateral", value: fmtText(m?.securityDescription) },
+      { label: "Covenants", value: fmtText(m?.covenantDescription), optional: true },
     ];
   }
   if (result.classification === "lease") {
@@ -103,19 +114,23 @@ interface Props {
   fileId: string;
   onUseLoan: (result: DocumentImportResult) => void;
   onUseLease: (result: DocumentImportResult) => void;
+  onUseMasterAgreement: (result: DocumentImportResult, facilityIndexes: number[]) => void;
 }
 
-export default function ImportDocumentDialog({ open, onOpenChange, fileId, onUseLoan, onUseLease }: Props) {
+export default function ImportDocumentDialog({ open, onOpenChange, fileId, onUseLoan, onUseLease, onUseMasterAgreement }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [selected, setSelected] = useState<File | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [result, setResult] = useState<DocumentImportResult | null>(null);
   const [settingsHint, setSettingsHint] = useState(false);
+  const [selectedFacilities, setSelectedFacilities] = useState<Set<number>>(new Set());
 
   const importDoc = useImportDocument({
     mutation: {
       onSuccess: (data) => {
         setResult(data);
+        // Default to importing every facility found in a master agreement.
+        setSelectedFacilities(new Set((data.facilities ?? []).map((_, i) => i)));
       },
       onError: (err) => {
         const message = getErrorMessage(err);
@@ -129,6 +144,7 @@ export default function ImportDocumentDialog({ open, onOpenChange, fileId, onUse
     setSelected(null);
     setResult(null);
     setSettingsHint(false);
+    setSelectedFacilities(new Set());
     if (inputRef.current) inputRef.current.value = "";
   };
 
@@ -234,8 +250,15 @@ export default function ImportDocumentDialog({ open, onOpenChange, fileId, onUse
                 <span className="inline-flex items-center gap-1.5 font-semibold">
                   {result.classification === "loan" && <Landmark className="h-4 w-4 text-primary" />}
                   {result.classification === "lease" && <Receipt className="h-4 w-4 text-amber-600" />}
+                  {result.classification === "master_agreement" && <Layers className="h-4 w-4 text-primary" />}
                   {result.classification === "other" && <HelpCircle className="h-4 w-4 text-muted-foreground" />}
-                  {result.classification === "loan" ? "Loan" : result.classification === "lease" ? "Lease" : "Not a loan or lease"}
+                  {result.classification === "loan"
+                    ? "Loan"
+                    : result.classification === "lease"
+                      ? "Lease"
+                      : result.classification === "master_agreement"
+                        ? "Master Financing Agreement"
+                        : "Not a loan or lease"}
                 </span>
               </div>
               <div className="flex items-center justify-between">
@@ -308,6 +331,55 @@ export default function ImportDocumentDialog({ open, onOpenChange, fileId, onUse
                 </div>
               );
             })()}
+            {result.classification === "master_agreement" && (
+              <div className="space-y-2">
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                  Facilities found — choose which to create
+                </p>
+                {(result.facilities ?? []).length === 0 && (
+                  <p className="text-xs text-muted-foreground bg-muted/50 border rounded-lg p-2">
+                    No individual term-debt facilities were found in this document. You can still
+                    create the master agreement and add facilities later (e.g. from term sheets).
+                  </p>
+                )}
+                <div className="rounded-lg border divide-y max-h-56 overflow-y-auto text-sm">
+                  {(result.facilities ?? []).map((f, i) => (
+                    <label key={i} className="flex items-start gap-3 px-3 py-2 cursor-pointer hover:bg-muted/30">
+                      <Checkbox
+                        checked={selectedFacilities.has(i)}
+                        onCheckedChange={(checked) => {
+                          setSelectedFacilities((prev) => {
+                            const next = new Set(prev);
+                            if (checked) next.add(i);
+                            else next.delete(i);
+                            return next;
+                          });
+                        }}
+                        className="mt-0.5"
+                      />
+                      <span className="flex-1 min-w-0">
+                        <span className="font-medium block">{f.name ?? `Facility ${i + 1}`}</span>
+                        <span className="text-xs text-muted-foreground block">
+                          {[
+                            f.principal != null ? formatCurrency(f.principal) : "Amount not stated",
+                            f.interestRate != null ? `${f.interestRate}%` : null,
+                            f.amortizationYears != null ? `${f.amortizationYears} yr amortization` : null,
+                            f.startDate ?? null,
+                          ]
+                            .filter(Boolean)
+                            .join(" · ")}
+                        </span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+                <p className="text-xs text-muted-foreground bg-muted/50 border rounded-lg p-2">
+                  The master agreement is created with the shared terms above; each selected
+                  facility becomes its own loan under it. Facilities inherit the master's lender
+                  and security, and you can edit any facility afterwards (e.g. from a term sheet).
+                </p>
+              </div>
+            )}
             {result.classification === "other" && (
               <p className="text-sm text-muted-foreground">
                 This document doesn't look like a loan or lease agreement, so there's nothing to
@@ -355,6 +427,19 @@ export default function ImportDocumentDialog({ open, onOpenChange, fileId, onUse
               }}
             >
               <Landmark className="h-4 w-4" /> Prefill Loan Form
+            </Button>
+          )}
+          {result?.classification === "master_agreement" && (
+            <Button
+              className="gap-2"
+              onClick={() => {
+                onUseMasterAgreement(result, Array.from(selectedFacilities).sort((a, b) => a - b));
+                handleOpenChange(false);
+              }}
+            >
+              <Layers className="h-4 w-4" />
+              Create Master Agreement
+              {selectedFacilities.size > 0 && ` + ${selectedFacilities.size} ${selectedFacilities.size === 1 ? "Facility" : "Facilities"}`}
             </Button>
           )}
           {result?.classification === "lease" && (

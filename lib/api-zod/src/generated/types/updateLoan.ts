@@ -62,4 +62,5 @@ export interface UpdateLoan {
   fvDecision?: UpdateLoanFvDecision;
   fvDecisionNote?: string;
   dismissedFindings?: string[] | null;
+  masterAgreementId?: string | null;
 }

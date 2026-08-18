@@ -26,6 +26,7 @@ import type {
   CreateClient,
   CreateFile,
   CreateLoan,
+  CreateMasterAgreement,
   DocumentImportResult,
   DocumentUpload,
   Error,
@@ -33,6 +34,7 @@ import type {
   GetPrimeRateParams,
   HealthStatus,
   Loan,
+  MasterAgreement,
   PrimeRateResponse,
   RollForwardFileRequest,
   RollForwardRequest,
@@ -41,7 +43,8 @@ import type {
   UnlockSettingsResult,
   UpdateClient,
   UpdateFile,
-  UpdateLoan
+  UpdateLoan,
+  UpdateMasterAgreement
 } from './api.schemas';
 
 import { customFetch } from '../custom-fetch';
@@ -1089,6 +1092,451 @@ export const useCreateLoan = <TError = ErrorType<Error>,
       > => {
       return useMutation(getCreateLoanMutationOptions(options));
     }
+
+export const getListMasterAgreementsUrl = (id: string,) => {
+
+
+
+
+  return `/api/files/${id}/master-agreements`
+}
+
+/**
+ * @summary List master agreements for a file
+ */
+export const listMasterAgreements = async (id: string, options?: RequestInit): Promise<MasterAgreement[]> => {
+
+  return customFetch<MasterAgreement[]>(getListMasterAgreementsUrl(id),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getListMasterAgreementsQueryKey = (id: string,) => {
+    return [
+    `/api/files/${id}/master-agreements`
+    ] as const;
+    }
+
+
+export const getListMasterAgreementsQueryOptions = <TData = Awaited<ReturnType<typeof listMasterAgreements>>, TError = ErrorType<unknown>>(id: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listMasterAgreements>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListMasterAgreementsQueryKey(id);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listMasterAgreements>>> = ({ signal }) => listMasterAgreements(id, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: !!(id), ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listMasterAgreements>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ListMasterAgreementsQueryResult = NonNullable<Awaited<ReturnType<typeof listMasterAgreements>>>
+export type ListMasterAgreementsQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary List master agreements for a file
+ */
+
+export function useListMasterAgreements<TData = Awaited<ReturnType<typeof listMasterAgreements>>, TError = ErrorType<unknown>>(
+ id: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listMasterAgreements>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getListMasterAgreementsQueryOptions(id,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+export const getCreateMasterAgreementUrl = (id: string,) => {
+
+
+
+
+  return `/api/files/${id}/master-agreements`
+}
+
+/**
+ * @summary Create a master agreement
+ */
+export const createMasterAgreement = async (id: string,
+    createMasterAgreement: CreateMasterAgreement, options?: RequestInit): Promise<MasterAgreement> => {
+
+  return customFetch<MasterAgreement>(getCreateMasterAgreementUrl(id),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      createMasterAgreement,)
+  }
+);}
+
+
+
+
+export const getCreateMasterAgreementMutationOptions = <TError = ErrorType<Error>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createMasterAgreement>>, TError,{id: string;data: BodyType<CreateMasterAgreement>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof createMasterAgreement>>, TError,{id: string;data: BodyType<CreateMasterAgreement>}, TContext> => {
+
+const mutationKey = ['createMasterAgreement'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createMasterAgreement>>, {id: string;data: BodyType<CreateMasterAgreement>}> = (props) => {
+          const {id,data} = props ?? {};
+
+          return  createMasterAgreement(id,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CreateMasterAgreementMutationResult = NonNullable<Awaited<ReturnType<typeof createMasterAgreement>>>
+    export type CreateMasterAgreementMutationBody = BodyType<CreateMasterAgreement>
+    export type CreateMasterAgreementMutationError = ErrorType<Error>
+
+    /**
+ * @summary Create a master agreement
+ */
+export const useCreateMasterAgreement = <TError = ErrorType<Error>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createMasterAgreement>>, TError,{id: string;data: BodyType<CreateMasterAgreement>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof createMasterAgreement>>,
+        TError,
+        {id: string;data: BodyType<CreateMasterAgreement>},
+        TContext
+      > => {
+      return useMutation(getCreateMasterAgreementMutationOptions(options));
+    }
+
+export const getGetMasterAgreementUrl = (id: string,) => {
+
+
+
+
+  return `/api/master-agreements/${id}`
+}
+
+/**
+ * @summary Get a master agreement
+ */
+export const getMasterAgreement = async (id: string, options?: RequestInit): Promise<MasterAgreement> => {
+
+  return customFetch<MasterAgreement>(getGetMasterAgreementUrl(id),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetMasterAgreementQueryKey = (id: string,) => {
+    return [
+    `/api/master-agreements/${id}`
+    ] as const;
+    }
+
+
+export const getGetMasterAgreementQueryOptions = <TData = Awaited<ReturnType<typeof getMasterAgreement>>, TError = ErrorType<Error>>(id: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getMasterAgreement>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetMasterAgreementQueryKey(id);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getMasterAgreement>>> = ({ signal }) => getMasterAgreement(id, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: !!(id), ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getMasterAgreement>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetMasterAgreementQueryResult = NonNullable<Awaited<ReturnType<typeof getMasterAgreement>>>
+export type GetMasterAgreementQueryError = ErrorType<Error>
+
+
+/**
+ * @summary Get a master agreement
+ */
+
+export function useGetMasterAgreement<TData = Awaited<ReturnType<typeof getMasterAgreement>>, TError = ErrorType<Error>>(
+ id: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getMasterAgreement>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetMasterAgreementQueryOptions(id,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+export const getUpdateMasterAgreementUrl = (id: string,) => {
+
+
+
+
+  return `/api/master-agreements/${id}`
+}
+
+/**
+ * @summary Update a master agreement
+ */
+export const updateMasterAgreement = async (id: string,
+    updateMasterAgreement: UpdateMasterAgreement, options?: RequestInit): Promise<MasterAgreement> => {
+
+  return customFetch<MasterAgreement>(getUpdateMasterAgreementUrl(id),
+  {
+    ...options,
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      updateMasterAgreement,)
+  }
+);}
+
+
+
+
+export const getUpdateMasterAgreementMutationOptions = <TError = ErrorType<Error>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateMasterAgreement>>, TError,{id: string;data: BodyType<UpdateMasterAgreement>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof updateMasterAgreement>>, TError,{id: string;data: BodyType<UpdateMasterAgreement>}, TContext> => {
+
+const mutationKey = ['updateMasterAgreement'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof updateMasterAgreement>>, {id: string;data: BodyType<UpdateMasterAgreement>}> = (props) => {
+          const {id,data} = props ?? {};
+
+          return  updateMasterAgreement(id,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type UpdateMasterAgreementMutationResult = NonNullable<Awaited<ReturnType<typeof updateMasterAgreement>>>
+    export type UpdateMasterAgreementMutationBody = BodyType<UpdateMasterAgreement>
+    export type UpdateMasterAgreementMutationError = ErrorType<Error>
+
+    /**
+ * @summary Update a master agreement
+ */
+export const useUpdateMasterAgreement = <TError = ErrorType<Error>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateMasterAgreement>>, TError,{id: string;data: BodyType<UpdateMasterAgreement>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof updateMasterAgreement>>,
+        TError,
+        {id: string;data: BodyType<UpdateMasterAgreement>},
+        TContext
+      > => {
+      return useMutation(getUpdateMasterAgreementMutationOptions(options));
+    }
+
+export const getDeleteMasterAgreementUrl = (id: string,) => {
+
+
+
+
+  return `/api/master-agreements/${id}`
+}
+
+/**
+ * @summary Delete a master agreement (facilities become standalone loans)
+ */
+export const deleteMasterAgreement = async (id: string, options?: RequestInit): Promise<void> => {
+
+  return customFetch<void>(getDeleteMasterAgreementUrl(id),
+  {
+    ...options,
+    method: 'DELETE'
+
+
+  }
+);}
+
+
+
+
+export const getDeleteMasterAgreementMutationOptions = <TError = ErrorType<Error>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteMasterAgreement>>, TError,{id: string}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof deleteMasterAgreement>>, TError,{id: string}, TContext> => {
+
+const mutationKey = ['deleteMasterAgreement'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof deleteMasterAgreement>>, {id: string}> = (props) => {
+          const {id} = props ?? {};
+
+          return  deleteMasterAgreement(id,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type DeleteMasterAgreementMutationResult = NonNullable<Awaited<ReturnType<typeof deleteMasterAgreement>>>
+
+    export type DeleteMasterAgreementMutationError = ErrorType<Error>
+
+    /**
+ * @summary Delete a master agreement (facilities become standalone loans)
+ */
+export const useDeleteMasterAgreement = <TError = ErrorType<Error>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteMasterAgreement>>, TError,{id: string}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof deleteMasterAgreement>>,
+        TError,
+        {id: string},
+        TContext
+      > => {
+      return useMutation(getDeleteMasterAgreementMutationOptions(options));
+    }
+
+export const getGetMasterAgreementSourceDocumentUrl = (id: string,) => {
+
+
+
+
+  return `/api/master-agreements/${id}/source-document`
+}
+
+/**
+ * @summary Download the master agreement's attached source document
+ */
+export const getMasterAgreementSourceDocument = async (id: string, options?: RequestInit): Promise<Blob> => {
+
+  return customFetch<Blob>(getGetMasterAgreementSourceDocumentUrl(id),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetMasterAgreementSourceDocumentQueryKey = (id: string,) => {
+    return [
+    `/api/master-agreements/${id}/source-document`
+    ] as const;
+    }
+
+
+export const getGetMasterAgreementSourceDocumentQueryOptions = <TData = Awaited<ReturnType<typeof getMasterAgreementSourceDocument>>, TError = ErrorType<Error>>(id: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getMasterAgreementSourceDocument>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetMasterAgreementSourceDocumentQueryKey(id);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getMasterAgreementSourceDocument>>> = ({ signal }) => getMasterAgreementSourceDocument(id, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: !!(id), ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getMasterAgreementSourceDocument>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetMasterAgreementSourceDocumentQueryResult = NonNullable<Awaited<ReturnType<typeof getMasterAgreementSourceDocument>>>
+export type GetMasterAgreementSourceDocumentQueryError = ErrorType<Error>
+
+
+/**
+ * @summary Download the master agreement's attached source document
+ */
+
+export function useGetMasterAgreementSourceDocument<TData = Awaited<ReturnType<typeof getMasterAgreementSourceDocument>>, TError = ErrorType<Error>>(
+ id: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getMasterAgreementSourceDocument>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetMasterAgreementSourceDocumentQueryOptions(id,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
 
 export const getListCounterpartiesUrl = () => {
 

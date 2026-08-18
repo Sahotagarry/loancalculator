@@ -15,6 +15,8 @@ tags:
     description: File (fiscal year) management
   - name: loans
     description: Loan and lease management
+  - name: master-agreements
+    description: Master financing agreements grouping facilities
   - name: trash
     description: Trash (soft-deleted items)
 paths:
@@ -318,6 +320,143 @@ paths:
                 $ref: "#/components/schemas/Loan"
         "400":
           description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /files/{id}/master-agreements:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: listMasterAgreements
+      tags: [master-agreements]
+      summary: List master agreements for a file
+      responses:
+        "200":
+          description: List of master agreements
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/MasterAgreement"
+    post:
+      operationId: createMasterAgreement
+      tags: [master-agreements]
+      summary: Create a master agreement
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateMasterAgreement"
+      responses:
+        "201":
+          description: Created master agreement
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MasterAgreement"
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /master-agreements/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getMasterAgreement
+      tags: [master-agreements]
+      summary: Get a master agreement
+      responses:
+        "200":
+          description: Master agreement
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MasterAgreement"
+        "404":
+          description: Master agreement not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    patch:
+      operationId: updateMasterAgreement
+      tags: [master-agreements]
+      summary: Update a master agreement
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateMasterAgreement"
+      responses:
+        "200":
+          description: Updated master agreement
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MasterAgreement"
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Master agreement not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      operationId: deleteMasterAgreement
+      tags: [master-agreements]
+      summary: Delete a master agreement (facilities become standalone loans)
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: Master agreement not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /master-agreements/{id}/source-document:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getMasterAgreementSourceDocument
+      tags: [master-agreements]
+      summary: Download the master agreement's attached source document
+      responses:
+        "200":
+          description: PDF document
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        "404":
+          description: No source document
           content:
             application/json:
               schema:
@@ -956,6 +1095,9 @@ components:
           type: boolean
         rolledFromId:
           type: string
+        masterAgreementId:
+          type: string
+          nullable: true
         fvRate:
           type: string
         fvDecision:
@@ -1144,6 +1286,9 @@ components:
         sourceDocumentName:
           type: string
           nullable: true
+        masterAgreementId:
+          type: string
+          nullable: true
       required:
         - name
         - principal
@@ -1290,6 +1435,108 @@ components:
           type: array
           items:
             type: string
+          nullable: true
+        masterAgreementId:
+          type: string
+          nullable: true
+
+    MasterAgreement:
+      type: object
+      properties:
+        id:
+          type: string
+        fileId:
+          type: string
+        lender:
+          type: string
+        description:
+          type: string
+          nullable: true
+        facilityLimit:
+          type: string
+          nullable: true
+        securityClauses:
+          type: array
+          items:
+            type: string
+          nullable: true
+        securityDescription:
+          type: string
+          nullable: true
+        covenantDescription:
+          type: string
+          nullable: true
+        sourceDocumentName:
+          type: string
+          nullable: true
+        rolledFromId:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - fileId
+        - lender
+        - createdAt
+        - updatedAt
+
+    CreateMasterAgreement:
+      type: object
+      properties:
+        lender:
+          type: string
+        description:
+          type: string
+          nullable: true
+        facilityLimit:
+          type: number
+          nullable: true
+        securityClauses:
+          type: array
+          items:
+            type: string
+          nullable: true
+        securityDescription:
+          type: string
+          nullable: true
+        covenantDescription:
+          type: string
+          nullable: true
+        sourceDocumentBlob:
+          type: string
+          nullable: true
+        sourceDocumentName:
+          type: string
+          nullable: true
+      required:
+        - lender
+
+    UpdateMasterAgreement:
+      type: object
+      properties:
+        lender:
+          type: string
+        description:
+          type: string
+          nullable: true
+        facilityLimit:
+          type: number
+          nullable: true
+        securityClauses:
+          type: array
+          items:
+            type: string
+          nullable: true
+        securityDescription:
+          type: string
+          nullable: true
+        covenantDescription:
+          type: string
           nullable: true
 
     PrimeRateResponse:
@@ -1574,12 +1821,31 @@ components:
         - toYear
         - monthlyRent
 
+    ImportedMasterAgreementFields:
+      type: object
+      properties:
+        lender:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        facilityLimit:
+          type: number
+          nullable: true
+        securityDescription:
+          type: string
+          nullable: true
+        covenantDescription:
+          type: string
+          nullable: true
+
     DocumentImportResult:
       type: object
       properties:
         classification:
           type: string
-          enum: [loan, lease, other]
+          enum: [loan, lease, master_agreement, other]
         confidence:
           type: number
         reasoning:
@@ -1597,6 +1863,15 @@ components:
         lease:
           allOf:
             - $ref: "#/components/schemas/ImportedLeaseFields"
+          nullable: true
+        masterAgreement:
+          allOf:
+            - $ref: "#/components/schemas/ImportedMasterAgreementFields"
+          nullable: true
+        facilities:
+          type: array
+          items:
+            $ref: "#/components/schemas/ImportedLoanFields"
           nullable: true
       required:
         - classification

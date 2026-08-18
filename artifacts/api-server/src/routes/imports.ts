@@ -5,7 +5,7 @@ import { db, filesTable } from "@workspace/db";
 import { GetFileParams } from "@workspace/api-zod";
 import { loadAzureSettings, requireSettings, UserFacingError } from "../lib/azure-settings";
 import { readPdfText } from "../lib/azure-doc-intel";
-import { extractLoanOrLease, reconcileLeaseMath } from "../lib/azure-extract";
+import { extractLoanOrLease, reconcileLeaseMath, type LoanFields } from "../lib/azure-extract";
 import { storeDocument } from "../lib/document-store";
 import { fetchPrimeRate } from "../lib/fv-decisions";
 
@@ -84,8 +84,10 @@ router.post("/files/:id/import-document", handleUpload, async (req, res): Promis
 
     // Variable-rate loans: if the document gave a prime spread but no usable
     // rate, look up the Bank of Canada prime rate and resolve the rate here.
-    const loan = extraction.loan;
-    if (extraction.classification === "loan" && loan && loan.primeSpread != null) {
+    // Applies to a standalone loan and to each facility of a master agreement.
+    const resolvePrimeRate = async (loan: LoanFields, label?: string): Promise<void> => {
+      if (loan.primeSpread == null) return;
+      const prefix = label ? `${label}: ` : "";
       if (loan.interestRate == null) {
         const isValidDate =
           loan.startDate != null &&
@@ -96,17 +98,26 @@ router.post("/files/:id/import-document", handleUpload, async (req, res): Promis
         loan.interestRate = Number((primeRate + loan.primeSpread).toFixed(2));
         extraction.reasoning = [
           extraction.reasoning,
-          `Interest rate set to prime (${primeRate}% per ${source}, as of ${dateStr}) + ${loan.primeSpread}% = ${loan.interestRate}%. Verify against the lender's actual prime rate.`,
+          `${prefix}Interest rate set to prime (${primeRate}% per ${source}, as of ${dateStr}) + ${loan.primeSpread}% = ${loan.interestRate}%. Verify against the lender's actual prime rate.`,
         ]
           .filter(Boolean)
           .join(" ");
       } else if (loan.statedPrimeRate != null) {
         extraction.reasoning = [
           extraction.reasoning,
-          `Interest rate is prime + ${loan.primeSpread}%, using the prime rate of ${loan.statedPrimeRate}% stated in the document.`,
+          `${prefix}Interest rate is prime + ${loan.primeSpread}%, using the prime rate of ${loan.statedPrimeRate}% stated in the document.`,
         ]
           .filter(Boolean)
           .join(" ");
+      }
+    };
+
+    if (extraction.classification === "loan" && extraction.loan) {
+      await resolvePrimeRate(extraction.loan);
+    }
+    if (extraction.classification === "master_agreement" && extraction.facilities) {
+      for (const facility of extraction.facilities) {
+        await resolvePrimeRate(facility, facility.name ?? undefined);
       }
     }
 
@@ -128,6 +139,14 @@ router.post("/files/:id/import-document", handleUpload, async (req, res): Promis
       documentName: documentName ?? undefined,
       loan: extraction.classification === "loan" ? (extraction.loan ?? undefined) : undefined,
       lease: extraction.classification === "lease" ? (extraction.lease ?? undefined) : undefined,
+      masterAgreement:
+        extraction.classification === "master_agreement"
+          ? (extraction.masterAgreement ?? undefined)
+          : undefined,
+      facilities:
+        extraction.classification === "master_agreement"
+          ? (extraction.facilities ?? [])
+          : undefined,
     });
   } catch (err) {
     if (err instanceof UserFacingError) {

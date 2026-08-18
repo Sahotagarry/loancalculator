@@ -12,5 +12,6 @@ export type DocumentImportResultClassification = typeof DocumentImportResultClas
 export const DocumentImportResultClassification = {
   loan: 'loan',
   lease: 'lease',
+  master_agreement: 'master_agreement',
   other: 'other',
 } as const;

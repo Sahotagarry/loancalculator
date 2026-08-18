@@ -1,0 +1,30 @@
+Instructions for the agent
+Dear agent: the user wants a one-step release command in this app, modeled on a working setup from another project. Follow this recipe, adapting names to this project.
+
+Prerequisites (verify before building)
+GitHub connection. Check for a Replit GitHub integration. If none is connected, propose it — do not ask the user for tokens. The release script authenticates through the Replit GitHub connector (@replit/connectors-sdk → createProxyFetch("github")); no secrets are stored in the project.
+A GitHub deployment repository that already auto-deploys its main branch to Azure App Service via GitHub Actions (the IT admin usually owns this). Ask the user for the owner/repo name. Important: this repository holds the built app (server bundle at root, frontend under public/, its own package.json and committed node_modules), not source code. Never push source files into it.
+Confirm with the user which artifacts to build and where their build outputs land.
+What to build
+Create scripts/src/release.ts (TypeScript, run via tsx) wired to a root package.json script: "release": "tsx scripts/src/release.ts". The script must:
+
+Guard: refuse to run if git status --porcelain shows uncommitted source changes (exclude dist/, node_modules/, *.tsbuildinfo).
+Build: rebuild the backend bundle and the frontend (in the reference app: BASE_PATH=/ so assets serve from the site root — adapt to this project's build).
+Collect: backend bundle files (*.mjs, *.mjs.map) destined for the repo root; every frontend file destined for public/….
+Push via the GitHub Git Data API using the connector proxy fetch: a. GET /repos/{owner}/{repo}/git/ref/heads/main → head SHA; GET .../git/commits/{head} → base tree SHA. b. GET .../git/trees/{base}?recursive=1 → list existing paths owned by the release (root *.mjs/*.mjs.map and public/** only). c. POST .../git/blobs for every new file (base64; batch ~10 in parallel). d. Build one tree on base_tree: upserts for all new files, and sha: null deletions for owned paths missing from the new build (removes stale hashed assets). Never touch node_modules/, package.json, or .github/. e. POST .../git/commits (parent = head, message from the latest local commit subject), then PATCH .../git/refs/heads/main.
+Confirm the deployment: after updating the ref, poll GET /repos/{owner}/{repo}/actions/runs?head_sha={newCommit} every ~10 seconds (5-minute deadline) until the triggered run completes. Exit 0 only on conclusion: "success"; on failure/cancellation print the run URL and exit non-zero; on timeout raise a distinct timeout error rather than hanging or silently succeeding. Add unit tests for the polling logic (success, failure, and no-run-appears timeout).
+Report: print the new commit SHA and the repository's /actions URL.
+Document the flow in the project's DEPLOYMENT.md.
+A complete working reference implementation exists in the source project at scripts/src/release.ts — if the user pastes it, keep the structure and change only the config block (OWNER, REPO, build commands, dist paths).
+
+Verify before declaring done
+Run the script once with the user's go-ahead (it triggers a real deployment) or, at minimum, dry-run everything up to the blob upload.
+Confirm the GitHub Actions run for the pushed commit completes successfully.
+Related hard-won lessons (apply where relevant)
+Disable Azure's own build (SCM_DO_BUILD_DURING_DEPLOYMENT=false, ENABLE_ORYX_BUILD=false); the repo already contains the finished package.
+Shell git push will NOT work with the Replit GitHub connection (its token isn't exposed to the shell) — the Git Data API via the connector proxy is the supported path.
+The deployment repo's committed node_modules should contain only the app's true runtime dependencies; keep server code free of top-level imports of packages that aren't in it.
+Notes for the user
+Run a release any time with pnpm release from the app's shell, or just ask the agent to "run a release". The command doesn't finish until Azure has actually deployed the new version successfully — so "the command succeeded" means "your users have it".
+The script refuses to run if there are unsaved source changes — that's intentional, so you never deploy something that isn't checkpointed.
+Deployment progress is visible at the GitHub repository's Actions tab; the script prints the link.

@@ -74,17 +74,28 @@ const leaseFieldsSchema = z.object({
     .catch(null),
 });
 
+const masterAgreementFieldsSchema = z.object({
+  lender: z.string().nullable().catch(null),
+  description: z.string().nullable().catch(null),
+  facilityLimit: z.number().nullable().catch(null),
+  securityDescription: z.string().nullable().catch(null),
+  covenantDescription: z.string().nullable().catch(null),
+});
+
 export const extractionSchema = z.object({
-  classification: z.enum(["loan", "lease", "other"]),
+  classification: z.enum(["loan", "lease", "master_agreement", "other"]),
   confidence: z.number().min(0).max(1).catch(0.5),
   reasoning: z.string().catch(""),
   loan: loanFieldsSchema.nullable().catch(null),
   lease: leaseFieldsSchema.nullable().catch(null),
+  masterAgreement: masterAgreementFieldsSchema.nullable().catch(null),
+  facilities: z.array(loanFieldsSchema).nullable().catch(null),
 });
 
 export type ExtractionResult = z.infer<typeof extractionSchema>;
 export type LoanFields = z.infer<typeof loanFieldsSchema>;
 export type LeaseFields = z.infer<typeof leaseFieldsSchema>;
+export type MasterAgreementFields = z.infer<typeof masterAgreementFieldsSchema>;
 
 const roundCents = (n: number): number => Math.round(n * 100) / 100;
 
@@ -128,7 +139,8 @@ export function reconcileLeaseMath(lease: LeaseFields): LeaseFields {
 const SYSTEM_PROMPT = `You are an assistant for a Canadian ASPE accounting tool. You will receive the text of a document. Classify it and extract structured data.
 
 Classification rules:
-- "loan": a loan agreement, mortgage, promissory note, credit facility, or term debt document.
+- "loan": a loan agreement, mortgage, promissory note, term sheet, or term debt document for a SINGLE credit facility.
+- "master_agreement": a master financing/credit agreement, commitment letter, or credit facility letter that establishes MULTIPLE distinct credit facilities under one umbrella (e.g. "Facility A: $2,000,000 term loan; Facility B: $500,000 equipment loan"). One facility with an operating line still counts if two or more term-debt facilities exist. A document with only ONE credit facility is a "loan", not a master agreement.
 - "lease": a lease agreement (vehicle, equipment, or real property) from the lessee's perspective.
 - "other": anything else (invoices, letters, financial statements, etc.).
 
@@ -163,6 +175,11 @@ Extraction rules — CRITICAL:
   - tenantImprovementAllowance: total dollar amount the landlord contributes to the tenant's leasehold improvements. If quoted per square foot (e.g. "$25.00 per rentable square foot"), multiply by rentableSquareFeet. Look for "Tenant Improvement Allowance", "leasehold improvement allowance", "inducement", "fixturing allowance".
   - freeRentMonths: number of rent-free or "gross rent free" months at the start of the term, if stated.
   - Note the per-square-foot figures and the math you used in "reasoning" so the accountant can verify.
+- Master agreement rules (classification "master_agreement"):
+  - Fill "masterAgreement" with the shared base terms: lender (the bank/lender name), description (1-2 sentence summary of the arrangement), facilityLimit (the overall/aggregate commitment amount across all facilities if stated, else null), securityDescription (summarize ALL security and guarantee provisions that apply to the facilities as a whole, same rules as securityDescription for loans), covenantDescription (summarize any financial covenants — required ratios, reporting requirements — in 1-3 sentences, or null if none stated).
+  - Fill "facilities" with one loan-shaped object per term-debt facility found, applying ALL the loan extraction rules to each. Use the facility's own name/label (e.g. "Facility A — Term Loan"), and set lender to the master's lender. Leave values null when the master agreement defers them to a separate term sheet.
+  - EXCLUDE revolving operating lines / demand operating facilities from "facilities" (they are not term debt); mention them in "reasoning" instead.
+  - Set "loan" and "lease" to null for a master agreement.
 - transferOfOwnership: true only if the lease clearly transfers title to the lessee at end of term.
 - bargainPurchaseOption: true only if there is a purchase option clearly below expected fair value (e.g. nominal buyout like $1 or ~10% or less of value). A fair-market-value buyout is false.
 - specializedAsset: true only if the asset is clearly custom/specialized such that only the lessee can use it.
@@ -173,9 +190,11 @@ Extraction rules — CRITICAL:
 
 Respond with JSON only, matching exactly this shape:
 {
-  "classification": "loan" | "lease" | "other",
+  "classification": "loan" | "lease" | "master_agreement" | "other",
   "confidence": number between 0 and 1,
   "reasoning": string,
+  "masterAgreement": { lender, description, facilityLimit, securityDescription, covenantDescription } or null if not a master agreement,
+  "facilities": [ same shape as "loan", one per facility ] or null if not a master agreement,
   "loan": { name, lender, principal, downPayment, interestRate, primeSpread, statedPrimeRate, amortizationYears, termYears, startDate, paymentFrequency ("monthly"|"semi-monthly"|"bi-weekly"|"weekly"), paymentAmount, interestOnlyMonths, graceMonths, graceInterestTreatment ("capitalized"|"none"|null), balloonPayment, securityDescription } or null if not a loan,
   "lease": { name, lessor, assetDescription, assetType ("vehicle"|"equipment"|"office_commercial"|"other"), startDate, termMonths, monthlyPayment, downPayment, interestRate, fairValue, economicLifeYears, buyoutAmount, transferOfOwnership, bargainPurchaseOption, specializedAsset, paymentAtBeginning, rentableSquareFeet, rentSteps ([{fromYear, toYear, monthlyRent, annualRatePerSquareFoot}] or null), tenantImprovementAllowance, freeRentMonths, camAnnualPerSquareFoot, camMonthly, percentageRentNote, fieldNotes ({fieldName: note} or null), estimates ({economicLifeYears, fairValue, interestRate, reasoning} or null) } or null if not a lease.
   "name" should be a short human label like "Truck Loan — TD Bank" based on the document.

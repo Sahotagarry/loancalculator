@@ -1,7 +1,7 @@
 import { Fragment, useState } from "react";
 import { useRoute } from "wouter";
 import { Link } from "wouter";
-import { useGetFile, useGetClient, useGetLoan, useListFiles, useListLoans, useCreateLoan, useDeleteLoan, useUpdateLoan, useUpdateFile, useRollForwardFile, getGetLoanQueryKey, getListFilesQueryKey, getListLoansQueryKey } from "@workspace/api-client-react";
+import { useGetFile, useGetClient, useGetLoan, useListFiles, useListLoans, useCreateLoan, useDeleteLoan, useUpdateLoan, useUpdateFile, useRollForwardFile, useListMasterAgreements, useCreateMasterAgreement, useUpdateMasterAgreement, useDeleteMasterAgreement, getGetLoanQueryKey, getListFilesQueryKey, getListLoansQueryKey, getListMasterAgreementsQueryKey, type MasterAgreement } from "@workspace/api-client-react";
 import { queryClient } from "@/lib/queryClient";
 import {
   Card,
@@ -43,7 +43,8 @@ import {
 import ConfirmDialog from "@/components/confirm-dialog";
 import { CounterpartyCombobox } from "@/components/counterparty-combobox";
 import { LoanFormFields, validateLoanForm, type LoanFormState, type LoanFormMode } from "@/components/loan-form-fields";
-import { ArrowLeft, ArrowRight, Plus, Trash2, Calculator, FileSpreadsheet, Calendar, Pencil, CheckCircle2, XCircle, ShieldCheck, AlertTriangle, FileText, Landmark, Receipt, Wallet, CalendarPlus, LayoutGrid, Table as TableIcon, ChevronDown, Search } from "lucide-react";
+import { ArrowLeft, ArrowRight, Plus, Trash2, Calculator, FileSpreadsheet, Calendar, Pencil, CheckCircle2, XCircle, ShieldCheck, AlertTriangle, FileText, Landmark, Receipt, Wallet, CalendarPlus, LayoutGrid, Table as TableIcon, ChevronDown, Search, Layers } from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
 import { PageHeader } from "@/components/page-header";
 import { useMemo } from "react";
 import { calculateStraightLineLease, buildYearlyStraightLine } from "@/lib/straight-line";
@@ -189,6 +190,26 @@ export default function FileDetail() {
   const [importedEstimates, setImportedEstimates] = useState<ImportedEstimates | null>(null);
 
   const [form, setForm] = useState<LoanFormState>(() => makeBlankLoanForm());
+  // Master agreement the loan being created/edited belongs to (null = standalone).
+  const [formMasterId, setFormMasterId] = useState<string | null>(null);
+
+  // Master agreement create/edit dialog state.
+  const [masterDialogOpen, setMasterDialogOpen] = useState(false);
+  const [editingMasterId, setEditingMasterId] = useState<string | null>(null);
+  const [masterForm, setMasterForm] = useState({
+    lender: "",
+    description: "",
+    facilityLimit: "" as string,
+    securityDescription: "",
+    covenantDescription: "",
+  });
+  const [deleteMasterTarget, setDeleteMasterTarget] = useState<string | null>(null);
+  const [deleteMasterOpen, setDeleteMasterOpen] = useState(false);
+  // When importing a master agreement PDF, holds the facilities awaiting creation.
+  const [pendingMasterImport, setPendingMasterImport] = useState<{
+    result: DocumentImportResult;
+    facilityIndexes: number[];
+  } | null>(null);
 
   const [loanView, setLoanView] = useState<"cards" | "table">("cards");
   const [summaryView, setSummaryView] = useState<"combined" | "byloan">("combined");
@@ -199,6 +220,7 @@ export default function FileDetail() {
   const { data: file } = useGetFile(fileId);
   const { data: client } = useGetClient(clientId);
   const { data: loans } = useListLoans(fileId);
+  const { data: masters } = useListMasterAgreements(fileId);
 
   const formMode: LoanFormMode = (() => {
     if (!editingLoanId) return "loan";
@@ -211,6 +233,7 @@ export default function FileDetail() {
 
   const openEditLoan = (loan: any) => {
     setEditingLoanId(loan.id);
+    setFormMasterId(loan.masterAgreementId ?? null);
     setForm({
       name: loan.name,
       description: loan.description ?? "",
@@ -293,6 +316,7 @@ export default function FileDetail() {
       paymentOverride: f?.paymentAmount ?? undefined,
     });
     setEditingLoanId(null);
+    setFormMasterId(null);
     setCreateOpen(true);
   };
 
@@ -484,6 +508,166 @@ export default function FileDetail() {
     },
   });
 
+  const invalidateMasters = () =>
+    queryClient.invalidateQueries({ queryKey: getListMasterAgreementsQueryKey(fileId) });
+
+  const createMaster = useCreateMasterAgreement({
+    mutation: {
+      onError: (err) => {
+        toast({ title: "Couldn't save master agreement", description: getErrorMessage(err), variant: "destructive" });
+      },
+    },
+  });
+
+  const updateMaster = useUpdateMasterAgreement({
+    mutation: {
+      onSuccess: () => {
+        invalidateMasters();
+        setMasterDialogOpen(false);
+        setEditingMasterId(null);
+      },
+      onError: (err) => {
+        toast({ title: "Couldn't save master agreement", description: getErrorMessage(err), variant: "destructive" });
+      },
+    },
+  });
+
+  const deleteMaster = useDeleteMasterAgreement({
+    mutation: {
+      onSuccess: () => {
+        invalidateMasters();
+        // Facilities under the deleted master become standalone loans.
+        queryClient.invalidateQueries({ queryKey: [`/api/files/${fileId}/loans`] });
+        setDeleteMasterOpen(false);
+        setDeleteMasterTarget(null);
+      },
+      onError: (err) => {
+        toast({ title: "Couldn't delete master agreement", description: getErrorMessage(err), variant: "destructive" });
+      },
+    },
+  });
+
+  const openCreateMaster = () => {
+    setEditingMasterId(null);
+    setMasterForm({ lender: "", description: "", facilityLimit: "", securityDescription: "", covenantDescription: "" });
+    setMasterDialogOpen(true);
+  };
+
+  const openEditMaster = (m: MasterAgreement) => {
+    setEditingMasterId(m.id);
+    setMasterForm({
+      lender: m.lender,
+      description: m.description ?? "",
+      facilityLimit: m.facilityLimit != null ? String(Number(m.facilityLimit)) : "",
+      securityDescription: m.securityDescription ?? "",
+      covenantDescription: m.covenantDescription ?? "",
+    });
+    setMasterDialogOpen(true);
+  };
+
+  const saveMaster = () => {
+    const limit = masterForm.facilityLimit.trim() === "" ? null : Number(masterForm.facilityLimit);
+    if (limit != null && (!Number.isFinite(limit) || limit <= 0)) {
+      toast({ title: "Invalid facility limit", description: "Enter a positive amount or leave it blank.", variant: "destructive" });
+      return;
+    }
+    const body = {
+      lender: masterForm.lender.trim(),
+      description: masterForm.description.trim() || null,
+      facilityLimit: limit,
+      securityDescription: masterForm.securityDescription.trim() || null,
+      covenantDescription: masterForm.covenantDescription.trim() || null,
+    };
+    if (editingMasterId) {
+      updateMaster.mutate({ id: editingMasterId, data: body });
+    } else {
+      createMaster.mutate(
+        { id: fileId, data: body },
+        {
+          onSuccess: () => {
+            invalidateMasters();
+            setMasterDialogOpen(false);
+          },
+        },
+      );
+    }
+  };
+
+  // Import flow: create the master agreement plus its selected facilities in one go.
+  const handleImportedMaster = (result: DocumentImportResult, facilityIndexes: number[]) => {
+    const m = result.masterAgreement;
+    createMaster.mutate(
+      {
+        id: fileId,
+        data: {
+          lender: m?.lender?.trim() || "Unknown lender",
+          description: m?.description ?? null,
+          facilityLimit: m?.facilityLimit ?? null,
+          securityDescription: m?.securityDescription ?? null,
+          covenantDescription: m?.covenantDescription ?? null,
+          sourceDocumentBlob: result.documentBlob ?? null,
+          sourceDocumentName: result.documentName ?? null,
+        },
+      },
+      {
+        onSuccess: async (created) => {
+          const facilities = (result.facilities ?? []).filter((_, i) => facilityIndexes.includes(i));
+          let failures = 0;
+          for (const f of facilities) {
+            const validFreqs = ["monthly", "semi-monthly", "bi-weekly", "weekly"] as const;
+            const freq = validFreqs.find((v) => v === f.paymentFrequency) ?? "monthly";
+            try {
+              await createLoan.mutateAsync({
+                id: fileId,
+                data: {
+                  name: f.name ?? "Facility",
+                  counterparty: f.lender ?? m?.lender ?? null,
+                  // Copy security wording onto the facility itself (facility's own
+                  // wording wins; else inherit the master's) so it survives a later
+                  // master deletion/unlink.
+                  securityClauses: f.securityDescription
+                    ? [f.securityDescription]
+                    : m?.securityDescription
+                      ? [m.securityDescription]
+                      : undefined,
+                  isCapitalLease: false,
+                  principal: f.principal ?? 0,
+                  downPayment: f.downPayment ?? 0,
+                  interestRate: f.interestRate ?? 0,
+                  amortizationYears: f.amortizationYears ?? f.termYears ?? 0,
+                  termYears: f.termYears ?? f.amortizationYears ?? 0,
+                  startDate: f.startDate ?? file?.fiscalYearEnd ?? "",
+                  fiscalYearEnd: file?.fiscalYearEnd ?? "",
+                  paymentFrequency: freq,
+                  ioMonths: f.interestOnlyMonths ?? 0,
+                  graceMonths: f.graceMonths ?? 0,
+                  graceInterestTreatment: (f.graceInterestTreatment as "capitalized" | "none") ?? "capitalized",
+                  balloonPayment: f.balloonPayment ?? 0,
+                  paymentOverride: f.paymentAmount ?? null,
+                  masterAgreementId: created.id,
+                },
+              });
+            } catch {
+              failures += 1;
+            }
+          }
+          invalidateMasters();
+          queryClient.invalidateQueries({ queryKey: [`/api/files/${fileId}/loans`] });
+          toast({
+            title: "Master agreement created",
+            description:
+              facilities.length === 0
+                ? "No facilities were imported — add them from term sheets when ready."
+                : failures === 0
+                  ? `${facilities.length} ${facilities.length === 1 ? "facility" : "facilities"} created under ${created.lender}. Review each one — some terms may await a term sheet.`
+                  : `${facilities.length - failures} of ${facilities.length} facilities created; ${failures} failed (likely missing required terms). Add the rest manually.`,
+            variant: failures > 0 ? "destructive" : undefined,
+          });
+        },
+      },
+    );
+  };
+
   const rollForward = useRollForwardFile({
     mutation: {
       onSuccess: () => {
@@ -622,6 +806,7 @@ export default function FileDetail() {
                       clientName: client?.name ?? "Client",
                       fiscalYearEnd: file.fiscalYearEnd,
                       loans,
+                      masters,
                     });
                   }}
                 >
@@ -635,6 +820,7 @@ export default function FileDetail() {
                       clientName: client?.name ?? "Client",
                       fiscalYearEnd: file.fiscalYearEnd,
                       loans,
+                      masters,
                     });
                   }}
                 >
@@ -664,6 +850,7 @@ export default function FileDetail() {
                       clientName: client?.name ?? "Client",
                       fiscalYearEnd: file.fiscalYearEnd,
                       loans,
+                      masters,
                     });
                   }}
                 >
@@ -677,6 +864,7 @@ export default function FileDetail() {
                       clientName: client?.name ?? "Client",
                       fiscalYearEnd: file.fiscalYearEnd,
                       loans,
+                      masters,
                     });
                   }}
                 >
@@ -1026,6 +1214,7 @@ export default function FileDetail() {
                         onClick={() => {
                           setEditingLoanId(null);
                           setForm(makeBlankLoanForm());
+                          setFormMasterId(null);
                           setPendingSourceDoc(null);
                           setCreateOpen(true);
                         }}
@@ -1034,6 +1223,16 @@ export default function FileDetail() {
                         <div className="space-y-0.5">
                           <p className="text-sm font-medium">Add Loan</p>
                           <p className="text-xs text-muted-foreground">Enter loan terms directly</p>
+                        </div>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        className="cursor-pointer items-start gap-3 py-2.5"
+                        onClick={openCreateMaster}
+                      >
+                        <Layers className="h-4 w-4 mt-0.5 text-muted-foreground shrink-0" />
+                        <div className="space-y-0.5">
+                          <p className="text-sm font-medium">Add Master Agreement</p>
+                          <p className="text-xs text-muted-foreground">Base terms shared by multiple facilities from one lender</p>
                         </div>
                       </DropdownMenuItem>
                       <DropdownMenuItem
@@ -1094,6 +1293,7 @@ export default function FileDetail() {
                         onClick={() => {
                           setEditingLoanId(null);
                           setForm(makeBlankLoanForm());
+                          setFormMasterId(null);
                           setPendingSourceDoc(null);
                           setCreateOpen(true);
                         }}
@@ -1241,10 +1441,24 @@ export default function FileDetail() {
                   return sorted;
                 };
 
-                const regularLoans = sortItems(visibleLoans.filter((l) => {
+                const allRegularLoans = visibleLoans.filter((l) => {
                   const isOperating = isOperatingLeaseLoan(l);
                   return !l.isCapitalLease && !isOperating;
-                }));
+                });
+                // Facilities group under their master agreement; standalone loans
+                // continue to render exactly as before.
+                const masterList = masters ?? [];
+                const masterById = new Map(masterList.map((m) => [m.id, m]));
+                const facilitiesByMaster = new Map<string, any[]>();
+                for (const l of allRegularLoans) {
+                  const mid = l.masterAgreementId;
+                  if (mid && masterById.has(mid)) {
+                    const list = facilitiesByMaster.get(mid) ?? [];
+                    list.push(l);
+                    facilitiesByMaster.set(mid, list);
+                  }
+                }
+                const regularLoans = sortItems(allRegularLoans.filter((l) => !(l.masterAgreementId && masterById.has(l.masterAgreementId))));
                 const capitalLeases = sortItems(visibleLoans.filter((l) => l.isCapitalLease));
                 const operatingLeases = sortItems(visibleLoans.filter((l) => isOperatingLeaseLoan(l)));
 
@@ -1563,6 +1777,83 @@ export default function FileDetail() {
                         </CardContent>
                       </Card>
                     )}
+                    {masterList.map((m) => {
+                      const facilities = sortItems(facilitiesByMaster.get(m.id) ?? []);
+                      // Hide masters with zero visible facilities only while searching.
+                      if (facilities.length === 0 && searchQ) return null;
+                      const subtotal = facilities.reduce((s, l) => s + outstandingOf(l), 0);
+                      return (
+                        <div key={m.id} className="space-y-3 rounded-2xl border bg-muted/20 p-4">
+                          <div className="flex items-start justify-between gap-3 flex-wrap">
+                            <div className="space-y-0.5">
+                              <h3 className="text-lg font-display font-semibold flex items-center gap-2">
+                                <Layers className="h-4 w-4 text-primary" />
+                                {m.lender}
+                                <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground bg-muted rounded px-1.5 py-0.5">Master Agreement</span>
+                              </h3>
+                              {m.description && <p className="text-sm text-muted-foreground">{m.description}</p>}
+                              <p className="text-sm text-muted-foreground">
+                                {facilities.length} {facilities.length === 1 ? "facility" : "facilities"} — outstanding subtotal{" "}
+                                <span className="font-semibold text-foreground">{formatCurrency(subtotal)}</span>
+                                {m.facilityLimit != null && (
+                                  <> · overall limit {formatCurrency(Number(m.facilityLimit))}</>
+                                )}
+                              </p>
+                            </div>
+                            <div className="flex items-center gap-1">
+                              {m.sourceDocumentName && (
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <a href={`${import.meta.env.BASE_URL}api/master-agreements/${m.id}/source-document`} target="_blank" rel="noreferrer">
+                                      <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary">
+                                        <FileText className="h-4 w-4" />
+                                      </Button>
+                                    </a>
+                                  </TooltipTrigger>
+                                  <TooltipContent>View agreement: {m.sourceDocumentName}</TooltipContent>
+                                </Tooltip>
+                              )}
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary" onClick={() => openEditMaster(m)}>
+                                    <Pencil className="h-4 w-4" />
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>Edit master agreement</TooltipContent>
+                              </Tooltip>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                                    onClick={() => {
+                                      setDeleteMasterTarget(m.id);
+                                      setDeleteMasterOpen(true);
+                                    }}
+                                  >
+                                    <Trash2 className="h-4 w-4" />
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>Delete master agreement (facilities become standalone)</TooltipContent>
+                              </Tooltip>
+                            </div>
+                          </div>
+                          {facilities.length === 0 ? (
+                            <p className="text-sm text-muted-foreground border border-dashed rounded-lg p-3">
+                              No facilities linked yet. Edit a loan and set its master agreement, or add a new
+                              loan and choose this agreement.
+                            </p>
+                          ) : loanView === "table" ? (
+                            renderDebtTable(facilities)
+                          ) : (
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                              {facilities.map(renderCard)}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                     {renderGroup(regularLoans, "bg-primary", "Loans", renderDebtTable)}
                     {renderGroup(capitalLeases, "bg-primary", "Capital Leases", renderDebtTable)}
                     {renderGroup(operatingLeases, "bg-primary", "Operating Leases", renderOperatingTable)}
@@ -2171,30 +2462,78 @@ export default function FileDetail() {
                       <h2 className="text-lg font-display font-semibold border-b pb-3">Long Term Debt</h2>
                       <table className="w-full text-sm">
                         <tbody>
-                          {groupByCounterparty(summary.loans, (l) => l.balanceAtYearEnd).map((group) => (
-                            <Fragment key={group.key}>
-                              {group.items.map((loan) => (
-                                <tr key={loan.id} className="border-b last:border-0">
-                                  <td className="py-3 pr-4 align-top w-[70%]">
-                                    <p className="leading-relaxed">{loan.description}</p>
-                                  </td>
-                                  <td className="py-3 text-right align-top whitespace-nowrap font-semibold">
-                                    {formatCurrency(loan.balanceAtYearEnd)}
-                                  </td>
-                                </tr>
-                              ))}
-                              {group.items.length > 1 && (
-                                <tr className="border-b bg-muted/30">
-                                  <td className="py-2 pr-4 pl-8 italic text-muted-foreground">
-                                    Subtotal — {group.label}
-                                  </td>
-                                  <td className="py-2 text-right font-semibold">
-                                    {formatCurrency(group.items.reduce((s, l) => s + l.balanceAtYearEnd, 0))}
-                                  </td>
-                                </tr>
-                              )}
-                            </Fragment>
-                          ))}
+                          {(() => {
+                            // Facilities group under their master agreement's lender;
+                            // remaining standalone loans keep the counterparty grouping.
+                            const masterOf = new Map<string, MasterAgreement>();
+                            for (const l of loans ?? []) {
+                              const m = l.masterAgreementId ? masters?.find((x) => x.id === l.masterAgreementId) : undefined;
+                              if (m) masterOf.set(l.id, m);
+                            }
+                            const masterGroups = (masters ?? [])
+                              .map((m) => ({
+                                master: m,
+                                items: summary.loans.filter((l) => masterOf.get(l.id)?.id === m.id)
+                                  .sort((a, b) => b.balanceAtYearEnd - a.balanceAtYearEnd),
+                              }))
+                              .filter((g) => g.items.length > 0);
+                            const standalone = summary.loans.filter((l) => !masterOf.has(l.id));
+                            return (
+                              <>
+                                {masterGroups.map((g) => (
+                                  <Fragment key={g.master.id}>
+                                    {g.items.map((loan) => (
+                                      <tr key={loan.id} className="border-b last:border-0">
+                                        <td className="py-3 pr-4 align-top w-[70%]">
+                                          <p className="leading-relaxed">{loan.description}</p>
+                                        </td>
+                                        <td className="py-3 text-right align-top whitespace-nowrap font-semibold">
+                                          {formatCurrency(loan.balanceAtYearEnd)}
+                                        </td>
+                                      </tr>
+                                    ))}
+                                    <tr className="border-b bg-muted/30">
+                                      <td className="py-2 pr-4 pl-8 italic text-muted-foreground">
+                                        Subtotal — {g.master.lender} master financing agreement
+                                        {(g.master.securityDescription || g.master.covenantDescription) && (
+                                          <span className="block not-italic text-xs mt-1 leading-relaxed">
+                                            {[g.master.securityDescription, g.master.covenantDescription].filter(Boolean).join(" ")}
+                                          </span>
+                                        )}
+                                      </td>
+                                      <td className="py-2 text-right font-semibold align-top">
+                                        {formatCurrency(g.items.reduce((s, l) => s + l.balanceAtYearEnd, 0))}
+                                      </td>
+                                    </tr>
+                                  </Fragment>
+                                ))}
+                                {groupByCounterparty(standalone, (l) => l.balanceAtYearEnd).map((group) => (
+                                  <Fragment key={group.key}>
+                                    {group.items.map((loan) => (
+                                      <tr key={loan.id} className="border-b last:border-0">
+                                        <td className="py-3 pr-4 align-top w-[70%]">
+                                          <p className="leading-relaxed">{loan.description}</p>
+                                        </td>
+                                        <td className="py-3 text-right align-top whitespace-nowrap font-semibold">
+                                          {formatCurrency(loan.balanceAtYearEnd)}
+                                        </td>
+                                      </tr>
+                                    ))}
+                                    {group.items.length > 1 && (
+                                      <tr className="border-b bg-muted/30">
+                                        <td className="py-2 pr-4 pl-8 italic text-muted-foreground">
+                                          Subtotal — {group.label}
+                                        </td>
+                                        <td className="py-2 text-right font-semibold">
+                                          {formatCurrency(group.items.reduce((s, l) => s + l.balanceAtYearEnd, 0))}
+                                        </td>
+                                      </tr>
+                                    )}
+                                  </Fragment>
+                                ))}
+                              </>
+                            );
+                          })()}
                           <tr className="border-t-2">
                             <td className="py-3 pr-4"></td>
                             <td className="py-3 text-right font-semibold">{formatCurrency(summary.loanTotal)}</td>
@@ -2488,6 +2827,60 @@ export default function FileDetail() {
               })()}
             </DialogDescription>
           </DialogHeader>
+          {formMode === "loan" && (masters?.length ?? 0) > 0 && (
+            <div className="space-y-1.5 rounded-lg border bg-muted/20 p-3">
+              <Label className="flex items-center gap-1.5">
+                <Layers className="h-3.5 w-3.5 text-primary" />
+                Master Agreement
+              </Label>
+              <Select
+                value={formMasterId ?? "none"}
+                onValueChange={(v) => {
+                  const nextId = v === "none" ? null : v;
+                  setFormMasterId(nextId);
+                  // Inherit the master's lender and security as defaults, but only
+                  // into fields the user hasn't filled — anything already entered
+                  // is treated as a facility-level override and left alone. The
+                  // master's security wording is copied into the facility's own
+                  // security clauses so it persists even if the master is later
+                  // deleted and the facility reverts to standalone.
+                  if (nextId) {
+                    const m = masters?.find((x) => x.id === nextId);
+                    if (m) {
+                      setForm((prev) => ({
+                        ...prev,
+                        counterparty: prev.counterparty ?? m.lender,
+                        securityClauses:
+                          prev.securityClauses.length > 0
+                            ? prev.securityClauses
+                            : m.securityDescription
+                              ? [m.securityDescription]
+                              : prev.securityClauses,
+                      }));
+                    }
+                  }
+                }}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Standalone loan (no master agreement)" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Standalone loan (no master agreement)</SelectItem>
+                  {(masters ?? []).map((m) => (
+                    <SelectItem key={m.id} value={m.id}>
+                      {m.lender}
+                      {m.description ? ` — ${m.description.slice(0, 40)}` : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                {formMasterId
+                  ? "This facility inherits the master's lender and security as defaults — any field you fill in below overrides the master for this facility only."
+                  : "Link this loan to a master financing agreement to group it with the lender's other facilities."}
+              </p>
+            </div>
+          )}
           <LoanFormFields form={form} setForm={setForm} mode={formMode} />
           <DialogFooter>
             <Button variant="outline" onClick={() => { setCreateOpen(false); setEditingLoanId(null); }}>
@@ -2554,6 +2947,7 @@ export default function FileDetail() {
                         collateralUsefulLifeYears: form.collateralUsefulLifeYears || null,
                         collateralDecliningRate: form.collateralDecliningRate || null,
                         collateralSalvageValue: form.collateralSalvageValue || null,
+                        masterAgreementId: formMasterId,
                       },
                     });
                   } else {
@@ -2612,6 +3006,7 @@ export default function FileDetail() {
                         collateralSalvageValue: form.collateralSalvageValue || null,
                         sourceDocumentBlob: pendingSourceDoc?.blob,
                         sourceDocumentName: pendingSourceDoc?.name,
+                        masterAgreementId: formMasterId,
                       },
                     });
                   }
@@ -2633,6 +3028,102 @@ export default function FileDetail() {
         fileId={fileId}
         onUseLoan={handleImportedLoan}
         onUseLease={handleImportedLease}
+        onUseMasterAgreement={handleImportedMaster}
+      />
+
+      {/* Master Agreement create/edit dialog */}
+      <Dialog
+        open={masterDialogOpen}
+        onOpenChange={(open) => {
+          setMasterDialogOpen(open);
+          if (!open) setEditingMasterId(null);
+        }}
+      >
+        <DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="font-display flex items-center gap-2">
+              <Layers className="h-5 w-5 text-primary" />
+              {editingMasterId ? "Edit Master Agreement" : "Add Master Agreement"}
+            </DialogTitle>
+            <DialogDescription>
+              Base terms shared by all facilities under this agreement. Individual facilities
+              inherit the lender and security, and can override anything on their own form.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="ma-lender">Lender *</Label>
+              <CounterpartyCombobox
+                value={masterForm.lender || null}
+                onChange={(v) => setMasterForm((p) => ({ ...p, lender: v ?? "" }))}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="ma-desc">Description</Label>
+              <Input
+                id="ma-desc"
+                value={masterForm.description}
+                onChange={(e) => setMasterForm((p) => ({ ...p, description: e.target.value }))}
+                placeholder="e.g. Master credit agreement dated June 15, 2026"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="ma-limit">Overall facility limit ($)</Label>
+              <Input
+                id="ma-limit"
+                type="number"
+                min="0"
+                value={masterForm.facilityLimit}
+                onChange={(e) => setMasterForm((p) => ({ ...p, facilityLimit: e.target.value }))}
+                placeholder="Optional — display only"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="ma-security">Shared security / collateral</Label>
+              <Textarea
+                id="ma-security"
+                rows={3}
+                value={masterForm.securityDescription}
+                onChange={(e) => setMasterForm((p) => ({ ...p, securityDescription: e.target.value }))}
+                placeholder="e.g. General security agreement over all present and after-acquired property; personal guarantees of the shareholders"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="ma-covenants">Covenants</Label>
+              <Textarea
+                id="ma-covenants"
+                rows={3}
+                value={masterForm.covenantDescription}
+                onChange={(e) => setMasterForm((p) => ({ ...p, covenantDescription: e.target.value }))}
+                placeholder="e.g. Debt service coverage ratio not less than 1.25:1, tested annually"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setMasterDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={saveMaster}
+              disabled={!masterForm.lender.trim() || createMaster.isPending || updateMaster.isPending}
+            >
+              {editingMasterId
+                ? updateMaster.isPending ? "Saving..." : "Save Changes"
+                : createMaster.isPending ? "Creating..." : "Create Master Agreement"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <ConfirmDialog
+        open={deleteMasterOpen}
+        onOpenChange={setDeleteMasterOpen}
+        title="Delete master agreement?"
+        description="The agreement's shared terms are removed. Its facilities are NOT deleted — they become standalone loans again."
+        confirmText={deleteMaster.isPending ? "Deleting..." : "Delete"}
+        onConfirm={() => {
+          if (deleteMasterTarget) deleteMaster.mutate({ id: deleteMasterTarget });
+        }}
       />
 
       <CapitalLeaseAssessment

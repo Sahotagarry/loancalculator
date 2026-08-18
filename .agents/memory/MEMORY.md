@@ -37,4 +37,5 @@
 - [Soft-delete trash semantics](soft-delete-trash-semantics.md) — every by-id read/mutation needs isNull(deletedAt); restore un-trashes full parent chain unconditionally
 - [Clearline Fintech theme](clearline-fintech-theme.md) — dark #262626 header on every page, orange 27 96% 51% in :root AND .dark, Lato/Raleway; PageHeader forces `dark` class
 - [FV rate validation boundary](fv-rate-validation.md) — fvRate must be finite >0 at BOTH client helpers and API routes; decision saves omit fvRate when no positive rate exists
+- [Master financing agreements](master-agreements.md) — inheritance is copy-on-link (workpapers/disclosures only do live security/covenant fallback); delete unlinks facilities; roll-forward matches masters by rolledFromId
 - [Comparatives lineage](comparatives-lineage.md) — prior-year figures follow rolledFromId → source loan's fileId; never pick prior file by fiscal-year date

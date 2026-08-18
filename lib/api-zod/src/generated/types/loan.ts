@@ -62,6 +62,7 @@ export interface Loan {
   inducementReceivedInCash: boolean;
   covenantViolation: boolean;
   rolledFromId?: string;
+  masterAgreementId?: string | null;
   fvRate?: string;
   fvDecision?: LoanFvDecision;
   fvDecisionNote?: string;

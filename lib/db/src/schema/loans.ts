@@ -83,6 +83,8 @@ export const loansTable = pgTable("loans", {
   covenantViolation: boolean("covenant_violation").notNull().default(false),
   // Roll-forward tracking
   rolledFromId: varchar("rolled_from_id"),
+  // Optional link to a master financing agreement (facility grouping).
+  masterAgreementId: varchar("master_agreement_id"),
   // ASPE 3856 fair value rate adjustment
   fvRate: numeric("fv_rate", { precision: 5, scale: 2 }),
   // Three-way decision: use_fv | trivial | immaterial

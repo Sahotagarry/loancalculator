@@ -9,9 +9,11 @@
   },
   "devDependencies": {
     "@types/node": "catalog:",
-    "tsx": "catalog:"
+    "tsx": "catalog:",
+    "vitest": "^4.1.10"
   },
   "dependencies": {
+    "@replit/connectors-sdk": "^0.4.2",
     "docx": "^9.7.1"
   }
 }

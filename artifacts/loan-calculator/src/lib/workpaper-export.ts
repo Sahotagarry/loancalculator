@@ -26,7 +26,19 @@ import { getFiscalYear, getFyEndParts } from "./fiscal";
 
 export type WorkpaperLoanInput = Parameters<typeof buildLoanSummary>[0] & {
   description?: string | null;
+  masterAgreementId?: string | null;
 };
+
+/** Shared base terms of a master financing agreement; facilities fall back to
+ *  these for security/covenant wording when they don't override them. */
+export interface WorkpaperMasterInput {
+  id: string;
+  lender: string;
+  description?: string | null;
+  facilityLimit?: string | number | null;
+  securityDescription?: string | null;
+  covenantDescription?: string | null;
+}
 
 export interface WorkpaperMeta {
   clientName: string;
@@ -71,6 +83,7 @@ function fvDecisionLabel(d: string | null | undefined): string {
 export function buildLoanWorkpaper(
   loan: WorkpaperLoanInput,
   meta: WorkpaperMeta,
+  master?: WorkpaperMasterInput | null,
 ): Workpaper | null {
   if (!loan.startDate || !meta.fiscalYearEnd) return null;
   const reportYearEnd = parseISO(meta.fiscalYearEnd);
@@ -88,6 +101,7 @@ export function buildLoanWorkpaper(
     meta,
     fyeLabel,
     reportYearEnd,
+    master ?? null,
   );
 }
 
@@ -97,6 +111,7 @@ function buildDebtWorkpaper(
   meta: WorkpaperMeta,
   fyeLabel: string,
   reportYearEnd: Date,
+  master: WorkpaperMasterInput | null = null,
 ): Workpaper {
   const isCapital = summary.isCapitalLease;
   const typeLabel = isCapital ? "Capital Lease" : "Loan";
@@ -326,6 +341,19 @@ function buildDebtWorkpaper(
   }
   if (loan.securityClauses && loan.securityClauses.length > 0) {
     collateralRows.push(["Security clauses", loan.securityClauses.join("; ")]);
+  } else if (master?.securityDescription) {
+    // Facility doesn't state its own security — fall back to the master
+    // agreement's shared security wording.
+    collateralRows.push(["Security (per master agreement)", master.securityDescription]);
+  }
+  if (master?.covenantDescription) {
+    collateralRows.push(["Covenants (per master agreement)", master.covenantDescription]);
+  }
+  if (master) {
+    collateralRows.push([
+      "Master agreement",
+      `${master.lender}${master.description ? ` — ${master.description}` : ""}${master.facilityLimit != null ? ` (overall limit ${money(Number(master.facilityLimit))})` : ""}`,
+    ]);
   }
   if (collateralRows.length > 0) {
     sections.push({
@@ -584,6 +612,20 @@ export interface FileWorkpaperInput {
   clientName: string;
   fiscalYearEnd: string;
   loans: WorkpaperLoanInput[];
+  masters?: WorkpaperMasterInput[];
+}
+
+/** Order loans so facilities sit together under their master agreement
+ *  (masters in list order, standalone items after), preserving relative order otherwise. */
+function orderByMaster(loans: WorkpaperLoanInput[], masters: WorkpaperMasterInput[]): WorkpaperLoanInput[] {
+  if (masters.length === 0) return loans;
+  const byMaster = new Map(masters.map((m) => [m.id, m]));
+  const grouped: WorkpaperLoanInput[] = [];
+  for (const m of masters) {
+    grouped.push(...loans.filter((l) => l.masterAgreementId === m.id));
+  }
+  grouped.push(...loans.filter((l) => !l.masterAgreementId || !byMaster.has(l.masterAgreementId)));
+  return grouped;
 }
 
 interface LeadSheetData {
@@ -608,7 +650,8 @@ function buildLeadSheet(input: FileWorkpaperInput, workpapers: Workpaper[]): Lea
   let tWithin = 0, tBeyond = 0;
   const violatedNames: string[] = [];
 
-  for (const loan of input.loans) {
+  const masterById = new Map((input.masters ?? []).map((m) => [m.id, m]));
+  for (const loan of orderByMaster(input.loans, input.masters ?? [])) {
     const summary = buildLoanSummary(loan, reportYearEnd, input.fiscalYearEnd);
     if (!summary) continue;
     if ("monthlyStraightLineExpense" in summary) {
@@ -626,7 +669,9 @@ function buildLeadSheet(input: FileWorkpaperInput, workpapers: Workpaper[]): Lea
     } else {
       const s = summary as LoanSummary | CapitalLeaseSummary;
       const interestFY = s.yearlyInterest.find((y) => y.fiscalYear === reportFY)?.amount ?? 0;
-      const baseType = s.isCapitalLease ? "Capital lease" : "Loan";
+      const master = loan.masterAgreementId ? masterById.get(loan.masterAgreementId) : undefined;
+      let baseType = s.isCapitalLease ? "Capital lease" : "Loan";
+      if (master) baseType = `${baseType} — ${master.lender} master agreement`;
       debtRows.push([
         s.name,
         s.covenantViolation ? `${baseType} — covenant violation` : baseType,
@@ -689,8 +734,15 @@ const OP_LEAD_HEAD = ["Name", "Lessor", "Monthly", "SL rent exp.", "Deferred ren
 
 export function buildFileWorkpapers(input: FileWorkpaperInput): Workpaper[] {
   const meta: WorkpaperMeta = { clientName: input.clientName, fiscalYearEnd: input.fiscalYearEnd };
-  return input.loans
-    .map((loan) => buildLoanWorkpaper(loan, meta))
+  const masterById = new Map((input.masters ?? []).map((m) => [m.id, m]));
+  return orderByMaster(input.loans, input.masters ?? [])
+    .map((loan) =>
+      buildLoanWorkpaper(
+        loan,
+        meta,
+        loan.masterAgreementId ? (masterById.get(loan.masterAgreementId) ?? null) : null,
+      ),
+    )
     .filter((wp): wp is Workpaper => wp != null);
 }
 

@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import { useRoute } from "wouter";
 import { Link } from "wouter";
-import { useGetLoan, useGetFile, useGetClient, useUpdateLoan, useGetPrimeRate } from "@workspace/api-client-react";
+import { useGetLoan, useGetFile, useGetClient, useUpdateLoan, useGetPrimeRate, useListMasterAgreements } from "@workspace/api-client-react";
 import { queryClient } from "@/lib/queryClient";
 import {
   Card,
@@ -163,6 +163,7 @@ export default function LoanDetail() {
   })();
   const { data: file } = useGetFile(fileId);
   const { data: client } = useGetClient(clientId);
+  const { data: masters } = useListMasterAgreements(fileId);
 
   const updateLoan = useUpdateLoan({
     mutation: {
@@ -669,10 +670,15 @@ export default function LoanDetail() {
 
   const downloadWorkpaper = (kind: "pdf" | "xlsx") => {
     if (!loan || !file?.fiscalYearEnd) return;
+    // Pass the facility's master agreement so the workpaper carries the master
+    // reference and security/covenant fallback wording.
+    const master = loan.masterAgreementId
+      ? (masters?.find((m) => m.id === loan.masterAgreementId) ?? null)
+      : null;
     const wp = buildLoanWorkpaper(loan, {
       clientName: client?.name ?? "Client",
       fiscalYearEnd: file.fiscalYearEnd,
-    });
+    }, master);
     if (!wp) return;
     if (kind === "pdf") exportLoanWorkpaperPdf(wp);
     else exportLoanWorkpaperXlsx(wp);

@@ -167,6 +167,7 @@ export interface Loan {
   inducementReceivedInCash: boolean;
   covenantViolation: boolean;
   rolledFromId?: string;
+  masterAgreementId?: string | null;
   fvRate?: string;
   fvDecision?: LoanFvDecision;
   fvDecisionNote?: string;
@@ -248,6 +249,7 @@ export interface CreateLoan {
   fvDecisionNote?: string;
   sourceDocumentBlob?: string | null;
   sourceDocumentName?: string | null;
+  masterAgreementId?: string | null;
 }
 
 export type UpdateLoanGraceInterestTreatment = typeof UpdateLoanGraceInterestTreatment[keyof typeof UpdateLoanGraceInterestTreatment];
@@ -320,6 +322,42 @@ export interface UpdateLoan {
   fvDecision?: UpdateLoanFvDecision;
   fvDecisionNote?: string;
   dismissedFindings?: string[] | null;
+  masterAgreementId?: string | null;
+}
+
+export interface MasterAgreement {
+  id: string;
+  fileId: string;
+  lender: string;
+  description?: string | null;
+  facilityLimit?: string | null;
+  securityClauses?: string[] | null;
+  securityDescription?: string | null;
+  covenantDescription?: string | null;
+  sourceDocumentName?: string | null;
+  rolledFromId?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateMasterAgreement {
+  lender: string;
+  description?: string | null;
+  facilityLimit?: number | null;
+  securityClauses?: string[] | null;
+  securityDescription?: string | null;
+  covenantDescription?: string | null;
+  sourceDocumentBlob?: string | null;
+  sourceDocumentName?: string | null;
+}
+
+export interface UpdateMasterAgreement {
+  lender?: string;
+  description?: string | null;
+  facilityLimit?: number | null;
+  securityClauses?: string[] | null;
+  securityDescription?: string | null;
+  covenantDescription?: string | null;
 }
 
 export interface PrimeRateResponse {
@@ -455,12 +493,21 @@ export interface ImportedLeaseFields {
   estimates?: LeaseEstimates | null;
 }
 
+export interface ImportedMasterAgreementFields {
+  lender?: string | null;
+  description?: string | null;
+  facilityLimit?: number | null;
+  securityDescription?: string | null;
+  covenantDescription?: string | null;
+}
+
 export type DocumentImportResultClassification = typeof DocumentImportResultClassification[keyof typeof DocumentImportResultClassification];
 
 
 export const DocumentImportResultClassification = {
   loan: 'loan',
   lease: 'lease',
+  master_agreement: 'master_agreement',
   other: 'other',
 } as const;
 
@@ -472,6 +519,8 @@ export interface DocumentImportResult {
   documentName?: string | null;
   loan?: ImportedLoanFields | null;
   lease?: ImportedLeaseFields | null;
+  masterAgreement?: ImportedMasterAgreementFields | null;
+  facilities?: ImportedLoanFields[] | null;
 }
 
 export interface Error {

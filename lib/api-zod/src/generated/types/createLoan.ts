@@ -64,4 +64,5 @@ export interface CreateLoan {
   fvDecisionNote?: string;
   sourceDocumentBlob?: string | null;
   sourceDocumentName?: string | null;
+  masterAgreementId?: string | null;
 }
