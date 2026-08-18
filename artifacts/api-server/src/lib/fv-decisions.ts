@@ -58,6 +58,8 @@ export interface FvEvalLoanInput {
   startDate: string;
   ioMonths: number;
   specificIoMonths: string;
+  graceMonths?: number;
+  graceInterestTreatment?: string;
   balloonPayment: string;
   paymentFrequency: string;
   fvRate?: string | null;
@@ -84,7 +86,9 @@ export async function computeFvSuggestion(
 
   const startDateObj = new Date(loan.startDate);
   let fvRate = loan.fvRate != null ? Number(loan.fvRate) : undefined;
-  if (fvRate == null || fvRate <= 0) {
+  // Non-finite saved rates (NaN/Infinity from a malformed value) must never
+  // drive the FV math — fall back to prime + 2%.
+  if (fvRate == null || !Number.isFinite(fvRate) || fvRate <= 0) {
     const dateStr = startDateObj.toISOString().split("T")[0];
     const { primeRate } = await fetchPrimeRate(dateStr);
     fvRate = Number((primeRate + 2).toFixed(2));
@@ -104,6 +108,8 @@ export async function computeFvSuggestion(
     balloonPayment: Number(loan.balloonPayment),
     frequency: loan.paymentFrequency as "monthly" | "semi-monthly" | "bi-weekly" | "weekly",
     paymentOverride: loan.paymentOverride != null ? Number(loan.paymentOverride) : null,
+    graceMonths: loan.graceMonths ?? 0,
+    graceInterestTreatment: loan.graceInterestTreatment === "none" ? "none" : "capitalized",
   });
 
   const trivialThreshold = file.trivialThreshold != null ? Number(file.trivialThreshold) : null;
@@ -144,6 +150,8 @@ export async function evaluateFvDecisionsForFile(
         startDate: loan.startDate,
         ioMonths: loan.ioMonths,
         specificIoMonths: loan.specificIoMonths,
+        graceMonths: loan.graceMonths,
+        graceInterestTreatment: loan.graceInterestTreatment,
         balloonPayment: loan.balloonPayment,
         paymentFrequency: loan.paymentFrequency,
         fvRate: loan.fvRate,

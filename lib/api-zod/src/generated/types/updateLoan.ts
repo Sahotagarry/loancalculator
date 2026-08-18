@@ -7,6 +7,7 @@
  */
 import type { RentStep } from './rentStep';
 import type { UpdateLoanFvDecision } from './updateLoanFvDecision';
+import type { UpdateLoanGraceInterestTreatment } from './updateLoanGraceInterestTreatment';
 
 export interface UpdateLoan {
   name?: string;
@@ -20,6 +21,8 @@ export interface UpdateLoan {
   termYears?: number;
   startDate?: Date;
   paymentFrequency?: string;
+  graceMonths?: number;
+  graceInterestTreatment?: UpdateLoanGraceInterestTreatment;
   ioMonths?: number;
   specificIoMonths?: string;
   balloonPayment?: number;

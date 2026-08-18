@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { LoanFvDecision } from './loanFvDecision';
+import type { LoanGraceInterestTreatment } from './loanGraceInterestTreatment';
 import type { RentStep } from './rentStep';
 
 export interface Loan {
@@ -23,6 +24,8 @@ export interface Loan {
   startDate: Date;
   fiscalYearEnd: Date;
   paymentFrequency: string;
+  graceMonths?: number;
+  graceInterestTreatment?: LoanGraceInterestTreatment;
   ioMonths: number;
   specificIoMonths: string;
   balloonPayment: string;

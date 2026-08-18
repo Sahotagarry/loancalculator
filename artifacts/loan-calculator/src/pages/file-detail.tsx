@@ -58,11 +58,14 @@ import { format, addYears, addMonths, isAfter, parseISO } from "date-fns";
 import {
   buildFileSummary,
   calculateBookedSchedule,
+  effectiveLoanRate,
+  usesFairValue,
   computeMaturityDate,
   type FileSummary,
   type LoanSummary,
   type CapitalLeaseSummary,
   type OperatingLeaseSummary,
+  isOperatingLeaseLoan,
 } from "@/lib/aspe-utils";
 import CapitalLeaseAssessment, { calculatePVFromAnswers, formatAssetType, parseAssetType, type AssessmentResult, type StraightLineAnswers, type AssessmentAnswers, type ImportedEstimates } from "@/components/capital-lease-assessment";
 import ImportDocumentDialog from "@/components/import-document-dialog";
@@ -114,6 +117,8 @@ function makeBlankLoanForm(): LoanFormState {
     startDate: "",
     paymentFrequency: "monthly",
     ioMonths: 0,
+    graceMonths: 0,
+    graceInterestTreatment: "capitalized",
     balloonPayment: 0,
     transferOfOwnership: false,
     bargainPurchaseOption: false,
@@ -200,7 +205,7 @@ export default function FileDetail() {
     const loan = loans?.find((l) => l.id === editingLoanId);
     if (!loan) return "loan";
     if (loan.isCapitalLease) return "capital_lease";
-    if (Number(loan.interestRate) === 0 && loan.monthlyPayment != null) return "operating_lease";
+    if (isOperatingLeaseLoan(loan)) return "operating_lease";
     return "loan";
   })();
 
@@ -219,6 +224,8 @@ export default function FileDetail() {
       startDate: loan.startDate.split("T")[0],
       paymentFrequency: loan.paymentFrequency as any,
       ioMonths: loan.ioMonths,
+      graceMonths: loan.graceMonths ?? 0,
+      graceInterestTreatment: (loan.graceInterestTreatment as "capitalized" | "none") ?? "capitalized",
       balloonPayment: Number(loan.balloonPayment),
       transferOfOwnership: loan.transferOfOwnership,
       bargainPurchaseOption: loan.bargainPurchaseOption,
@@ -280,6 +287,8 @@ export default function FileDetail() {
       startDate: f?.startDate ?? "",
       paymentFrequency: freq,
       ioMonths: f?.interestOnlyMonths ?? 0,
+      graceMonths: f?.graceMonths ?? 0,
+      graceInterestTreatment: (f?.graceInterestTreatment as "capitalized" | "none") ?? "capitalized",
       balloonPayment: f?.balloonPayment ?? 0,
       paymentOverride: f?.paymentAmount ?? undefined,
     });
@@ -359,7 +368,7 @@ export default function FileDetail() {
     if (!file?.fiscalYearEnd || !loan.startDate) return badges;
     const fye = parseISO(file.fiscalYearEnd);
     const windowEnd = addYears(fye, 1);
-    const isOperatingLease = !loan.isCapitalLease && Number(loan.interestRate) === 0 && loan.monthlyPayment != null;
+    const isOperatingLease = isOperatingLeaseLoan(loan);
     const maturity = computeMaturityDate(loan.startDate, loan.termYears, loan.termMonths);
     if (isNaN(maturity.getTime())) return badges;
 
@@ -547,7 +556,7 @@ export default function FileDetail() {
     const fye = parseISO(file.fiscalYearEnd);
     const windowEnd = addYears(fye, 1);
     const isOperating = (l: (typeof loans)[number]) =>
-      !l.isCapitalLease && Number(l.interestRate) === 0 && l.monthlyPayment != null;
+      isOperatingLeaseLoan(l);
     const debtItems = loans.filter((l) => !isOperating(l));
     const fvFlagged = loans.filter((l) => l.fvDecision != null).length;
     const maturingSoon = debtItems.filter((l) => {
@@ -962,7 +971,7 @@ export default function FileDetail() {
                     {loans && (
                       <div className="flex items-center gap-2 mt-1">
                         {(() => {
-                          const op = loans.filter((l) => !l.isCapitalLease && Number(l.interestRate) === 0 && l.monthlyPayment != null).length;
+                          const op = loans.filter((l) => isOperatingLeaseLoan(l)).length;
                           const cap = loans.filter((l) => l.isCapitalLease).length;
                           const ln = loans.length - op - cap;
                           return (
@@ -1207,7 +1216,7 @@ export default function FileDetail() {
                 const visibleLoans = (showMatured ? loans ?? [] : (loans ?? []).filter((l) => !isMaturedLoan(l))).filter(matchesSearch);
 
                 const outstandingOf = (loan: any): number => {
-                  const isOperating = !loan.isCapitalLease && Number(loan.interestRate) === 0 && loan.monthlyPayment != null;
+                  const isOperating = isOperatingLeaseLoan(loan);
                   if (isOperating) return 0;
                   const result = calculateBookedSchedule(loan);
                   const reportYearEnd = parseISO(loan.fiscalYearEnd ?? file?.fiscalYearEnd ?? format(new Date(), "yyyy-MM-dd"));
@@ -1233,14 +1242,14 @@ export default function FileDetail() {
                 };
 
                 const regularLoans = sortItems(visibleLoans.filter((l) => {
-                  const isOperating = !l.isCapitalLease && Number(l.interestRate) === 0 && l.monthlyPayment != null;
+                  const isOperating = isOperatingLeaseLoan(l);
                   return !l.isCapitalLease && !isOperating;
                 }));
                 const capitalLeases = sortItems(visibleLoans.filter((l) => l.isCapitalLease));
-                const operatingLeases = sortItems(visibleLoans.filter((l) => !l.isCapitalLease && Number(l.interestRate) === 0 && l.monthlyPayment != null));
+                const operatingLeases = sortItems(visibleLoans.filter((l) => isOperatingLeaseLoan(l)));
 
                 const renderCard = (loan: any) => {
-                  const isOperatingLease = !loan.isCapitalLease && Number(loan.interestRate) === 0 && loan.monthlyPayment != null;
+                  const isOperatingLease = isOperatingLeaseLoan(loan);
                   const cardBorderClass = loan.isCapitalLease ? "card-capital-lease" : isOperatingLease ? "card-operating-lease" : "card-loan";
                   return (
                   <Card key={loan.id} className={`group rounded-2xl overflow-hidden hover:shadow-xl hover:shadow-gray-200/50 hover:border-primary/30 transition-all duration-300 shadow-sm flex flex-col p-0 gap-0 ${cardBorderClass}`}>
@@ -1260,7 +1269,7 @@ export default function FileDetail() {
                             if (!loan.fvDecision && statusBadges.length === 0) return null;
                             return (
                             <div className="mt-1.5 flex flex-wrap items-center gap-1">
-                              {loan.fvDecision === "use_fv" && (
+                              {usesFairValue(loan) && (
                                 <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded">FV Rate Applied</span>
                               )}
                               {loan.fvDecision === "trivial" && (
@@ -1323,7 +1332,7 @@ export default function FileDetail() {
                         }
                         // Loan or capital lease — compute the booked schedule. When
                         // fair value is adopted the contractual payment is held fixed.
-                        const effectiveRate = loan.fvDecision === "use_fv" && loan.fvRate != null ? Number(loan.fvRate) : Number(loan.interestRate);
+                        const effectiveRate = effectiveLoanRate(loan);
                         const result = calculateBookedSchedule(loan);
                         const reportYearEnd = parseISO(loan.fiscalYearEnd ?? file?.fiscalYearEnd ?? format(new Date(), "yyyy-MM-dd"));
                         const currentPeriodEnd = new Date(reportYearEnd);
@@ -1350,7 +1359,7 @@ export default function FileDetail() {
                               </>
                             )}
                             <div className="flex justify-between"><span className="text-muted-foreground">Long Term</span><span className="font-medium">{formatCurrency(longTermPortion)}</span></div>
-                            <div className="flex justify-between"><span className="text-muted-foreground">Rate</span><span className="font-medium">{effectiveRate.toFixed(2)}% {loan.fvDecision === "use_fv" && <span className="text-[10px] text-amber-600 font-semibold ml-1">(FV)</span>}</span></div>
+                            <div className="flex justify-between"><span className="text-muted-foreground">Rate</span><span className="font-medium">{effectiveRate.toFixed(2)}% {usesFairValue(loan) && <span className="text-[10px] text-amber-600 font-semibold ml-1">(FV)</span>}</span></div>
                             <div className="flex justify-between"><span className="text-muted-foreground">Term</span><span className="font-medium">{termLabel}</span></div>
                             <div className="flex justify-between"><span className="text-muted-foreground">Payment</span><span className="font-medium">{formatCurrency(regularPayment)}</span></div>
                           </div>
@@ -1371,7 +1380,7 @@ export default function FileDetail() {
                 };
 
                 const getDebtMetrics = (loan: any) => {
-                  const effectiveRate = loan.fvDecision === "use_fv" && loan.fvRate != null ? Number(loan.fvRate) : Number(loan.interestRate);
+                  const effectiveRate = effectiveLoanRate(loan);
                   const result = calculateBookedSchedule(loan);
                   const reportYearEnd = parseISO(loan.fiscalYearEnd ?? file?.fiscalYearEnd ?? format(new Date(), "yyyy-MM-dd"));
                   const currentPeriodEnd = new Date(reportYearEnd);
@@ -1435,7 +1444,7 @@ export default function FileDetail() {
 
                 const fvBadge = (loan: any) => {
                   if (!loan.fvDecision) return null;
-                  if (loan.fvDecision === "use_fv") return <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded whitespace-nowrap">FV Rate</span>;
+                  if (usesFairValue(loan)) return <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded whitespace-nowrap">FV Rate</span>;
                   if (loan.fvDecision === "trivial") return <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded whitespace-nowrap">FV Trivial</span>;
                   return <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-slate-700 bg-slate-200 px-1.5 py-0.5 rounded whitespace-nowrap">FV Immaterial</span>;
                 };
@@ -1474,7 +1483,7 @@ export default function FileDetail() {
                               <td className="px-4 py-2.5 text-right tabular-nums font-medium">{formatCurrency(m.balanceAtYearEnd)}</td>
                               <td className="px-4 py-2.5 text-right tabular-nums">{formatCurrency(m.currentPortion)}</td>
                               <td className="px-4 py-2.5 text-right tabular-nums">{formatCurrency(m.longTermPortion)}</td>
-                              <td className="px-4 py-2.5 text-right tabular-nums">{m.effectiveRate.toFixed(2)}%{loan.fvDecision === "use_fv" && <span className="text-[10px] text-amber-600 font-semibold ml-1">(FV)</span>}</td>
+                              <td className="px-4 py-2.5 text-right tabular-nums">{m.effectiveRate.toFixed(2)}%{usesFairValue(loan) && <span className="text-[10px] text-amber-600 font-semibold ml-1">(FV)</span>}</td>
                               <td className="px-4 py-2.5 text-right tabular-nums">{m.termLabel}</td>
                               <td className="px-4 py-2.5 text-right tabular-nums">{formatCurrency(m.regularPayment)}</td>
                               <td className="px-4 py-2.5">{rowActions(loan)}</td>
@@ -1565,7 +1574,7 @@ export default function FileDetail() {
             <TabsContent value="summary" className="space-y-8">
               {(() => {
                 const regularLoans = loans?.filter((l) => {
-                  const isOperating = !l.isCapitalLease && Number(l.interestRate) === 0 && l.monthlyPayment != null;
+                  const isOperating = isOperatingLeaseLoan(l);
                   return !l.isCapitalLease && !isOperating;
                 }) ?? [];
                 const capitalLeases = loans?.filter((l) => l.isCapitalLease) ?? [];
@@ -1629,7 +1638,7 @@ export default function FileDetail() {
 
                 // Per-loan summary metrics for the "By Loan" view.
                 const getSummaryMetrics = (loan: any) => {
-                  const effectiveRate = loan.fvDecision === "use_fv" && loan.fvRate != null ? Number(loan.fvRate) : Number(loan.interestRate);
+                  const effectiveRate = effectiveLoanRate(loan);
                   const result = calculateBookedSchedule(loan);
                   const reportYearEnd = parseISO(loan.fiscalYearEnd ?? file?.fiscalYearEnd ?? format(new Date(), "yyyy-MM-dd"));
                   const priorYearEnd = new Date(reportYearEnd);
@@ -1701,7 +1710,7 @@ export default function FileDetail() {
                                   <td className="p-2 text-right tabular-nums font-medium">{formatCurrency(m.outstanding)}</td>
                                   <td className="p-2 text-right tabular-nums">{formatCurrency(m.currentPortion)}</td>
                                   <td className="p-2 text-right tabular-nums">{formatCurrency(m.longTermPortion)}</td>
-                                  <td className="p-2 text-right tabular-nums">{m.effectiveRate.toFixed(2)}%{loan.fvDecision === "use_fv" && <span className="text-[10px] text-amber-600 font-semibold ml-1">(FV)</span>}</td>
+                                  <td className="p-2 text-right tabular-nums">{m.effectiveRate.toFixed(2)}%{usesFairValue(loan) && <span className="text-[10px] text-amber-600 font-semibold ml-1">(FV)</span>}</td>
                                   <td className="p-2 text-right tabular-nums">{formatCurrency(m.fyInterest)}</td>
                                   <td className="p-2 text-right tabular-nums">{formatCurrency(m.fyPrincipal)}</td>
                                 </tr>
@@ -2462,7 +2471,7 @@ export default function FileDetail() {
                 if (!editingLoanId) return form.isCapitalLease ? "Add New Capital Lease" : "Add New Loan";
                 const loan = loans?.find((l) => l.id === editingLoanId);
                 if (!loan) return "Edit Loan";
-                const isOperating = !loan.isCapitalLease && Number(loan.interestRate) === 0 && loan.monthlyPayment != null;
+                const isOperating = isOperatingLeaseLoan(loan);
                 if (loan.isCapitalLease) return "Edit Capital Lease";
                 if (isOperating) return "Edit Operating Lease";
                 return "Edit Loan";
@@ -2473,7 +2482,7 @@ export default function FileDetail() {
                 if (!editingLoanId) return form.isCapitalLease ? "Create a new capital lease entry." : "Create a new loan entry.";
                 const loan = loans?.find((l) => l.id === editingLoanId);
                 if (!loan) return "Update loan parameters.";
-                const isOperating = !loan.isCapitalLease && Number(loan.interestRate) === 0 && loan.monthlyPayment != null;
+                const isOperating = isOperatingLeaseLoan(loan);
                 if (loan.isCapitalLease || isOperating) return "Update lease parameters. To re-run the assessment, use the Reevaluate Lease button on the detail page.";
                 return "Update loan parameters.";
               })()}
@@ -2508,6 +2517,8 @@ export default function FileDetail() {
                         startDate: form.startDate,
                         paymentFrequency: form.paymentFrequency,
                         ioMonths: form.ioMonths,
+                        graceMonths: form.graceMonths,
+                        graceInterestTreatment: form.graceInterestTreatment,
                         balloonPayment: form.balloonPayment,
                         transferOfOwnership: form.transferOfOwnership,
                         bargainPurchaseOption: form.bargainPurchaseOption,
@@ -2562,6 +2573,8 @@ export default function FileDetail() {
                         fiscalYearEnd: file?.fiscalYearEnd ?? form.startDate,
                         paymentFrequency: form.paymentFrequency,
                         ioMonths: form.ioMonths,
+                        graceMonths: form.graceMonths,
+                        graceInterestTreatment: form.graceInterestTreatment,
                         balloonPayment: form.balloonPayment,
                         transferOfOwnership: form.transferOfOwnership,
                         bargainPurchaseOption: form.bargainPurchaseOption,
@@ -2647,6 +2660,8 @@ export default function FileDetail() {
               startDate: importedLeaseMeta?.startDate ?? "",
               paymentFrequency: "monthly",
               ioMonths: 0,
+              graceMonths: 0,
+              graceInterestTreatment: "capitalized",
               balloonPayment: 0,
               transferOfOwnership: result.answers.transferOfOwnership,
               bargainPurchaseOption: result.answers.bargainPurchaseOption,

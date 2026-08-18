@@ -5,6 +5,7 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { ImportedLoanFieldsGraceInterestTreatment } from './importedLoanFieldsGraceInterestTreatment';
 import type { ImportedLoanFieldsPaymentFrequency } from './importedLoanFieldsPaymentFrequency';
 
 export interface ImportedLoanFields {
@@ -21,6 +22,8 @@ export interface ImportedLoanFields {
   paymentFrequency?: ImportedLoanFieldsPaymentFrequency;
   paymentAmount?: number | null;
   interestOnlyMonths?: number | null;
+  graceMonths?: number | null;
+  graceInterestTreatment?: ImportedLoanFieldsGraceInterestTreatment;
   balloonPayment?: number | null;
   securityDescription?: string | null;
 }

@@ -5,7 +5,8 @@ generated = []
 id = "I-rkXN3RtqytiCS9xk9ZO"
 uri = "file://exports/clearline-loan-calculator-source.zip"
 type = "unspecified"
-title = "Clearline Loan Calculator — source with signed-in user name"
+title = "Clearline Loan Calculator — source (grace periods)"
+description = "Updated source export including the new payment grace period feature: loans can defer payments for N months with interest either capitalized onto the balance or waived, supported in schedules, fair-value math, workpapers, exports, and the AI PDF import."
 
 [[outputs]]
 id = "oFWsnvWGfwlGNkf_4pRti"
@@ -18,3 +19,16 @@ id = "f_JIiSMmSKhknLmfGDNEn"
 uri = "file://exports/azure-ai-kit.zip"
 type = "unspecified"
 title = "Azure AI kit for the audit vouching app"
+
+[[outputs]]
+id = "oKJbFdF3KmnBzD9KnU_nN"
+uri = "file://exports/Update-Notes-July-2026.docx"
+type = "word_document"
+title = "Update Notes for IT Admin — July 2026"
+
+[[outputs]]
+id = "2iGpTPC1XP0NZ79a_x4Cs"
+uri = "file://exports/settings-code.zip"
+type = "unspecified"
+title = "Settings area code bundle"
+description = "The code behind the Settings page: encrypted storage of Azure credentials and the Blob Storage connection string (server logic, admin unlock, API routes, database table, and the React page), plus a README explaining how to adapt it for another app."

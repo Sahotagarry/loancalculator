@@ -1,5 +1,5 @@
 import { isAfter, addMonths, subDays, parseISO } from "date-fns";
-import { calculateAmortization, calculateFairValueSchedule, type AmortizationRow, type Frequency } from "@workspace/amortization";
+import { calculateAmortization, calculateFairValueSchedule, isValidFvRate, type AmortizationRow, type Frequency } from "@workspace/amortization";
 import { calculateStraightLineLease, buildYearlyStraightLine } from "./straight-line";
 import { getFiscalYear, getFyEndParts } from "./fiscal";
 
@@ -17,6 +17,8 @@ export interface BookedScheduleInput {
   fvDecision?: string | null;
   fvRate?: number | string | null;
   paymentOverride?: number | string | null;
+  graceMonths?: number | null;
+  graceInterestTreatment?: string | null;
 }
 
 /**
@@ -47,9 +49,13 @@ export function calculateBookedSchedule(loan: BookedScheduleInput): {
     Number(loan.balloonPayment ?? 0),
     frequency,
     loan.paymentOverride != null ? Number(loan.paymentOverride) : null,
+    loan.graceMonths ?? 0,
+    loan.graceInterestTreatment === "none" ? "none" : "capitalized",
   );
   const fvRate = loan.fvRate != null ? Number(loan.fvRate) : 0;
-  if (loan.fvDecision === "use_fv" && fvRate > 0) {
+  // A malformed persisted rate (0, negative, NaN, Infinity) must never drive
+  // the effective-interest math — fall back to the contractual schedule.
+  if (loan.fvDecision === "use_fv" && isValidFvRate(fvRate)) {
     const fv = calculateFairValueSchedule(contractual.schedule, fvRate, frequency);
     return {
       monthlyPayment: fv.monthlyPayment,
@@ -68,6 +74,31 @@ export function calculateBookedSchedule(loan: BookedScheduleInput): {
     fairValue: null,
     usedFairValue: false,
   };
+}
+
+/**
+ * Whether fair-value treatment actually applies to a loan: the decision is
+ * "use_fv" AND a valid (finite, positive) rate is saved. A malformed rate
+ * means the contractual basis stands — displays must not label it FV.
+ */
+export function usesFairValue(loan: {
+  fvDecision?: string | null;
+  fvRate?: number | string | null;
+}): boolean {
+  return loan.fvDecision === "use_fv" && isValidFvRate(Number(loan.fvRate));
+}
+
+/**
+ * The effective rate a loan is booked at: the FV rate when fair-value
+ * treatment validly applies, otherwise the contractual rate. Single source
+ * of truth for every card, table, workpaper, and export.
+ */
+export function effectiveLoanRate(loan: {
+  fvDecision?: string | null;
+  fvRate?: number | string | null;
+  interestRate: number | string;
+}): number {
+  return usesFairValue(loan) ? Number(loan.fvRate) : Number(loan.interestRate);
 }
 
 export interface YearlyBreakdown {
@@ -132,6 +163,27 @@ export interface OperatingLeaseSummary {
   inducementLiabilityNonCurrent: number;
 }
 
+/**
+ * Operating-lease classification. An item is an operating lease only when it
+ * is not a capital lease, has a 0% rate, a monthly payment, AND a lease term
+ * in months. The termMonths requirement distinguishes genuine operating
+ * leases (created via the lease wizard, which always sets termMonths) from
+ * 0% interest loans (which use termYears/amortizationYears instead).
+ */
+export function isOperatingLeaseLoan(loan: {
+  isCapitalLease: boolean;
+  interestRate: string | number;
+  monthlyPayment?: string | number | null;
+  termMonths?: number | null;
+}): boolean {
+  return (
+    !loan.isCapitalLease &&
+    Number(loan.interestRate) === 0 &&
+    loan.monthlyPayment != null &&
+    loan.termMonths != null
+  );
+}
+
 export function buildFiscalYearLabel(
   fiscalYear: number,
   fyEndMonth: number,
@@ -158,7 +210,7 @@ export function computeMaturityDate(
 export function getFirstRegularPayment(schedule: AmortizationRow[]): number {
   if (schedule.length === 0) return 0;
   // Find first row that isn't interest-only
-  const firstRegular = schedule.find((r) => !r.isInterestOnly);
+  const firstRegular = schedule.find((r) => !r.isInterestOnly && !r.isGrace);
   if (firstRegular) return firstRegular.payment;
   // If all interest-only, use the first payment amount
   return schedule[0].payment;
@@ -503,6 +555,8 @@ export function buildLoanSummary(
     isCapitalLease?: boolean | null;
     monthlyPayment?: number | string | null;
     paymentOverride?: number | string | null;
+    graceMonths?: number | null;
+    graceInterestTreatment?: string | null;
     termMonths?: number | null;
     freeRentMonths?: number | null;
     rentEscalationRate?: number | string | null;
@@ -531,10 +585,14 @@ export function buildLoanSummary(
   // Financed amount actually amortized: face principal net of any down payment.
   const principal = Number(loan.principal) - Number(loan.downPayment ?? 0);
   const rawRate = Number(loan.interestRate);
-  const interestRate = (loan.fvDecision === "use_fv" && loan.fvRate != null) ? Number(loan.fvRate) : rawRate;
+  const interestRate = effectiveLoanRate(loan);
   const isCapital = !!loan.isCapitalLease;
-  const isOperating =
-    !isCapital && rawRate === 0 && loan.monthlyPayment != null && loan.termMonths != null;
+  const isOperating = isOperatingLeaseLoan({
+    isCapitalLease: isCapital,
+    interestRate: loan.interestRate,
+    monthlyPayment: loan.monthlyPayment,
+    termMonths: loan.termMonths,
+  });
 
   if (isOperating) {
     const monthlyPayment = Number(loan.monthlyPayment ?? 0);
@@ -912,6 +970,8 @@ export function buildFileSummary(
     isCapitalLease?: boolean | null;
     monthlyPayment?: number | string | null;
     paymentOverride?: number | string | null;
+    graceMonths?: number | null;
+    graceInterestTreatment?: string | null;
     termMonths?: number | null;
     freeRentMonths?: number | null;
     rentEscalationRate?: number | string | null;

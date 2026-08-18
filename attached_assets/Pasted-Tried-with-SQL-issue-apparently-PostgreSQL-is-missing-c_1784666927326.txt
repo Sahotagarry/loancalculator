@@ -1,0 +1,176 @@
+Tried with SQL issue apparently PostgreSQL is missing clients table. Thats why we are not able to create clients . I have a solution but if possible could you run this in replit first and if its says its good to go then ill push it. 
+ 
+1. Add a new GitHub secret
+In GitHub:
+ 
+ 
+ 
+ 
+Plain Text
+ 
+Settings → Secrets and variables → Actions → New repository secret
+
+Show more lines
+ 
+Create:
+ 
+ 
+ 
+ 
+Plain Text
+ 
+DATABASE_URL
+
+Show more lines
+ 
+Value:
+ 
+ 
+ 
+ 
+Plain Text
+ 
+postgresql://cladmin:W3k2u9%21%401234@clin-loan.postgres.database.azure.com:5432/loancalc?sslmode=require
+
+Show more lines
+ 
+Important: make sure the host is exactly:
+ 
+ 
+ 
+ 
+Plain Text
+ 
+clin-loan.postgres.database.azure.com
+
+``
+
+Show more lines
+ 
+2. Create a one-time database push workflow
+In GitHub, go to the repo root and choose:
+ 
+ 
+ 
+ 
+Plain Text
+ 
+Add file → Create new file
+
+Show more lines
+ 
+File name:
+ 
+ 
+ 
+ 
+Plain Text
+ 
+.github/workflows/db-push.yml
+
+Show more lines
+ 
+Paste this:
+ 
+ 
+ 
+ 
+YAML
+ 
+name: Create database tables
+
+
+on:
+
+  workflow_dispatch:
+
+
+jobs:
+
+  db-push:
+
+    runs-on: ubuntu-latest
+
+
+    steps:
+
+      - name: Checkout code
+
+        uses: actions/checkout@v4
+
+
+      - name: Setup pnpm
+
+        uses: pnpm/action-setup@v4
+
+        with:
+
+          version: 10
+
+
+      - name: Setup Node.js
+
+        uses: actions/setup-node@v4
+
+        with:
+
+          node-version: 22
+
+          cache: pnpm
+
+
+      - name: Install dependencies
+
+        run: pnpm install --frozen-lockfile
+
+
+      - name: Push database schema
+
+        env:
+
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+        run: yes | pnpm --filter @workspace/db run push
+
+Show more lines
+ 
+Then commit directly to main.
+3. Run the workflow manually
+Go to:
+ 
+ 
+ 
+ 
+Plain Text
+ 
+Actions → Create database tables → Run workflow
+
+Show more lines
+ 
+Run it on the main branch.
+4. What success should look like
+If it succeeds, it should create tables like:
+ 
+ 
+ 
+ 
+Plain Text
+ 
+clients
+
+files
+
+loans
+
+documents
+
+settings
+
+users
+
+Show more lines
+ 
+Then go back to the app and try Create Client again. The relation "clients" does not exist error should be gone.
+Why this is the right approach
+Your Azure app is already live and working. The client creation failure is because PostgreSQL is missing the clients table, not because of Azure deployment anymore. Running the schema push from GitHub Actions avoids the Windows sh / @esbuild/win32-x64 problem you keep hitting locally.
+One caution: since the database password has appeared in the chat/screenshots, I strongly recommend rotating the PostgreSQL admin password after the setup is complete, then updating DATABASE_URL in both Azure App Service and GitHub Secrets.

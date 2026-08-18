@@ -22,6 +22,8 @@ const loanFieldsSchema = z.object({
   paymentFrequency: z.enum(["monthly", "semi-monthly", "bi-weekly", "weekly"]).nullable().catch(null),
   paymentAmount: z.number().nullable().catch(null),
   interestOnlyMonths: z.number().nullable().catch(null),
+  graceMonths: z.number().nullable().catch(null),
+  graceInterestTreatment: z.enum(["capitalized", "none"]).nullable().catch(null),
   balloonPayment: z.number().nullable().catch(null),
   securityDescription: z.string().nullable().catch(null),
 });
@@ -144,6 +146,11 @@ Extraction rules — CRITICAL:
 - All money amounts are plain numbers without currency symbols or thousands separators.
 - amortizationYears / termYears may be fractional (e.g. 2.5). If stated in months, divide by 12.
 - For a loan, "termYears" is the length of the committed term; "amortizationYears" is the amortization period (often longer — e.g. a 5-year term amortized over 84 months means termYears 5, amortizationYears 7). If only one is stated, set the other to null.
+- Payment deferral / grace period rules — distinguish THREE different arrangements carefully:
+  - If the borrower pays INTEREST ONLY (no principal) for an initial period, set interestOnlyMonths to that number of months. Look for "interest only for the first N months/years".
+  - If NO payments at all are due for an initial period (a payment holiday / deferral / grace period, e.g. "no payments for the first 12 months", "payments commence 12 months after the advance"), set graceMonths to that number of months and interestOnlyMonths to null (unless a separate interest-only period follows).
+  - When graceMonths is set, also set graceInterestTreatment: "capitalized" if interest accrues during the deferral and is added to the principal balance (this is the norm — assume it when the document is silent but a rate applies), or "none" if the document says the deferral is interest-free (e.g. 0% during deferral, forgivable/government loans).
+  - When a grace period exists, termYears must INCLUDE it and amortizationYears must EXCLUDE it (e.g. 12-month deferral then 60 monthly payments: termYears 6, amortizationYears 5). Note the arrangement in "reasoning".
 - securityDescription: summarize ALL security and guarantee provisions in 1-3 sentences — general security agreements (GSA), specific charges over assets, mortgages, personal or corporate guarantees, postponements, assignments. If the document mentions any collateral or guarantee at all, this must not be null.
 - For a lease, termMonths is the lease term in months.
 - Office / commercial property lease rules (assetType "office_commercial"):
@@ -169,7 +176,7 @@ Respond with JSON only, matching exactly this shape:
   "classification": "loan" | "lease" | "other",
   "confidence": number between 0 and 1,
   "reasoning": string,
-  "loan": { name, lender, principal, downPayment, interestRate, primeSpread, statedPrimeRate, amortizationYears, termYears, startDate, paymentFrequency ("monthly"|"semi-monthly"|"bi-weekly"|"weekly"), paymentAmount, interestOnlyMonths, balloonPayment, securityDescription } or null if not a loan,
+  "loan": { name, lender, principal, downPayment, interestRate, primeSpread, statedPrimeRate, amortizationYears, termYears, startDate, paymentFrequency ("monthly"|"semi-monthly"|"bi-weekly"|"weekly"), paymentAmount, interestOnlyMonths, graceMonths, graceInterestTreatment ("capitalized"|"none"|null), balloonPayment, securityDescription } or null if not a loan,
   "lease": { name, lessor, assetDescription, assetType ("vehicle"|"equipment"|"office_commercial"|"other"), startDate, termMonths, monthlyPayment, downPayment, interestRate, fairValue, economicLifeYears, buyoutAmount, transferOfOwnership, bargainPurchaseOption, specializedAsset, paymentAtBeginning, rentableSquareFeet, rentSteps ([{fromYear, toYear, monthlyRent, annualRatePerSquareFoot}] or null), tenantImprovementAllowance, freeRentMonths, camAnnualPerSquareFoot, camMonthly, percentageRentNote, fieldNotes ({fieldName: note} or null), estimates ({economicLifeYears, fairValue, interestRate, reasoning} or null) } or null if not a lease.
   "name" should be a short human label like "Truck Loan — TD Bank" based on the document.
 }`;

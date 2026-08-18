@@ -90,6 +90,14 @@ export interface UpdateFile {
   dismissedFindings?: string[] | null;
 }
 
+export type LoanGraceInterestTreatment = typeof LoanGraceInterestTreatment[keyof typeof LoanGraceInterestTreatment];
+
+
+export const LoanGraceInterestTreatment = {
+  capitalized: 'capitalized',
+  none: 'none',
+} as const;
+
 export type LoanFvDecision = typeof LoanFvDecision[keyof typeof LoanFvDecision];
 
 
@@ -121,6 +129,8 @@ export interface Loan {
   startDate: string;
   fiscalYearEnd: string;
   paymentFrequency: string;
+  graceMonths?: number;
+  graceInterestTreatment?: LoanGraceInterestTreatment;
   ioMonths: number;
   specificIoMonths: string;
   balloonPayment: string;
@@ -166,6 +176,14 @@ export interface Loan {
   updatedAt: string;
 }
 
+export type CreateLoanGraceInterestTreatment = typeof CreateLoanGraceInterestTreatment[keyof typeof CreateLoanGraceInterestTreatment];
+
+
+export const CreateLoanGraceInterestTreatment = {
+  capitalized: 'capitalized',
+  none: 'none',
+} as const;
+
 export type CreateLoanFvDecision = typeof CreateLoanFvDecision[keyof typeof CreateLoanFvDecision];
 
 
@@ -188,6 +206,8 @@ export interface CreateLoan {
   startDate: string;
   fiscalYearEnd: string;
   paymentFrequency?: string;
+  graceMonths?: number;
+  graceInterestTreatment?: CreateLoanGraceInterestTreatment;
   ioMonths?: number;
   specificIoMonths?: string;
   balloonPayment?: number;
@@ -230,6 +250,14 @@ export interface CreateLoan {
   sourceDocumentName?: string | null;
 }
 
+export type UpdateLoanGraceInterestTreatment = typeof UpdateLoanGraceInterestTreatment[keyof typeof UpdateLoanGraceInterestTreatment];
+
+
+export const UpdateLoanGraceInterestTreatment = {
+  capitalized: 'capitalized',
+  none: 'none',
+} as const;
+
 export type UpdateLoanFvDecision = typeof UpdateLoanFvDecision[keyof typeof UpdateLoanFvDecision];
 
 
@@ -251,6 +279,8 @@ export interface UpdateLoan {
   termYears?: number;
   startDate?: string;
   paymentFrequency?: string;
+  graceMonths?: number;
+  graceInterestTreatment?: UpdateLoanGraceInterestTreatment;
   ioMonths?: number;
   specificIoMonths?: string;
   balloonPayment?: number;
@@ -350,6 +380,14 @@ export const ImportedLoanFieldsPaymentFrequency = {
   weekly: 'weekly',
 } as const;
 
+export type ImportedLoanFieldsGraceInterestTreatment = typeof ImportedLoanFieldsGraceInterestTreatment[keyof typeof ImportedLoanFieldsGraceInterestTreatment] | null;
+
+
+export const ImportedLoanFieldsGraceInterestTreatment = {
+  capitalized: 'capitalized',
+  none: 'none',
+} as const;
+
 export interface ImportedLoanFields {
   name?: string | null;
   lender?: string | null;
@@ -364,6 +402,8 @@ export interface ImportedLoanFields {
   paymentFrequency?: ImportedLoanFieldsPaymentFrequency;
   paymentAmount?: number | null;
   interestOnlyMonths?: number | null;
+  graceMonths?: number | null;
+  graceInterestTreatment?: ImportedLoanFieldsGraceInterestTreatment;
   balloonPayment?: number | null;
   securityDescription?: string | null;
 }

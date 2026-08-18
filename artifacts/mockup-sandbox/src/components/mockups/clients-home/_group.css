@@ -1,0 +1,21 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap');
+
+.clients-home-current {
+  --background: 220 33% 98%;
+  --foreground: 222 47% 11%;
+  --card: 0 0% 100%;
+  --card-foreground: 222 47% 11%;
+  --primary: 24 95% 45%;
+  --primary-foreground: 0 0% 100%;
+  --muted: 30 10% 96%;
+  --muted-foreground: 24 10% 45%;
+  --border: 30 15% 90%;
+  --input: 30 15% 90%;
+  --ring: 24 95% 45%;
+  --radius: 0.75rem;
+  font-family: 'Inter', sans-serif;
+}
+
+.clients-home-current .font-display {
+  font-family: 'Space Grotesk', sans-serif;
+}

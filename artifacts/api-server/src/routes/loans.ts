@@ -20,6 +20,7 @@ import {
   fetchPrimeRate,
   type FvEvalLoanInput,
 } from "../lib/fv-decisions";
+import { validateFvRate } from "../lib/loan-validation";
 import { loadAzureSettings, requireSettings, UserFacingError } from "../lib/azure-settings";
 import { retrieveDocument, deleteDocumentRefSafe } from "../lib/document-store";
 
@@ -132,6 +133,12 @@ router.post("/files/:id/loans", async (req, res): Promise<void> => {
     return;
   }
 
+  const fvRateError = validateFvRate(data.fvRate);
+  if (fvRateError) {
+    res.status(400).json({ error: fvRateError });
+    return;
+  }
+
   let fvDecision = data.fvDecision ?? null;
   let fvRate = data.fvRate ?? null;
 
@@ -153,6 +160,8 @@ router.post("/files/:id/loans", async (req, res): Promise<void> => {
           startDate: data.startDate.toISOString().split("T")[0],
           ioMonths: data.ioMonths ?? 0,
           specificIoMonths: data.specificIoMonths ?? "",
+          graceMonths: data.graceMonths ?? 0,
+          graceInterestTreatment: data.graceInterestTreatment ?? "capitalized",
           balloonPayment: (data.balloonPayment ?? 0).toString(),
           paymentFrequency: data.paymentFrequency ?? "monthly",
           fvRate: fvRate != null ? fvRate.toString() : null,
@@ -186,6 +195,8 @@ router.post("/files/:id/loans", async (req, res): Promise<void> => {
       paymentFrequency: data.paymentFrequency ?? "monthly",
       ioMonths: data.ioMonths ?? 0,
       specificIoMonths: data.specificIoMonths ?? "",
+      graceMonths: data.graceMonths ?? 0,
+      graceInterestTreatment: data.graceInterestTreatment ?? "capitalized",
       balloonPayment: (data.balloonPayment ?? 0).toString(),
       transferOfOwnership: data.transferOfOwnership ?? false,
       bargainPurchaseOption: data.bargainPurchaseOption ?? false,
@@ -304,6 +315,8 @@ router.patch("/loans/:id", async (req, res): Promise<void> => {
   if (data.paymentFrequency != null) updates.paymentFrequency = data.paymentFrequency;
   if (data.ioMonths != null) updates.ioMonths = data.ioMonths;
   if (data.specificIoMonths != null) updates.specificIoMonths = data.specificIoMonths;
+  if (data.graceMonths != null) updates.graceMonths = data.graceMonths;
+  if (data.graceInterestTreatment != null) updates.graceInterestTreatment = data.graceInterestTreatment;
   if (data.balloonPayment != null) updates.balloonPayment = data.balloonPayment.toString();
   if (data.transferOfOwnership != null) updates.transferOfOwnership = data.transferOfOwnership;
   if (data.bargainPurchaseOption != null) updates.bargainPurchaseOption = data.bargainPurchaseOption;
@@ -364,7 +377,14 @@ router.patch("/loans/:id", async (req, res): Promise<void> => {
   if (data.otherInducements != null) updates.otherInducements = data.otherInducements.toString();
   if (data.inducementReceivedInCash != null) updates.inducementReceivedInCash = data.inducementReceivedInCash;
   if (data.covenantViolation != null) updates.covenantViolation = data.covenantViolation;
-  if (data.fvRate != null) updates.fvRate = data.fvRate.toString();
+  if (data.fvRate != null) {
+    const fvRateError = validateFvRate(data.fvRate);
+    if (fvRateError) {
+      res.status(400).json({ error: fvRateError });
+      return;
+    }
+    updates.fvRate = data.fvRate.toString();
+  }
   if (data.fvDecision != null) updates.fvDecision = data.fvDecision;
   if (data.fvDecisionNote != null) updates.fvDecisionNote = data.fvDecisionNote;
 
@@ -378,6 +398,8 @@ router.patch("/loans/:id", async (req, res): Promise<void> => {
     data.startDate != null ||
     data.ioMonths != null ||
     data.specificIoMonths != null ||
+    data.graceMonths != null ||
+    data.graceInterestTreatment != null ||
     data.balloonPayment != null ||
     data.paymentFrequency != null ||
     data.fvRate != null ||
@@ -406,6 +428,9 @@ router.patch("/loans/:id", async (req, res): Promise<void> => {
           startDate: (updates.startDate as string) ?? existing.startDate,
           ioMonths: (updates.ioMonths as number) ?? existing.ioMonths,
           specificIoMonths: (updates.specificIoMonths as string) ?? existing.specificIoMonths,
+          graceMonths: (updates.graceMonths as number) ?? existing.graceMonths,
+          graceInterestTreatment:
+            (updates.graceInterestTreatment as string) ?? existing.graceInterestTreatment,
           balloonPayment: (updates.balloonPayment as string) ?? existing.balloonPayment,
           paymentFrequency: (updates.paymentFrequency as string) ?? existing.paymentFrequency,
           fvRate: (updates.fvRate as string) ?? existing.fvRate,
@@ -544,6 +569,8 @@ router.post("/loans/:id/rollforward", async (req, res): Promise<void> => {
     paymentFrequency: original.paymentFrequency,
     ioMonths: original.ioMonths,
     specificIoMonths: original.specificIoMonths,
+    graceMonths: original.graceMonths,
+    graceInterestTreatment: original.graceInterestTreatment,
     balloonPayment: original.balloonPayment,
     transferOfOwnership: original.transferOfOwnership,
     bargainPurchaseOption: original.bargainPurchaseOption,

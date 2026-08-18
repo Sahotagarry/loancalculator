@@ -4,6 +4,7 @@ import {
   calculateFairValueSchedule,
   computeFvAdjustment,
   suggestFvDecision,
+  isValidFvRate,
 } from "./index";
 
 const START = new Date(2024, 0, 1);
@@ -114,6 +115,67 @@ describe("calculateFairValueSchedule", () => {
     // The FV schedule amortizes back to the same residual balance.
     const contractualFinal = contractual.schedule[contractual.schedule.length - 1].balance;
     expect(fv.schedule[fv.schedule.length - 1].balance).toBeCloseTo(contractualFinal, 2);
+  });
+
+  it("recomputes with an overridden rate: a higher rate deepens the day-one discount", () => {
+    const contractual = calculateAmortization(100000, 2, 5, 5, START);
+    const suggested = calculateFairValueSchedule(contractual.schedule, 7);
+    const overridden = calculateFairValueSchedule(contractual.schedule, 10);
+
+    // Overriding the rate must actually change the output, not reuse the suggestion.
+    expect(overridden.fairValue).not.toBeCloseTo(suggested.fairValue, 2);
+    // A larger discount rate means a lower fair value => bigger day-one discount.
+    expect(overridden.fairValue).toBeLessThan(suggested.fairValue);
+    expect(100000 - overridden.fairValue).toBeGreaterThan(100000 - suggested.fairValue);
+    // Opening interest accrues at the overridden rate on the overridden fair value.
+    expect(overridden.schedule[0].interest).toBeCloseTo((overridden.fairValue * 10) / 100 / 12, 4);
+  });
+
+  it("accretes an overridden-rate schedule back to the contractual residual balance", () => {
+    // Term shorter than amortization => residual (implicit balloon) at term end.
+    const contractual = calculateAmortization(100000, 2, 25, 5, START);
+    const residual = contractual.schedule[contractual.schedule.length - 1].balance;
+    expect(residual).toBeGreaterThan(0);
+
+    for (const rate of [5, 7, 10]) {
+      const fv = calculateFairValueSchedule(contractual.schedule, rate);
+      // Payments are untouched; the schedule still lands on the same residual.
+      expect(fv.schedule[fv.schedule.length - 1].balance).toBeCloseTo(residual, 2);
+      for (let i = 0; i < fv.schedule.length; i++) {
+        expect(fv.schedule[i].payment).toBeCloseTo(contractual.schedule[i].payment, 6);
+      }
+    }
+  });
+
+  it("cumulative extra interest over the term unwinds exactly the day-one discount", () => {
+    const contractual = calculateAmortization(100000, 2, 5, 5, START);
+    const fv = calculateFairValueSchedule(contractual.schedule, 9);
+    const day1Discount = 100000 - fv.fairValue;
+
+    // The adjusting-entry logic relies on the discount accreting through extra
+    // interest: total FV interest − total contractual interest = day-one discount.
+    const extraInterest = fv.totalInterest - contractual.totalInterest;
+    expect(extraInterest).toBeCloseTo(day1Discount, 1);
+  });
+
+  it("refuses non-positive or non-finite rates instead of silently corrupting the schedule", () => {
+    const contractual = calculateAmortization(100000, 2, 5, 5, START);
+    for (const bad of [0, -1, NaN, Infinity, -Infinity]) {
+      expect(() => calculateFairValueSchedule(contractual.schedule, bad)).toThrow(/finite fair-value rate/);
+    }
+  });
+});
+
+describe("isValidFvRate", () => {
+  it("accepts only finite positive numbers", () => {
+    expect(isValidFvRate(7.2)).toBe(true);
+    expect(isValidFvRate(0.01)).toBe(true);
+    expect(isValidFvRate(0)).toBe(false);
+    expect(isValidFvRate(-3)).toBe(false);
+    expect(isValidFvRate(NaN)).toBe(false);
+    expect(isValidFvRate(Infinity)).toBe(false);
+    expect(isValidFvRate(null)).toBe(false);
+    expect(isValidFvRate(undefined)).toBe(false);
   });
 });
 

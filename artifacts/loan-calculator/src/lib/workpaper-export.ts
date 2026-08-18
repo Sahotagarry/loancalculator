@@ -7,6 +7,7 @@ import { calculateAmortization, type AmortizationRow, type Frequency } from "@wo
 import {
   buildLoanSummary,
   calculateBookedSchedule,
+  usesFairValue,
   type LoanSummary,
   type CapitalLeaseSummary,
   type OperatingLeaseSummary,
@@ -140,6 +141,12 @@ function buildDebtWorkpaper(
   if ((loan.ioMonths ?? 0) > 0) {
     termsRows.push(["Interest-only period", `${loan.ioMonths} months`]);
   }
+  if ((loan.graceMonths ?? 0) > 0) {
+    termsRows.push([
+      "Payment grace period",
+      `${loan.graceMonths} months (${loan.graceInterestTreatment === "none" ? "interest-free" : "interest capitalized"})`,
+    ]);
+  }
   sections.push({ title: "Terms", head: ["Item", "Detail"], rows: termsRows });
 
   /* 2 — Fair value assessment (ASPE 3856) — loans only */
@@ -147,7 +154,7 @@ function buildDebtWorkpaper(
     const fvRows: (string | number)[][] = [
       ["Assessment", fvDecisionLabel(loan.fvDecision)],
     ];
-    if (loan.fvDecision === "use_fv" && loan.fvRate != null) {
+    if (usesFairValue(loan)) {
       fvRows.push(["Market (effective) rate", pct(Number(loan.fvRate))]);
       if (booked.fairValue != null) {
         fvRows.push(["Fair value at inception", money(booked.fairValue)]);
@@ -273,6 +280,8 @@ function buildDebtWorkpaper(
       Number(loan.balloonPayment ?? 0),
       frequency,
       loan.paymentOverride != null ? Number(loan.paymentOverride) : null,
+      loan.graceMonths ?? 0,
+      loan.graceInterestTreatment === "none" ? "none" : "capitalized",
     );
     const interestByFY = (rows: AmortizationRow[]) => {
       const m = new Map<number, number>();

@@ -80,7 +80,9 @@ import { exportScheduleXlsx, exportSchedulePdf, exportAnnualXlsx, exportAnnualPd
 import { buildLoanWorkpaper, exportLoanWorkpaperPdf, exportLoanWorkpaperXlsx } from "@/lib/workpaper-export";
 import { runLoanDiagnostics } from "@/lib/diagnostics";
 import { FindingsList } from "@/components/review-findings";
-import { buildAssetDepreciationSchedule } from "@/lib/aspe-utils";
+import { buildAssetDepreciationSchedule, isOperatingLeaseLoan } from "@/lib/aspe-utils";
+import { needsFvAssessment, needsUrgentFvAssessment } from "@/lib/fv-assessment";
+import { resolveSuggestedFvRate, resolveEffectiveRate, parseFvRateInput, canSaveFvRate, resolveFvRateForDecision, isValidFvRate } from "@/lib/fv-rate";
 import { getFiscalYear, getFyEndParts } from "@/lib/fiscal";
 
 export default function LoanDetail() {
@@ -95,6 +97,9 @@ export default function LoanDetail() {
   const [editOpen, setEditOpen] = useState(false);
   const [reevaluateOpen, setReevaluateOpen] = useState(false);
   const [adjEntryYear, setAdjEntryYear] = useState<number | null>(null);
+  // Draft text for the editable fair-value rate input in the ASPE 3856 panel.
+  // null means "not edited" — the input shows the current suggested/saved rate.
+  const [fvRateDraft, setFvRateDraft] = useState<string | null>(null);
 
   const [editForm, setEditForm] = useState<LoanFormState>({
     name: "",
@@ -109,6 +114,8 @@ export default function LoanDetail() {
     startDate: "",
     paymentFrequency: "monthly",
     ioMonths: 0,
+    graceMonths: 0,
+    graceInterestTreatment: "capitalized",
     balloonPayment: 0,
     transferOfOwnership: false,
     bargainPurchaseOption: false,
@@ -151,7 +158,7 @@ export default function LoanDetail() {
   const editMode: LoanFormMode = (() => {
     if (!loan) return "loan";
     if (loan.isCapitalLease) return "capital_lease";
-    if (Number(loan.interestRate) === 0 && loan.monthlyPayment != null) return "operating_lease";
+    if (isOperatingLeaseLoan(loan)) return "operating_lease";
     return "loan";
   })();
   const { data: file } = useGetFile(fileId);
@@ -173,19 +180,17 @@ export default function LoanDetail() {
   const rate = Number(loan?.interestRate ?? 0);
 
   /* ── ASPE 3856 Fair Value ───────────────────────────────────── */
-  const isLowRate = rate > 0 && rate < 3;
-  const isVeryLowRate = rate > 0 && rate < 1;
+  const isLowRate = loan ? needsFvAssessment(loan) : false;
+  const isVeryLowRate = loan ? needsUrgentFvAssessment(loan) : false;
 
   const { data: primeData } = useGetPrimeRate(
     isLowRate && loan ? { date: parseISO(loan.startDate).toISOString().split("T")[0] } : undefined,
     { query: { enabled: isLowRate && !!loan, queryKey: ["primeRate", loan?.startDate] } as any }
   );
 
-  const suggestedFvRate = loan?.fvRate != null
-    ? Number(loan.fvRate)
-    : (primeData?.suggestedRate ?? 0);
+  const suggestedFvRate = resolveSuggestedFvRate(loan?.fvRate, primeData?.suggestedRate);
 
-  const effectiveRate = (loan?.fvDecision === "use_fv" && suggestedFvRate > 0) ? suggestedFvRate : rate;
+  const effectiveRate = resolveEffectiveRate(loan?.fvDecision, suggestedFvRate, rate);
 
   const contractualResult = useMemo(() => {
     if (!loan) return null;
@@ -200,11 +205,13 @@ export default function LoanDetail() {
       Number(loan.balloonPayment),
       loan.paymentFrequency as "monthly" | "semi-monthly" | "bi-weekly" | "weekly",
       loan.paymentOverride != null ? Number(loan.paymentOverride) : null,
+      loan.graceMonths ?? 0,
+      (loan.graceInterestTreatment as "capitalized" | "none") ?? "capitalized",
     );
   }, [loan]);
 
   const fvResult = useMemo(() => {
-    if (!loan || !contractualResult || !suggestedFvRate || suggestedFvRate <= 0) return null;
+    if (!loan || !contractualResult || !isValidFvRate(suggestedFvRate)) return null;
     // Effective-interest method: the contractual payments are fixed; only the
     // principal/interest split changes at the fair-value rate.
     return calculateFairValueSchedule(
@@ -619,6 +626,8 @@ export default function LoanDetail() {
       startDate: loan.startDate.split("T")[0],
       paymentFrequency: loan.paymentFrequency as any,
       ioMonths: loan.ioMonths,
+      graceMonths: loan.graceMonths ?? 0,
+      graceInterestTreatment: (loan.graceInterestTreatment as "capitalized" | "none") ?? "capitalized",
       balloonPayment: Number(loan.balloonPayment),
       transferOfOwnership: loan.transferOfOwnership,
       bargainPurchaseOption: loan.bargainPurchaseOption,
@@ -698,7 +707,7 @@ export default function LoanDetail() {
         meta={
           <span className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hidden md:inline-flex">
             {(() => {
-              const isOperatingLease = !loan.isCapitalLease && Number(loan.interestRate) === 0 && loan.monthlyPayment != null;
+              const isOperatingLease = isOperatingLeaseLoan(loan);
               if (loan.isCapitalLease) return `Capital Lease — ${formatCurrency(Number(loan.principal))} at ${Number(loan.interestRate).toFixed(2)}%`;
               if (isOperatingLease) return `Operating Lease — ${formatCurrency(Number(loan.monthlyPayment ?? 0))}/mo`;
               return `Loan — ${formatCurrency(Number(loan.principal))} at ${Number(loan.interestRate).toFixed(2)}%`;
@@ -787,7 +796,7 @@ export default function LoanDetail() {
             <TooltipContent>Edit loan details</TooltipContent>
           </Tooltip>
           {(() => {
-            const isLease = loan.isCapitalLease || (!loan.isCapitalLease && Number(loan.interestRate) === 0 && loan.monthlyPayment != null);
+            const isLease = loan.isCapitalLease || (isOperatingLeaseLoan(loan));
             if (!isLease) return null;
             return (
               <Tooltip>
@@ -915,16 +924,71 @@ export default function LoanDetail() {
                 <p className={`text-xs ${isVeryLowRate ? "text-red-800" : "text-amber-800"}`}>
                   The contractual rate of {rate.toFixed(2)}% is below the market threshold. ASPE 3856 requires that loans/leases with below-market rates be recorded at fair value using an imputed rate.
                 </p>
-                {suggestedFvRate > 0 && (
-                  <div className="flex flex-wrap items-center gap-3 pt-1">
-                    <span className="text-xs font-medium">Suggested FV rate: {suggestedFvRate.toFixed(2)}% (prime + 2%)</span>
-                    {fvDiff != null && (
-                      <span className="text-xs font-medium">
-                        FV adjustment: ${Math.abs(fvDiff).toLocaleString()} ({fvDiff >= 0 ? "higher" : "lower"})
-                      </span>
-                    )}
+                <div className="flex flex-wrap items-end gap-3 pt-1">
+                  <div className="space-y-1">
+                    <Label htmlFor="fv-rate-input" className="text-xs font-medium">
+                      Fair value rate (%)
+                    </Label>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        id="fv-rate-input"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        className="h-8 w-28 bg-white text-xs"
+                        value={fvRateDraft ?? (suggestedFvRate > 0 ? suggestedFvRate.toFixed(2) : "")}
+                        onChange={(e) => setFvRateDraft(e.target.value)}
+                      />
+                      <Button
+                        size="sm"
+                        className="h-8 text-xs"
+                        disabled={!canSaveFvRate(fvRateDraft, suggestedFvRate, updateLoan.isPending)}
+                        onClick={() => {
+                          const parsed = parseFvRateInput(fvRateDraft);
+                          if (parsed == null) return;
+                          updateLoan.mutate(
+                            { id: loanId, data: { fvRate: parsed } },
+                            { onSuccess: () => setFvRateDraft(null) },
+                          );
+                        }}
+                      >
+                        Save rate
+                      </Button>
+                      {loan?.fvRate != null &&
+                        primeData?.suggestedRate != null &&
+                        Number(loan.fvRate) !== primeData.suggestedRate && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 text-xs"
+                            disabled={updateLoan.isPending}
+                            onClick={() => {
+                              updateLoan.mutate(
+                                { id: loanId, data: { fvRate: primeData.suggestedRate } },
+                                { onSuccess: () => setFvRateDraft(null) },
+                              );
+                            }}
+                          >
+                            Reset to suggested
+                          </Button>
+                        )}
+                    </div>
+                    <p className="text-[11px] text-muted-foreground">
+                      {loan?.fvRate != null
+                        ? primeData?.suggestedRate != null && Number(loan.fvRate) !== primeData.suggestedRate
+                          ? `Overridden — suggested rate is ${primeData.suggestedRate.toFixed(2)}% (prime + 2%).`
+                          : "Saved on this loan (prime + 2% suggestion)."
+                        : primeData?.suggestedRate != null
+                          ? "Suggested: Bank of Canada prime at the start date + 2%. Edit to use your own market rate."
+                          : "Enter the market rate to use for the fair value calculation."}
+                    </p>
                   </div>
-                )}
+                  {fvDiff != null && (
+                    <span className="text-xs font-medium pb-6">
+                      FV adjustment: ${Math.abs(fvDiff).toLocaleString()} ({fvDiff >= 0 ? "higher" : "lower"})
+                    </span>
+                  )}
+                </div>
                 {loan?.fvRate == null && primeData?.source === "Fallback default" && (
                   <div className="flex items-start gap-2 rounded-md border border-red-300 bg-red-50 p-2 mt-1">
                     <AlertTriangle className="h-3.5 w-3.5 text-red-700 mt-0.5 shrink-0" />
@@ -997,14 +1061,23 @@ export default function LoanDetail() {
                           : decision === "immaterial"
                             ? `FV difference of ${diffText} is below materiality${file?.materiality != null ? ` of $${Number(file.materiality).toLocaleString()}` : ""} but above trivial — tracked on the unadjusted misstatement schedule, no adjustment booked.`
                             : undefined;
-                      updateLoan.mutate({
-                        id: loanId,
-                        data: {
-                          fvDecision: decision,
-                          fvRate: suggestedFvRate,
-                          ...(autoNote ? { fvDecisionNote: autoNote } : {}),
+                      // If the accountant typed a rate but hasn't hit Save yet,
+                      // freeze that override with the decision instead of the suggestion.
+                      const rateToFreeze = resolveFvRateForDecision(fvRateDraft, suggestedFvRate);
+                      updateLoan.mutate(
+                        {
+                          id: loanId,
+                          data: {
+                            fvDecision: decision,
+                            // Never persist a non-positive rate — when no valid
+                            // rate exists (suggestion not loaded), save the
+                            // decision without touching fvRate.
+                            ...(rateToFreeze != null ? { fvRate: rateToFreeze } : {}),
+                            ...(autoNote ? { fvDecisionNote: autoNote } : {}),
+                          },
                         },
-                      });
+                        { onSuccess: () => setFvRateDraft(null) },
+                      );
                       setFvDecisionExpanded(false);
                     }}
                     className="gap-2"
@@ -1059,7 +1132,7 @@ export default function LoanDetail() {
             </div>
           )}
 
-          {loan.isCapitalLease || (Number(loan.interestRate) > 0 && Number(loan.principal) > 0 && !loan.monthlyPayment) ? (
+          {!isOperatingLeaseLoan(loan) ? (
             <Tabs value={tab} onValueChange={setTab}>
               <TabsList className="gap-1 p-1 bg-muted/60 flex-wrap">
                 <Tooltip>
@@ -1184,6 +1257,11 @@ export default function LoanDetail() {
                               <TableCell>
                                 <div className="flex items-center gap-2">
                                   <span>{format(row.date, "MMMM d, yyyy")}</span>
+                                  {row.isGrace && (
+                                    <span className="text-[10px] font-semibold uppercase tracking-wide rounded bg-muted text-muted-foreground px-1.5 py-0.5 whitespace-nowrap">
+                                      Grace
+                                    </span>
+                                  )}
                                   {isFyeRow && (
                                     <span className="text-[10px] font-semibold uppercase tracking-wide rounded bg-primary/15 text-primary px-1.5 py-0.5 whitespace-nowrap">
                                       FYE
@@ -2046,7 +2124,7 @@ export default function LoanDetail() {
 
           {/* Straight-Line Lease Adjustments — Operating Leases Only */}
           {(() => {
-            const isOperatingLease = loan && !loan.isCapitalLease && Number(loan.interestRate) === 0 && loan.monthlyPayment != null;
+            const isOperatingLease = loan && isOperatingLeaseLoan(loan);
             if (!isOperatingLease) return null;
             const sl = calculateStraightLineLease({
               baseMonthlyRent: Number(loan.monthlyPayment ?? 0),
@@ -2402,6 +2480,8 @@ export default function LoanDetail() {
                       startDate: editForm.startDate,
                       paymentFrequency: editForm.paymentFrequency,
                       ioMonths: editForm.ioMonths,
+                      graceMonths: editForm.graceMonths,
+                      graceInterestTreatment: editForm.graceInterestTreatment,
                       balloonPayment: editForm.balloonPayment,
                       transferOfOwnership: editForm.transferOfOwnership,
                       bargainPurchaseOption: editForm.bargainPurchaseOption,
@@ -2452,7 +2532,7 @@ export default function LoanDetail() {
       {/* Reevaluate Lease Wizard */}
       {(() => {
         if (!loan) return null;
-        const isLease = loan.isCapitalLease || (!loan.isCapitalLease && Number(loan.interestRate) === 0 && loan.monthlyPayment != null);
+        const isLease = loan.isCapitalLease || (isOperatingLeaseLoan(loan));
         if (!isLease) return null;
         const initialAnswers: AssessmentAnswers = {
           transferOfOwnership: loan.transferOfOwnership,

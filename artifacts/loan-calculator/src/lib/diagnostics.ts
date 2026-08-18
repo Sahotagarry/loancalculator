@@ -1,4 +1,5 @@
 import { parseISO, addMonths, addYears, isAfter, isBefore } from "date-fns";
+import { isOperatingLeaseLoan } from "./aspe-utils";
 
 /* ── Types ───────────────────────────────────────────────────── */
 
@@ -94,7 +95,7 @@ function blank(v: string | null | undefined): boolean {
 
 export function getLoanKind(loan: LoanDiagnosticInput): LoanKind {
   if (loan.isCapitalLease) return "capital_lease";
-  if (num(loan.interestRate) === 0 && loan.monthlyPayment != null) {
+  if (isOperatingLeaseLoan({ ...loan, isCapitalLease: !!loan.isCapitalLease })) {
     return "operating_lease";
   }
   return "loan";

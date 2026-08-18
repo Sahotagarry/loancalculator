@@ -45,6 +45,14 @@ function buildFieldRows(result: DocumentImportResult): FieldRow[] {
       { label: "Payment frequency", value: fmtText(f?.paymentFrequency ?? null) },
       { label: "Payment amount", value: fmtMoney(f?.paymentAmount) },
       { label: "Interest-only period", value: fmtNum(f?.interestOnlyMonths, " months"), optional: true },
+      { label: "Payment grace period", value: fmtNum(f?.graceMonths, " months"), optional: true },
+      {
+        label: "Interest during grace",
+        value: fmtText(
+          f?.graceMonths ? (f?.graceInterestTreatment === "none" ? "Interest-free" : "Capitalized onto balance") : null,
+        ),
+        optional: true,
+      },
       { label: "Balloon payment", value: fmtMoney(f?.balloonPayment), optional: true },
       { label: "Security / collateral", value: fmtText(f?.securityDescription) },
     ];

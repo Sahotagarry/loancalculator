@@ -9,9 +9,22 @@ export interface AmortizationRow {
   totalInterest: number;
   balance: number;
   isInterestOnly: boolean;
+  /** True while the loan is in a payment grace period (no payment due). */
+  isGrace?: boolean;
 }
 
 export type Frequency = "monthly" | "semi-monthly" | "bi-weekly" | "weekly";
+
+/**
+ * How interest behaves during a payment grace period (months with no payments
+ * before repayment starts):
+ * - "capitalized": interest accrues and is added to the balance; repayment
+ *   installments are computed on the grown balance.
+ * - "none": no interest accrues during the grace period (interest-free start).
+ * A grace period where interest IS paid monthly is not a grace period at all —
+ * that is the existing interest-only option (ioMonths).
+ */
+export type GraceInterestTreatment = "capitalized" | "none";
 
 export function calculateAmortization(
   principal: number,
@@ -23,7 +36,9 @@ export function calculateAmortization(
   interestOnlySpecificMonths: number[] = [], // 0-11 for Jan-Dec
   balloonPayment: number = 0,
   frequency: Frequency = "monthly",
-  paymentOverride: number | null = null
+  paymentOverride: number | null = null,
+  graceMonths: number = 0,
+  graceInterestTreatment: GraceInterestTreatment = "capitalized"
 ): {
   monthlyPayment: number;
   totalInterest: number;
@@ -47,14 +62,46 @@ export function calculateAmortization(
   const ioRatio = periodsPerYear / 12;
   const adjInterestOnlyPeriods = Math.round(interestOnlyMonths * ioRatio);
 
+  // Period dates are generated the same way inside the schedule loop below.
+  const dateForPeriod = (i: number): Date => {
+    if (frequency === "monthly") return addMonths(startDate, i - 1);
+    if (frequency === "semi-monthly") return addDays(startDate, Math.round(((i - 1) * 365.25) / 24));
+    if (frequency === "bi-weekly") return addDays(startDate, (i - 1) * 14);
+    return addDays(startDate, (i - 1) * 7);
+  };
+
+  // Payment grace period: no payments at all until `graceMonths` calendar
+  // months after the start date. The term includes the grace period, but the
+  // amortization period does not — e.g. a 72-month term with a 12-month grace
+  // period repays over a 60-month amortization. Grace periods are counted by
+  // comparing each period's actual date against the calendar boundary so
+  // weekly/bi-weekly/semi-monthly schedules defer the right number of periods.
+  const graceEndDate = graceMonths > 0 ? addMonths(startDate, Math.max(0, graceMonths)) : null;
+  let adjGracePeriods = 0;
+  if (graceEndDate) {
+    while (
+      adjGracePeriods < totalTermPeriods &&
+      dateForPeriod(adjGracePeriods + 1) < graceEndDate
+    ) {
+      adjGracePeriods++;
+    }
+  }
+
+  // Installments are computed on the balance at the END of the grace period
+  // (grown by capitalized interest, or unchanged when interest is waived).
+  const balanceAfterGrace =
+    graceInterestTreatment === "capitalized"
+      ? principal * Math.pow(1 + periodicRate, adjGracePeriods)
+      : principal;
+
   const remainingAmortizationPeriods = totalAmortizationPeriods - adjInterestOnlyPeriods;
   let standardPeriodicPayment = 0;
 
   if (periodicRate === 0) {
-    standardPeriodicPayment = (principal - balloonPayment) / (remainingAmortizationPeriods > 0 ? remainingAmortizationPeriods : totalAmortizationPeriods);
+    standardPeriodicPayment = (balanceAfterGrace - balloonPayment) / (remainingAmortizationPeriods > 0 ? remainingAmortizationPeriods : totalAmortizationPeriods);
   } else if (remainingAmortizationPeriods > 0) {
     const pow = Math.pow(1 + periodicRate, remainingAmortizationPeriods);
-    standardPeriodicPayment = (principal * pow - balloonPayment) * (periodicRate / (pow - 1));
+    standardPeriodicPayment = (balanceAfterGrace * pow - balloonPayment) * (periodicRate / (pow - 1));
   }
 
   // When the contractual payment differs from the computed one, the override
@@ -64,31 +111,33 @@ export function calculateAmortization(
     standardPeriodicPayment = paymentOverride;
   }
 
-  const baseDate = startDate;
-
   for (let i = 1; i <= totalTermPeriods; i++) {
-    let currentDate: Date;
-    if (frequency === "monthly") {
-      currentDate = addMonths(baseDate, i - 1);
-    } else if (frequency === "semi-monthly") {
-      // Approximation: alternating 14/15 days or half-month
-      currentDate = addDays(baseDate, Math.round((i - 1) * 365.25 / 24));
-    } else if (frequency === "bi-weekly") {
-      currentDate = addDays(baseDate, (i - 1) * 14);
-    } else {
-      currentDate = addDays(baseDate, (i - 1) * 7);
-    }
+    const currentDate = dateForPeriod(i);
 
     const monthOfYear = getMonth(currentDate);
-    const isInitialIO = i <= adjInterestOnlyPeriods;
-    const isSpecificIO = interestOnlySpecificMonths.includes(monthOfYear);
+    const isGrace = i <= adjGracePeriods;
+    const isInitialIO = !isGrace && i <= adjGracePeriods + adjInterestOnlyPeriods;
+    const isSpecificIO = !isGrace && interestOnlySpecificMonths.includes(monthOfYear);
     const isInterestOnly = isInitialIO || isSpecificIO;
 
-    const interestForPeriod = balance * periodicRate;
+    let interestForPeriod = balance * periodicRate;
     let principalForPeriod = 0;
     let payment = 0;
 
-    if (isInterestOnly) {
+    if (isGrace) {
+      // No payment due. Interest either capitalizes onto the balance or is
+      // waived entirely, depending on the grace treatment. Accretion is NOT
+      // recorded as (negative) principal — repayment metrics that sum
+      // row.principal must only see actual principal repayments — the balance
+      // is grown directly instead.
+      payment = 0;
+      principalForPeriod = 0;
+      if (graceInterestTreatment === "capitalized") {
+        balance += interestForPeriod;
+      } else {
+        interestForPeriod = 0;
+      }
+    } else if (isInterestOnly) {
       payment = interestForPeriod;
       principalForPeriod = 0;
     } else {
@@ -101,7 +150,7 @@ export function calculateAmortization(
 
     if (i === totalTermPeriods) {
       // For the term end, we don't force balance to balloonPayment unless it's also the end of amortization
-      if (i === totalAmortizationPeriods && Math.abs(balance - balloonPayment) > 0.01) {
+      if (i === adjGracePeriods + totalAmortizationPeriods && Math.abs(balance - balloonPayment) > 0.01) {
         const diff = balance - balloonPayment;
         payment += diff;
         principalForPeriod += diff;
@@ -118,6 +167,7 @@ export function calculateAmortization(
       totalInterest,
       balance: Math.max(0, balance),
       isInterestOnly,
+      isGrace,
     });
   }
 
@@ -143,6 +193,16 @@ export function calculateAmortization(
  * schedule ends on, so for every period principal + interest equals the
  * contractual payment.
  */
+/**
+ * Whether a fair-value rate can safely drive the effective-interest math:
+ * a finite number strictly greater than zero. Zero, negative, NaN, and
+ * Infinity all silently corrupt the PV discounting, so every consumer must
+ * fall back to the contractual schedule when this returns false.
+ */
+export function isValidFvRate(rate: number | null | undefined): rate is number {
+  return rate != null && typeof rate === "number" && Number.isFinite(rate) && rate > 0;
+}
+
 export function calculateFairValueSchedule(
   contractualSchedule: AmortizationRow[],
   annualFvRate: number,
@@ -154,6 +214,11 @@ export function calculateFairValueSchedule(
   totalPayment: number;
   schedule: AmortizationRow[];
 } {
+  if (!isValidFvRate(annualFvRate)) {
+    throw new Error(
+      `calculateFairValueSchedule requires a finite fair-value rate > 0, got ${annualFvRate}`,
+    );
+  }
   let periodsPerYear = 12;
   if (frequency === "semi-monthly") periodsPerYear = 24;
   else if (frequency === "bi-weekly") periodsPerYear = 26;
@@ -195,12 +260,13 @@ export function calculateFairValueSchedule(
       totalInterest,
       balance: Math.max(0, balance),
       isInterestOnly: src.isInterestOnly,
+      isGrace: src.isGrace,
     });
   }
 
   // The regular (fixed) contractual payment: the first non-interest-only
   // payment, falling back to the first payment if every period is IO.
-  const regularRow = contractualSchedule.find((r) => !r.isInterestOnly);
+  const regularRow = contractualSchedule.find((r) => !r.isInterestOnly && !r.isGrace);
   const monthlyPayment = regularRow?.payment ?? contractualSchedule[0]?.payment ?? 0;
 
   return {
@@ -231,6 +297,8 @@ export function computeFvAdjustment(params: {
   balloonPayment?: number;
   frequency?: Frequency;
   paymentOverride?: number | null;
+  graceMonths?: number;
+  graceInterestTreatment?: GraceInterestTreatment;
 }): number {
   const {
     principal,
@@ -244,6 +312,8 @@ export function computeFvAdjustment(params: {
     balloonPayment = 0,
     frequency = "monthly",
     paymentOverride = null,
+    graceMonths = 0,
+    graceInterestTreatment = "capitalized",
   } = params;
 
   const contractual = calculateAmortization(
@@ -257,6 +327,8 @@ export function computeFvAdjustment(params: {
     balloonPayment,
     frequency,
     paymentOverride,
+    graceMonths,
+    graceInterestTreatment,
   );
   const fv = calculateFairValueSchedule(contractual.schedule, fvRate, frequency);
 

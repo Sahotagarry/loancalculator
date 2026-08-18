@@ -5,6 +5,7 @@ import { format } from "date-fns";
 import { formatCurrency } from "@/lib/format";
 
 export interface ScheduleRow {
+  isGrace?: boolean;
   month: number;
   date: Date;
   payment: number;
@@ -40,7 +41,7 @@ export function exportScheduleXlsx(loanName: string, schedule: ScheduleRow[]): v
       Interest: row.interest.toFixed(2),
       "Total Interest": row.totalInterest.toFixed(2),
       Balance: row.balance.toFixed(2),
-      Type: row.isInterestOnly ? "Interest Only" : "Standard",
+      Type: row.isGrace ? "Grace Period" : row.isInterestOnly ? "Interest Only" : "Standard",
     }))
   );
   const wb = XLSX.utils.book_new();

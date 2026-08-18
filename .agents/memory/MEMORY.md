@@ -1,5 +1,10 @@
 # Auto-memory index
 
+- [Payment grace period on loans](grace-period-loans.md) — grace rows are principal:0/payment:0, accretion grows balance directly; date-based boundaries; isGrace must survive FV transforms
+
+- [Operating lease classification](operating-lease-classification.md) — no type column; use isOperatingLeaseLoan() (termMonths is the loan-vs-lease discriminator), never re-inline the heuristic
+- [Settings at-rest encryption](settings-encryption.md) — app_settings values encrypted with SESSION_SECRET; always use load/saveAzureSettings, keep SESSION_SECRET stable
+
 - [ASPE 3856 FV rate inconsistency](fv-rate-consistency.md) — primary result must use effectiveRate; keep contractualResult for comparison tab
 - [BoC Valet API fallback](prime-rate-api.md) — V122495 series, 7.2% fallback when "no observation" for date; 24h in-memory cache
 - [Journal entries computed on-the-fly](journal-entries-computed.md) — never store journal entries; compute from schedules to avoid stale data
@@ -29,4 +34,5 @@
 - [Covenant violation classification](covenant-violation-classification.md) — violation makes full balance current; scheduled within/beyond split kept for disclosure; file-detail has 3 hand-rolled recomputations
 - [Soft-delete trash semantics](soft-delete-trash-semantics.md) — every by-id read/mutation needs isNull(deletedAt); restore un-trashes full parent chain unconditionally
 - [Clearline Fintech theme](clearline-fintech-theme.md) — dark #262626 header on every page, orange 27 96% 51% in :root AND .dark, Lato/Raleway; PageHeader forces `dark` class
+- [FV rate validation boundary](fv-rate-validation.md) — fvRate must be finite >0 at BOTH client helpers and API routes; decision saves omit fvRate when no positive rate exists
 - [Comparatives lineage](comparatives-lineage.md) — prior-year figures follow rolledFromId → source loan's fileId; never pick prior file by fiscal-year date

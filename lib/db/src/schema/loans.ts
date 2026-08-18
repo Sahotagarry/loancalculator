@@ -23,6 +23,9 @@ export const loansTable = pgTable("loans", {
   startDate: date("start_date", { mode: "string" }).notNull(),
   fiscalYearEnd: date("fiscal_year_end", { mode: "string" }).notNull(),
   paymentFrequency: text("payment_frequency").notNull().default("monthly"),
+  // Payment grace period (no payments before repayment starts)
+  graceMonths: integer("grace_months").notNull().default(0),
+  graceInterestTreatment: text("grace_interest_treatment").notNull().default("capitalized"), // 'capitalized' | 'none'
   // IO options
   ioMonths: integer("io_months").notNull().default(0),
   specificIoMonths: text("specific_io_months").notNull().default(""), // comma-separated 0-11

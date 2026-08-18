@@ -26,6 +26,8 @@ export interface LoanFormState {
   startDate: string;
   paymentFrequency: "monthly" | "semi-monthly" | "bi-weekly" | "weekly";
   ioMonths: number;
+  graceMonths: number;
+  graceInterestTreatment: "capitalized" | "none";
   balloonPayment: number;
   transferOfOwnership: boolean;
   bargainPurchaseOption: boolean;
@@ -433,6 +435,46 @@ export function LoanFormFields({ form, setForm, mode = "loan" }: LoanFormFieldsP
               value={form.balloonPayment}
               onChange={(e) => setForm({ ...form, balloonPayment: Number(e.target.value) })}
             />
+          </div>
+        </div>
+      )}
+
+      {isDebt && (
+        <div className="space-y-2 border rounded-lg p-4 bg-muted/20">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="graceMonths">Payment Grace Period (months)</Label>
+              <Input
+                id="graceMonths"
+                type="number"
+                min={0}
+                value={form.graceMonths}
+                onChange={(e) => setForm({ ...form, graceMonths: Math.max(0, Number(e.target.value)) })}
+              />
+              <p className="text-xs text-muted-foreground">
+                Months with no payments at all before repayment starts. The term should include
+                these months; the amortization period should not.
+              </p>
+            </div>
+            {form.graceMonths > 0 && (
+              <div className="space-y-2">
+                <Label htmlFor="graceTreatment">Interest During Grace Period</Label>
+                <select
+                  id="graceTreatment"
+                  className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm"
+                  value={form.graceInterestTreatment}
+                  onChange={(e) =>
+                    setForm({ ...form, graceInterestTreatment: e.target.value as "capitalized" | "none" })
+                  }
+                >
+                  <option value="capitalized">Accrues and is added to the balance</option>
+                  <option value="none">No interest (interest-free)</option>
+                </select>
+                <p className="text-xs text-muted-foreground">
+                  If interest is paid monthly during the deferral, use Interest Only Months instead.
+                </p>
+              </div>
+            )}
           </div>
         </div>
       )}
