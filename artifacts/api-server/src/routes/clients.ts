@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { and, eq, isNull, sql } from "drizzle-orm";
-import { db, clientsTable, filesTable, loansTable } from "@workspace/db";
+import { db, clientsTable, filesTable, loansTable, clientMembershipsTable } from "@workspace/db";
 import {
   CreateClientBody,
   GetClientParams,
@@ -13,7 +13,8 @@ import {
 
 const router: IRouter = Router();
 
-router.get("/clients", async (_req, res): Promise<void> => {
+router.get("/clients", async (req, res): Promise<void> => {
+  const auth = req.auth!;
   const clients = await db
     .select({
       id: clientsTable.id,
@@ -31,7 +32,15 @@ router.get("/clients", async (_req, res): Promise<void> => {
     .from(clientsTable)
     .leftJoin(filesTable, and(eq(filesTable.clientId, clientsTable.id), isNull(filesTable.deletedAt)))
     .leftJoin(loansTable, and(eq(loansTable.fileId, filesTable.id), isNull(loansTable.deletedAt)))
-    .where(isNull(clientsTable.deletedAt))
+    .innerJoin(clientMembershipsTable, and(
+      eq(clientMembershipsTable.clientId, clientsTable.id),
+      eq(clientMembershipsTable.tenantId, auth.tenantId),
+      eq(clientMembershipsTable.objectId, auth.objectId),
+    ))
+    .where(and(
+      isNull(clientsTable.deletedAt), eq(clientsTable.firmId, auth.firmId),
+      isNull(clientsTable.quarantinedAt), sql`${clientsTable.adoptedAt} is not null`,
+    ))
     .groupBy(clientsTable.id)
     .orderBy(clientsTable.name);
   res.json(ListClientsResponse.parse(clients));
@@ -44,7 +53,16 @@ router.post("/clients", async (req, res): Promise<void> => {
     return;
   }
 
-  const [client] = await db.insert(clientsTable).values(parsed.data).returning();
+  const auth = req.auth!;
+  const [client] = await db.transaction(async (tx) => {
+    const [created] = await tx.insert(clientsTable).values({
+      ...parsed.data, firmId: auth.firmId, adoptedAt: new Date(), quarantinedAt: null, quarantineReason: null,
+    }).returning();
+    await tx.insert(clientMembershipsTable).values({
+      clientId: created.id, tenantId: auth.tenantId, objectId: auth.objectId,
+    });
+    return [created];
+  });
   res.status(201).json(GetClientResponse.parse(client));
 });
 

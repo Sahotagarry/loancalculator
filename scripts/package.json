@@ -5,15 +5,20 @@
   "type": "module",
   "scripts": {
     "hello": "tsx ./src/hello.ts",
+    "legacy-data": "tsx ./src/legacy-azure-migration-cli.ts",
+    "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@azure/storage-blob": "^12.33.0",
+    "@replit/connectors-sdk": "^0.4.2",
+    "docx": "^9.7.1",
+    "pg": "^8.20.0"
   },
   "devDependencies": {
     "@types/node": "catalog:",
+    "@types/pg": "^8.20.0",
     "tsx": "catalog:",
     "vitest": "^4.1.10"
-  },
-  "dependencies": {
-    "@replit/connectors-sdk": "^0.4.2",
-    "docx": "^9.7.1"
   }
 }

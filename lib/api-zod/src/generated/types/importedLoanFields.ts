@@ -6,7 +6,10 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { ImportedLoanFieldsGraceInterestTreatment } from './importedLoanFieldsGraceInterestTreatment';
+import type { ImportedLoanFieldsGraceTermMode } from './importedLoanFieldsGraceTermMode';
 import type { ImportedLoanFieldsPaymentFrequency } from './importedLoanFieldsPaymentFrequency';
+import type { ImportedLoanFieldsPaymentTiming } from './importedLoanFieldsPaymentTiming';
+import type { SuggestedLoanEvent } from './suggestedLoanEvent';
 
 export interface ImportedLoanFields {
   name?: string | null;
@@ -20,10 +23,24 @@ export interface ImportedLoanFields {
   termYears?: number | null;
   startDate?: string | null;
   paymentFrequency?: ImportedLoanFieldsPaymentFrequency;
+  paymentTiming?: ImportedLoanFieldsPaymentTiming;
+  graceTermMode?: ImportedLoanFieldsGraceTermMode;
+  firstPaymentDate?: Date | null;
+  /**
+     * @minimum 1
+     * @maximum 31
+     */
+  semiMonthlyFirstDueDay?: number | null;
+  /**
+     * @minimum 1
+     * @maximum 31
+     */
+  semiMonthlySecondDueDay?: number | null;
   paymentAmount?: number | null;
   interestOnlyMonths?: number | null;
   graceMonths?: number | null;
   graceInterestTreatment?: ImportedLoanFieldsGraceInterestTreatment;
   balloonPayment?: number | null;
   securityDescription?: string | null;
+  suggestedEvents?: SuggestedLoanEvent[] | null;
 }

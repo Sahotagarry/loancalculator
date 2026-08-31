@@ -3,7 +3,7 @@ import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft, LogOut } from "lucide-react";
 import { HelpDialog } from "@/components/help-dialog";
-import { useEasyAuth, EASY_AUTH_LOGOUT_URL } from "@/hooks/use-easy-auth";
+import { useAuth, EASY_AUTH_LOGOUT_URL } from "@/hooks/use-auth";
 import {
   Tooltip,
   TooltipContent,
@@ -19,8 +19,15 @@ interface PageHeaderProps {
   actions?: ReactNode;
 }
 
+const ROLE_LABELS: Record<string, string> = {
+  admin: "Administrator",
+  manager: "Manager",
+  accountant: "Accountant",
+  read_only: "Read Only",
+};
+
 export function PageHeader({ backHref, breadcrumb, title, meta, actions }: PageHeaderProps) {
-  const { user } = useEasyAuth();
+  const { user, isDevIdentity } = useAuth();
   return (
     <header className="dark sticky top-0 z-40 border-b border-[#3a3a3a] bg-[#262626] text-foreground">
       <div className="max-w-6xl mx-auto px-4 md:px-8 py-2.5 flex flex-wrap items-center gap-x-3 gap-y-2">
@@ -44,7 +51,7 @@ export function PageHeader({ backHref, breadcrumb, title, meta, actions }: PageH
             {meta}
           </div>
         </div>
-        <div className="flex flex-col items-end gap-2.5 ml-auto flex-shrink-0 min-w-0">
+        <div className="flex w-full flex-col items-end gap-2.5 sm:ml-auto sm:w-auto sm:flex-shrink-0 min-w-0">
           <div className="hidden sm:flex items-center gap-2 flex-shrink-0">
             <img
               src={logoWhite}
@@ -58,19 +65,27 @@ export function PageHeader({ backHref, breadcrumb, title, meta, actions }: PageH
               v{__APP_VERSION__}
             </span>
           </div>
-          <div className="flex flex-wrap items-center gap-2 justify-end min-w-0">
+          <div className="flex w-full flex-wrap items-center gap-2 justify-end min-w-0 sm:w-auto">
             {actions}
             <HelpDialog />
             {user && (
-              <div className="flex items-center gap-1 min-w-0">
-                {user.displayName && (
-                  <span
-                    className="hidden md:block text-xs text-muted-foreground truncate max-w-40"
-                    data-testid="text-signed-in-user"
-                  >
-                    {user.displayName}
-                  </span>
-                )}
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="hidden md:flex flex-col items-end leading-none">
+                  {user.displayName && (
+                    <span
+                      className="text-xs text-foreground truncate max-w-40 font-medium"
+                      data-testid="text-signed-in-user"
+                    >
+                      {user.displayName}
+                    </span>
+                  )}
+                  {user.role && (
+                    <span className="text-[10px] text-muted-foreground mt-0.5">
+                      {ROLE_LABELS[user.role] || user.role}
+                    </span>
+                  )}
+                </div>
+              {!isDevIdentity && (
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
@@ -89,6 +104,7 @@ export function PageHeader({ backHref, breadcrumb, title, meta, actions }: PageH
                   Sign out{user.displayName ? ` (${user.displayName})` : ""}
                 </TooltipContent>
               </Tooltip>
+              )}
               </div>
             )}
           </div>

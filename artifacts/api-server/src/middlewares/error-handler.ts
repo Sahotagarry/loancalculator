@@ -1,4 +1,5 @@
 import { type ErrorRequestHandler } from "express";
+import { EventTimelineError } from "../lib/loan-events";
 
 interface PgErrorInfo {
   code?: string;
@@ -51,6 +52,10 @@ export const errorHandler: ErrorRequestHandler = (err, req, res, next) => {
     (err as { type?: string }).type === "entity.parse.failed"
   ) {
     res.status(400).json({ error: "Invalid JSON in request body." });
+    return;
+  }
+  if (err instanceof EventTimelineError) {
+    res.status(err.status).json({ error: err.message });
     return;
   }
 

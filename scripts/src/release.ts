@@ -1,22 +1,29 @@
-// One-step release: push the current source to the GitHub deployment
-// repository and wait until the GitHub Actions deploy to Azure succeeds.
-//
-//   pnpm release                  — normal release (requires a version bump)
-//   pnpm release --allow-same-version
-//
-// The GitHub repository (see CONFIG) builds the app from source in its
-// deploy workflow (.github/workflows/deploy.yml) and pushes the assembled
-// package to Azure App Service. This script therefore syncs SOURCE files.
-//
-// Authentication goes through the Replit GitHub connector proxy
-// (@replit/connectors-sdk); no tokens are stored in this project. Note that
-// plain `git push` does NOT work with the connector — the Git Data API via
-// the proxy is the supported path.
-
+// Hardened one-step release. Writes are sequential, checkpointed, and never
+// blindly retried. Authentication remains inside the Replit GitHub connector.
 import { execFileSync } from "node:child_process";
-import { readFile, lstat } from "node:fs/promises";
+import { readFile, lstat, rm } from "node:fs/promises";
 import path from "node:path";
 import { ReplitConnectors } from "@replit/connectors-sdk";
+import {
+  GitHubTransport,
+  ReleaseSafetyError,
+  SecurityBlockError,
+  assertAllowedChanges,
+  assertCompatibleCheckpoint,
+  gitBlobSha,
+  gitTreeSha,
+  isReleasePath,
+  loadCheckpoint,
+  manifestDigest,
+  saveCheckpoint,
+  selectReleaseChanges,
+  sha256,
+  verifyCommit,
+  type DiffEntry,
+  type ManifestEntry,
+  type ReleaseCheckpoint,
+  type RemoteTreeEntry,
+} from "./release-core";
 import {
   pollForRunCompletion,
   DeploymentFailedError,
@@ -24,297 +31,383 @@ import {
   type ActionsRun,
 } from "./release-poll";
 
-// ─── Config ──────────────────────────────────────────────────────────────────
 const OWNER = "Sahotagarry";
 const REPO = "loancalculator";
 const BRANCH = "main";
-// Paths never created, modified, or deleted by a release (owned by the IT
-// admin / CI, not by this workspace).
-const PROTECTED_PREFIXES = [".github/"];
-// The workflow that deploys to Azure; polling is scoped to this workflow so
-// another workflow on the same commit can't produce a false success.
+const REPOSITORY = `${OWNER}/${REPO}`;
 const DEPLOY_WORKFLOW_PATH = ".github/workflows/deploy.yml";
-// ─────────────────────────────────────────────────────────────────────────────
-
 const API = "https://api.github.com";
+const WRITE_SPACING_MS = parsePositiveInteger(process.env.RELEASE_WRITE_SPACING_MS, 2_000);
 const proxyFetch = new ReplitConnectors().createProxyFetch("github");
 
-function git(args: string[], opts: { cwd: string }): string {
-  return execFileSync("git", args, { cwd: opts.cwd, encoding: "utf-8" }).trim();
-}
-
-async function gh<T>(pathOrUrl: string, init?: RequestInit): Promise<T> {
-  const res = await proxyFetch(`${API}${pathOrUrl}`, {
-    ...init,
-    headers: {
-      Accept: "application/vnd.github+json",
-      ...(init?.body ? { "Content-Type": "application/json" } : {}),
-      ...(init?.headers ?? {}),
-    },
-  });
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`GitHub API ${init?.method ?? "GET"} ${pathOrUrl} failed (${res.status}): ${body.slice(0, 500)}`);
+function parsePositiveInteger(value: string | undefined, fallback: number): number {
+  if (value === undefined) return fallback;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    throw new ReleaseSafetyError("RELEASE_WRITE_SPACING_MS must be a non-negative integer.");
   }
-  return (await res.json()) as T;
+  return parsed;
 }
 
-/** gh() with retry on 429 (the connector proxy rate-limits ~10 req/s). */
-async function ghRetry<T>(pathOrUrl: string, init?: RequestInit): Promise<T> {
-  for (let attempt = 0; ; attempt++) {
-    try {
-      return await gh<T>(pathOrUrl, init);
-    } catch (err) {
-      const msg = (err as Error).message;
-      const transient =
-        msg.includes("(429)") ||
-        msg.includes("Rate limit") ||
-        /\(50[023]\)/.test(msg) ||
-        msg.includes("fetch failed");
-      if (attempt < 5 && transient) {
-        await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
-        continue;
-      }
-      throw err;
+function git(args: string[], root: string): string {
+  return execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
+}
+
+function parseDiff(raw: string): DiffEntry[] {
+  return raw.split("\n").filter(Boolean).map((line) => {
+    const [status, ...rest] = line.split("\t");
+    if (!["A", "M", "D"].includes(status)) {
+      throw new ReleaseSafetyError(`Unsupported git change status ${status}; renames must be represented as delete/add.`);
     }
-  }
+    return { status: status as DiffEntry["status"], path: rest.join("\t") };
+  });
 }
 
-async function main() {
+async function main(): Promise<void> {
   const allowSameVersion = process.argv.includes("--allow-same-version");
-  const root = git(["rev-parse", "--show-toplevel"], { cwd: process.cwd() });
+  const root = git(["rev-parse", "--show-toplevel"], process.cwd());
+  const checkpointPath = path.resolve(root, git(["rev-parse", "--git-dir"], root), "replit-release", `${BRANCH}.json`);
+  const transport = new GitHubTransport({
+    fetch: proxyFetch,
+    apiBase: API,
+    spacingMs: WRITE_SPACING_MS,
+    log: console.log,
+  });
 
-  // 1. Guard: refuse to release uncommitted source changes.
-  const dirty = git(["status", "--porcelain"], { cwd: root })
-    .split("\n")
-    .filter(Boolean)
-    .filter((line) => {
-      const p = line.slice(3);
-      return !(
-        p.includes("node_modules/") ||
-        /(^|\/)dist\//.test(p) ||
-        p.endsWith(".tsbuildinfo")
-      );
-    });
-  if (dirty.length > 0) {
-    console.error("Refusing to release: there are uncommitted source changes:");
-    for (const line of dirty) console.error(`  ${line}`);
-    console.error("Commit (checkpoint) your work first, then run the release again.");
-    process.exit(1);
+  const dirty = git(["status", "--porcelain"], root).split("\n").filter(Boolean).filter((line) => {
+    const file = line.slice(3);
+    return !file.includes("node_modules/") && !/(^|\/)dist\//.test(file) && !file.endsWith(".tsbuildinfo");
+  });
+  if (dirty.length) {
+    throw new ReleaseSafetyError(
+      `Refusing to release uncommitted source changes:\n${dirty.map((line) => `  ${line}`).join("\n")}`,
+    );
   }
 
-  const headSha = git(["rev-parse", "HEAD"], { cwd: root });
+  const localHead = git(["rev-parse", "HEAD"], root);
+  const remoteRef = await transport.read<{ object: { sha: string } }>(
+    `/repos/${OWNER}/${REPO}/git/ref/heads/${BRANCH}`,
+  );
+  const remoteHead = remoteRef.object.sha;
+  const saved = await loadCheckpoint(checkpointPath);
+  const baseCommit = saved?.baseCommit ?? remoteHead;
+  await ensureCommitKnown(root, baseCommit);
 
-  // 2. Where is the deployment repository right now?
-  const ref = await ghRetry<{ object: { sha: string } }>(`/repos/${OWNER}/${REPO}/git/ref/heads/${BRANCH}`);
-  const remoteSha = ref.object.sha;
-  const remoteCommit = await ghRetry<{ tree: { sha: string } }>(`/repos/${OWNER}/${REPO}/git/commits/${remoteSha}`);
-
-  // Make sure the remote commit is known locally so git can diff against it.
-  try {
-    git(["cat-file", "-e", `${remoteSha}^{commit}`], { cwd: root });
-  } catch {
-    try {
-      git(["fetch", "origin", BRANCH], { cwd: root });
-      git(["cat-file", "-e", `${remoteSha}^{commit}`], { cwd: root });
-    } catch {
-      console.error(
-        `The deployment repository is at commit ${remoteSha}, which this workspace doesn't know about.\n` +
-          `Someone may have pushed to ${OWNER}/${REPO} outside this workspace. Ask the agent to re-sync GitHub first.`,
-      );
-      process.exit(1);
+  const base = await transport.read<{ sha: string; tree: { sha: string } }>(
+    `/repos/${OWNER}/${REPO}/git/commits/${baseCommit}`,
+  );
+  const allChanges = parseDiff(git(["diff", "--no-renames", "--name-status", baseCommit, "HEAD"], root));
+  const diff = selectReleaseChanges(allChanges);
+  const ignoredCount = allChanges.length - diff.length;
+  if (ignoredCount) console.log(`Ignoring ${ignoredCount} committed workspace-only file change(s).`);
+  for (const entry of diff.filter((item) => item.status === "D")) {
+    if (!git(["log", "--all", "--max-count=1", "--format=%H", "--", entry.path], root)) {
+      throw new ReleaseSafetyError(`Refusing to delete ${entry.path}: it has never been tracked in this workspace.`);
     }
   }
 
-  const localVersion = JSON.parse(await readFile(path.join(root, "package.json"), "utf-8")).version;
-
-  // 3. What changed?
-  const diff = git(["diff", "--no-renames", "--name-status", remoteSha, "HEAD"], { cwd: root })
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => {
-      const [status, ...rest] = line.split("\t");
-      return { status: status as "A" | "M" | "D", path: rest.join("\t") };
-    });
-
-  const protectedTouched = diff.filter((e) => PROTECTED_PREFIXES.some((pre) => e.path.startsWith(pre)));
-  const entries = diff.filter((e) => !PROTECTED_PREFIXES.some((pre) => e.path.startsWith(pre)));
-  if (protectedTouched.length > 0) {
-    console.log(
-      `Skipping ${protectedTouched.length} protected path(s) (${PROTECTED_PREFIXES.join(", ")}) — these belong to the deployment repo:`,
-    );
-    for (const e of protectedTouched) console.log(`  ${e.status} ${e.path}`);
-  }
-  // Only the Azure deploy workflow counts — another workflow completing on
-  // the same commit must not produce a false success.
-  const fetchDeployRuns = async (sha: string): Promise<ActionsRun[]> => {
-    const data = await ghRetry<{ workflow_runs: ActionsRun[] }>(
-      `/repos/${OWNER}/${REPO}/actions/runs?head_sha=${sha}`,
-    );
-    return data.workflow_runs.filter((r) => r.path === DEPLOY_WORKFLOW_PATH);
+  const prepared = await prepareManifest(root, diff);
+  const digest = manifestDigest(prepared);
+  const expectedCheckpoint = {
+    repository: REPOSITORY,
+    branch: BRANCH,
+    localHead,
+    baseCommit,
+    baseTree: base.tree.sha,
+    manifestDigest: digest,
   };
-
-  const reconcile = () => {
-    // Record the release in local history when the source content matches
-    // (protected paths like .github/ are allowed to differ — we never push
-    // them, so they stay whatever the IT admin has on GitHub).
-    try {
-      git(["fetch", "origin", BRANCH], { cwd: root });
-      const contentDiff = git(["diff", "--name-only", "HEAD", `origin/${BRANCH}`], { cwd: root })
-        .split("\n")
-        .filter(Boolean)
-        .filter((p) => !PROTECTED_PREFIXES.some((pre) => p.startsWith(pre)));
-      if (contentDiff.length === 0 && !isAncestor(root)) {
-        git(
-          [
-            "-c", "user.name=Release Script",
-            "-c", "user.email=release@local",
-            "merge", "-s", "ours", `origin/${BRANCH}`, "-m",
-            `Record GitHub release v${localVersion} (identical content)`,
-          ],
-          { cwd: root },
-        );
-      }
-    } catch (err) {
-      console.warn(
-        `Note: could not reconcile local git history (${(err as Error).message}). This does not affect the deployment.`,
-      );
-    }
+  let checkpoint: ReleaseCheckpoint = saved ?? {
+    version: 1,
+    ...expectedCheckpoint,
+    blobs: {},
   };
+  if (saved) assertCompatibleCheckpoint(saved, expectedCheckpoint, remoteHead);
 
-  if (entries.length === 0) {
-    // Nothing new to push. If a previous run pushed but timed out (or the
-    // deploy is still in flight), resume by confirming the deploy run for
-    // the current remote head instead of failing or falsely succeeding.
-    console.log("The deployment repository already matches this source.");
-    console.log("Confirming the deployment for the current commit…");
-    const run = await pollForRunCompletion({
-      headSha: remoteSha,
-      fetchRuns: fetchDeployRuns,
-      log: (msg) => console.log(msg),
-    });
-    console.log(`Deployment confirmed: ${run.html_url}`);
-    reconcile();
-    return;
-  }
-
-  // 4. Version guard: a release should be identifiable by its version.
-  let remoteVersion: string | undefined;
-  try {
-    remoteVersion = JSON.parse(git(["show", `${remoteSha}:package.json`], { cwd: root })).version;
-  } catch {
-    remoteVersion = undefined;
-  }
-  if (!allowSameVersion && remoteVersion !== undefined && localVersion === remoteVersion) {
-    console.error(
-      `The app version (${localVersion}) is unchanged from what is already deployed.\n` +
-        `Bump "version" in the root package.json (and commit) so the release is identifiable in the header and at /api/version,\n` +
-        `or re-run with --allow-same-version.`,
+  const localVersion = JSON.parse(await readFile(path.join(root, "package.json"), "utf8")).version as string;
+  const remoteVersion = readRemoteVersion(root, baseCommit);
+  if (!allowSameVersion && diff.length && remoteVersion === localVersion) {
+    throw new ReleaseSafetyError(
+      `The app version (${localVersion}) is unchanged. Bump package.json or use --allow-same-version.`,
     );
-    process.exit(1);
   }
 
-  // 5. Safety checks on the change set.
-  for (const e of entries) {
-    if (e.status === "D") {
-      // A deletion should only ever be of a file this workspace once tracked.
-      // If GitHub has a file this workspace has never seen, someone added it
-      // there directly — refuse rather than silently deleting their work.
-      const known = execFileSync(
-        "git",
-        ["log", "--all", "--max-count=1", "--format=%H", "--", e.path],
-        { cwd: root, encoding: "utf-8" },
-      ).trim();
-      if (!known) {
-        console.error(
-          `Refusing to release: ${e.path} exists on GitHub but has never existed in this workspace.\n` +
-            `Someone may have added it to ${OWNER}/${REPO} directly. Ask the agent to review and re-sync first.`,
-        );
-        process.exit(1);
-      }
+  if (!diff.length && !checkpoint.commitSha) {
+    console.log("The deployment repository already matches the releasable source.");
+    checkpoint.commitSha = remoteHead;
+    checkpoint.refUpdated = true;
+  }
+
+  const uploaded: ManifestEntry[] = [];
+  for (const entry of prepared) {
+    if (entry.sha === null) {
+      uploaded.push(entry);
+      continue;
     }
+    const complete = checkpoint.blobs[entry.path];
+    if (complete) {
+      if (complete.contentSha256 !== entry.contentSha256 || complete.mode !== entry.mode) {
+        throw new ReleaseSafetyError(`Checkpoint blob metadata is stale for ${entry.path}.`);
+      }
+      uploaded.push({ ...entry, sha: complete.gitSha });
+      continue;
+    }
+    const content = await readFile(path.join(root, entry.path));
+    const expectedGitSha = gitBlobSha(content);
+    const blob = await transport.write<{ sha: string }>(
+      `/repos/${OWNER}/${REPO}/git/blobs`,
+      { method: "POST", body: JSON.stringify({ content: content.toString("base64"), encoding: "base64" }) },
+      {
+        stage: "blob",
+        file: entry.path,
+        reconcile: async () => {
+          try {
+            return await transport.read<{ sha: string }>(`/repos/${OWNER}/${REPO}/git/blobs/${expectedGitSha}`);
+          } catch {
+            return undefined;
+          }
+        },
+      },
+    );
+    if (blob.sha !== expectedGitSha) throw new ReleaseSafetyError(`GitHub returned an unexpected blob hash for ${entry.path}.`);
+    checkpoint.blobs[entry.path] = { gitSha: blob.sha, contentSha256: entry.contentSha256!, mode: entry.mode };
+    await saveCheckpoint(checkpointPath, checkpoint);
+    uploaded.push({ ...entry, sha: blob.sha });
   }
 
-  console.log(`Releasing v${localVersion}: ${entries.length} file(s) to sync to ${OWNER}/${REPO}@${BRANCH}.`);
+  const baseTree = await readRecursiveTree(transport, base.tree.sha);
+  const intendedTree = applyChanges(baseTree, uploaded);
+  const expectedTreeSha = gitTreeSha(intendedTree);
+  if (!checkpoint.treeSha && diff.length) {
+    const tree = await transport.write<{ sha: string }>(
+      `/repos/${OWNER}/${REPO}/git/trees`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          base_tree: base.tree.sha,
+          tree: uploaded.map(({ path: file, mode, sha }) => ({
+            path: file,
+            mode,
+            type: "blob",
+            sha,
+          })),
+        }),
+      },
+      {
+        stage: "tree",
+        reconcile: async () => {
+          try {
+            return await transport.read<{ sha: string }>(`/repos/${OWNER}/${REPO}/git/trees/${expectedTreeSha}`);
+          } catch {
+            return undefined;
+          }
+        },
+      },
+    );
+    if (tree.sha !== expectedTreeSha) throw new ReleaseSafetyError("GitHub returned an unexpected tree hash.");
+    checkpoint.treeSha = tree.sha;
+    await saveCheckpoint(checkpointPath, checkpoint);
+  }
 
-  // 6. Upload blobs (small batches — the connector proxy rate-limits).
-  const treeEntries: Array<{ path: string; mode: string; type: "blob"; sha: string | null }> = [];
-  const upserts = entries.filter((e) => e.status !== "D");
-  for (let i = 0; i < upserts.length; i += 5) {
-    const batch = upserts.slice(i, i + 5);
-    const results = await Promise.all(
-      batch.map(async (e) => {
-        const abs = path.join(root, e.path);
-        const st = await lstat(abs);
-        if (!st.isFile()) {
-          throw new Error(
-            `Cannot release ${e.path}: symlinks and non-regular files are not supported by the release script.`,
+  if (!checkpoint.commitSha && diff.length) {
+    const message = git(["log", "-1", "--format=%s"], root);
+    const commit = await transport.write<{ sha: string }>(
+      `/repos/${OWNER}/${REPO}/git/commits`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          message: `v${localVersion}: ${message}`,
+          tree: checkpoint.treeSha,
+          parents: [baseCommit],
+        }),
+      },
+      {
+        stage: "commit",
+        reconcile: async () => {
+          const head = await transport.read<{ object: { sha: string } }>(
+            `/repos/${OWNER}/${REPO}/git/ref/heads/${BRANCH}`,
           );
-        }
-        const buf = await readFile(abs);
-        const blob = await ghRetry<{ sha: string }>(`/repos/${OWNER}/${REPO}/git/blobs`, {
-          method: "POST",
-          body: JSON.stringify({ content: buf.toString("base64"), encoding: "base64" }),
-        });
-        return {
-          path: e.path,
-          mode: st.mode & 0o111 ? "100755" : "100644",
-          type: "blob" as const,
-          sha: blob.sha,
-        };
-      }),
+          const candidate = await transport.read<{ sha: string; tree: { sha: string }; parents: Array<{ sha: string }> }>(
+            `/repos/${OWNER}/${REPO}/git/commits/${head.object.sha}`,
+          );
+          return candidate.tree.sha === checkpoint.treeSha && candidate.parents[0]?.sha === baseCommit
+            ? { sha: candidate.sha }
+            : undefined;
+        },
+      },
     );
-    treeEntries.push(...results);
-    console.log(`Uploaded ${Math.min(i + 5, upserts.length)}/${upserts.length} files…`);
-  }
-  for (const e of entries.filter((x) => x.status === "D")) {
-    treeEntries.push({ path: e.path, mode: "100644", type: "blob", sha: null });
+    checkpoint.commitSha = commit.sha;
+    await saveCheckpoint(checkpointPath, checkpoint);
   }
 
-  // 7. Create the tree + commit and move the branch.
-  const message = git(["log", "-1", "--format=%s"], { cwd: root });
-  const tree = await ghRetry<{ sha: string }>(`/repos/${OWNER}/${REPO}/git/trees`, {
-    method: "POST",
-    body: JSON.stringify({ base_tree: remoteCommit.tree.sha, tree: treeEntries }),
-  });
-  const commit = await ghRetry<{ sha: string }>(`/repos/${OWNER}/${REPO}/git/commits`, {
-    method: "POST",
-    body: JSON.stringify({ message: `v${localVersion}: ${message}`, tree: tree.sha, parents: [remoteSha] }),
-  });
-  await ghRetry(`/repos/${OWNER}/${REPO}/git/refs/heads/${BRANCH}`, {
-    method: "PATCH",
-    body: JSON.stringify({ sha: commit.sha, force: false }),
-  });
-  console.log(`Pushed commit ${commit.sha}`);
-  console.log(`Actions: https://github.com/${OWNER}/${REPO}/actions`);
+  if (!checkpoint.refUpdated && checkpoint.commitSha) {
+    await transport.write(
+      `/repos/${OWNER}/${REPO}/git/refs/heads/${BRANCH}`,
+      { method: "PATCH", body: JSON.stringify({ sha: checkpoint.commitSha, force: false }) },
+      {
+        stage: "branch",
+        reconcile: async () => {
+          const head = await transport.read<{ object: { sha: string } }>(
+            `/repos/${OWNER}/${REPO}/git/ref/heads/${BRANCH}`,
+          );
+          return head.object.sha === checkpoint.commitSha ? {} : undefined;
+        },
+      },
+    );
+    checkpoint.refUpdated = true;
+    await saveCheckpoint(checkpointPath, checkpoint);
+  }
 
-  // 8. Wait for the Azure deployment to finish.
+  if (!checkpoint.commitSha) throw new ReleaseSafetyError("No release commit is available.");
+  const currentRef = await transport.read<{ object: { sha: string } }>(
+    `/repos/${OWNER}/${REPO}/git/ref/heads/${BRANCH}`,
+  );
+  if (currentRef.object.sha !== checkpoint.commitSha) {
+    throw new ReleaseSafetyError("Remote branch moved before final verification; release association is unsafe.");
+  }
+  const finalCommit = await transport.read<{
+    sha: string; tree: { sha: string }; parents: Array<{ sha: string }>;
+  }>(`/repos/${OWNER}/${REPO}/git/commits/${checkpoint.commitSha}`);
+  const finalTree = await readRecursiveTree(transport, finalCommit.tree.sha);
+  verifyCommit({
+    commitSha: checkpoint.commitSha,
+    commit: finalCommit,
+    expectedParent: diff.length ? baseCommit : undefined,
+    expectedTreeSha: checkpoint.treeSha ?? base.tree.sha,
+    remoteTree: finalTree,
+    intendedTree,
+    expectedContentHashes: new Map(uploaded.filter((entry) => entry.sha).map((entry) => [entry.path, entry.sha!])),
+  });
+  checkpoint.verified = true;
+  await saveCheckpoint(checkpointPath, checkpoint);
+
+  const fetchDeployRuns = async (sha: string): Promise<ActionsRun[]> => {
+    const data = await transport.read<{ workflow_runs: ActionsRun[] }>(
+      `/repos/${OWNER}/${REPO}/actions/workflows/${encodeURIComponent(DEPLOY_WORKFLOW_PATH)}/runs?head_sha=${sha}`,
+    );
+    return data.workflow_runs.filter((run) =>
+      run.path === DEPLOY_WORKFLOW_PATH && run.head_sha === sha && run.event === "push",
+    );
+  };
+  if (!checkpoint.workflowRunId) {
+    const runs = await fetchDeployRuns(checkpoint.commitSha);
+    if (runs.length > 1) throw new ReleaseSafetyError("Multiple deployment runs exist for the verified commit.");
+    if (runs[0]) {
+      checkpoint.workflowRunId = runs[0].id;
+      await saveCheckpoint(checkpointPath, checkpoint);
+    }
+  }
   const run = await pollForRunCompletion({
-    headSha: commit.sha,
-    fetchRuns: fetchDeployRuns,
-    log: (msg) => console.log(msg),
+    headSha: checkpoint.commitSha,
+    expectedRunId: checkpoint.workflowRunId,
+    fetchRuns: async (sha) => {
+      const runs = await fetchDeployRuns(sha);
+      if (!checkpoint.workflowRunId && runs.length === 1) {
+        checkpoint.workflowRunId = runs[0].id;
+        await saveCheckpoint(checkpointPath, checkpoint);
+      }
+      return runs;
+    },
+    log: console.log,
   });
-  console.log(`Deployment succeeded: ${run.html_url}`);
-  console.log(`Version v${localVersion} is now live (check /api/version on the Azure site).`);
-
-  // 9. Reconcile local git so the next release diffs cleanly.
-  reconcile();
+  if (checkpoint.workflowRunId !== run.id) throw new ReleaseSafetyError("Deployment completed for an unexpected workflow run.");
+  console.log(`Verified commit ${checkpoint.commitSha} deployed successfully: ${run.html_url}`);
+  await rm(checkpointPath, { force: true });
+  reconcileLocalHistory(root, localVersion);
 }
 
-function isAncestor(root: string): boolean {
+async function prepareManifest(root: string, diff: DiffEntry[]): Promise<ManifestEntry[]> {
+  const result: ManifestEntry[] = [];
+  for (const entry of diff) {
+    if (entry.status === "D") {
+      result.push({ path: entry.path, mode: "100644", sha: null });
+      continue;
+    }
+    const absolute = path.join(root, entry.path);
+    const stat = await lstat(absolute);
+    if (!stat.isFile() || stat.isSymbolicLink()) throw new ReleaseSafetyError(`Only regular files may be released: ${entry.path}`);
+    const content = await readFile(absolute);
+    result.push({
+      path: entry.path,
+      mode: stat.mode & 0o111 ? "100755" : "100644",
+      sha: gitBlobSha(content),
+      contentSha256: sha256(content),
+    });
+  }
+  return result;
+}
+
+async function readRecursiveTree(transport: GitHubTransport, sha: string): Promise<RemoteTreeEntry[]> {
+  const response = await transport.read<{ truncated?: boolean; tree: RemoteTreeEntry[] }>(
+    `/repos/${OWNER}/${REPO}/git/trees/${sha}?recursive=1`,
+  );
+  if (response.truncated) throw new ReleaseSafetyError("GitHub truncated the recursive tree; exact release verification is impossible.");
+  return response.tree.filter((entry) => entry.type === "blob");
+}
+
+function applyChanges(base: RemoteTreeEntry[], changes: ManifestEntry[]): RemoteTreeEntry[] {
+  const tree = new Map(base.map((entry) => [entry.path, entry]));
+  for (const entry of changes) {
+    if (entry.sha === null) tree.delete(entry.path);
+    else tree.set(entry.path, { path: entry.path, mode: entry.mode, type: "blob", sha: entry.sha });
+  }
+  return [...tree.values()];
+}
+
+async function ensureCommitKnown(root: string, sha: string): Promise<void> {
   try {
-    execFileSync("git", ["merge-base", "--is-ancestor", "origin/main", "HEAD"], { cwd: root });
+    git(["cat-file", "-e", `${sha}^{commit}`], root);
+  } catch {
+    git(["fetch", "origin", BRANCH], root);
+    try {
+      git(["cat-file", "-e", `${sha}^{commit}`], root);
+    } catch {
+      throw new ReleaseSafetyError(`Remote commit ${sha} is not known locally; re-sync GitHub before releasing.`);
+    }
+  }
+}
+
+function readRemoteVersion(root: string, sha: string): string | undefined {
+  try {
+    return (JSON.parse(git(["show", `${sha}:package.json`], root)) as { version?: string }).version;
+  } catch {
+    return undefined;
+  }
+}
+
+function reconcileLocalHistory(root: string, version: string): void {
+  try {
+    git(["fetch", "origin", BRANCH], root);
+    const releasableDiff = git(["diff", "--name-only", "HEAD", `origin/${BRANCH}`], root)
+      .split("\n")
+      .filter(Boolean)
+      .filter(isReleasePath);
+    if (releasableDiff.length || isRemoteAncestor(root)) return;
+    execFileSync("git", [
+      "-c", "user.name=Release Script",
+      "-c", "user.email=release@local",
+      "merge", "-s", "ours", `origin/${BRANCH}`, "-m", `Record GitHub release v${version} (identical releasable content)`,
+    ], { cwd: root });
+  } catch (error) {
+    console.warn(`Local history reconciliation was skipped: ${(error as Error).message}`);
+  }
+}
+
+function isRemoteAncestor(root: string): boolean {
+  try {
+    execFileSync("git", ["merge-base", "--is-ancestor", `origin/${BRANCH}`, "HEAD"], { cwd: root });
     return true;
   } catch {
     return false;
   }
 }
 
-main().catch((err) => {
-  if (err instanceof DeploymentFailedError || err instanceof DeploymentTimeoutError) {
-    console.error(err.message);
-  } else {
-    console.error(err);
-  }
-  process.exit(1);
+main().catch((error) => {
+  if (
+    error instanceof DeploymentFailedError ||
+    error instanceof DeploymentTimeoutError ||
+    error instanceof SecurityBlockError ||
+    error instanceof ReleaseSafetyError
+  ) console.error(error.message);
+  else console.error(error);
+  process.exitCode = 1;
 });

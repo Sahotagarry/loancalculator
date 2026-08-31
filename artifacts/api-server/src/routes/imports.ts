@@ -1,13 +1,13 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import multer from "multer";
 import { eq } from "drizzle-orm";
-import { db, filesTable } from "@workspace/db";
+import { clientsTable, db, filesTable } from "@workspace/db";
 import { GetFileParams } from "@workspace/api-zod";
 import { loadAzureSettings, requireSettings, UserFacingError } from "../lib/azure-settings";
 import { readPdfText } from "../lib/azure-doc-intel";
 import { extractLoanOrLease, reconcileLeaseMath, type LoanFields } from "../lib/azure-extract";
 import { storeDocument } from "../lib/document-store";
-import { fetchPrimeRate } from "../lib/fv-decisions";
+import { fetchPrimeObservation } from "../lib/prime-rates";
 
 const router: IRouter = Router();
 
@@ -46,6 +46,8 @@ router.post("/files/:id/import-document", handleUpload, async (req, res): Promis
     res.status(404).json({ error: "File not found" });
     return;
   }
+  const [client] = await db.select({ id: clientsTable.id }).from(clientsTable).where(eq(clientsTable.id, file.clientId));
+  if (!client) { res.status(404).json({ error: "File not found" }); return; }
 
   const uploaded = req.file;
   if (!uploaded) {
@@ -85,6 +87,7 @@ router.post("/files/:id/import-document", handleUpload, async (req, res): Promis
     // Variable-rate loans: if the document gave a prime spread but no usable
     // rate, look up the Bank of Canada prime rate and resolve the rate here.
     // Applies to a standalone loan and to each facility of a master agreement.
+    const unresolvedRateFindings: Array<{ loanName: string | null; observationDate: string; reason: string; action: string }> = [];
     const resolvePrimeRate = async (loan: LoanFields, label?: string): Promise<void> => {
       if (loan.primeSpread == null) return;
       const prefix = label ? `${label}: ` : "";
@@ -94,14 +97,26 @@ router.post("/files/:id/import-document", handleUpload, async (req, res): Promis
           /^\d{4}-\d{2}-\d{2}$/.test(loan.startDate) &&
           !Number.isNaN(Date.parse(loan.startDate));
         const dateStr = isValidDate && loan.startDate ? loan.startDate : new Date().toISOString().slice(0, 10);
-        const { primeRate, source } = await fetchPrimeRate(dateStr);
-        loan.interestRate = Number((primeRate + loan.primeSpread).toFixed(2));
-        extraction.reasoning = [
-          extraction.reasoning,
-          `${prefix}Interest rate set to prime (${primeRate}% per ${source}, as of ${dateStr}) + ${loan.primeSpread}% = ${loan.interestRate}%. Verify against the lender's actual prime rate.`,
-        ]
-          .filter(Boolean)
-          .join(" ");
+        try {
+          const observation = await fetchPrimeObservation(dateStr);
+          loan.statedPrimeRate = observation.rate;
+          loan.interestRate = Number((observation.rate + loan.primeSpread).toFixed(2));
+          extraction.reasoning = [
+            extraction.reasoning,
+            `${prefix}Prime-linked terms preserved. Public benchmark ${observation.sourceSeries} observed ${observation.observationDate} at ${observation.rate}% plus ${loan.primeSpread}% = ${loan.interestRate}%. Confirm it matches the lender's contractual prime.`,
+          ].filter(Boolean).join(" ");
+        } catch (error) {
+          unresolvedRateFindings.push({
+            loanName: loan.name ?? null,
+            observationDate: dateStr,
+            reason: error instanceof Error ? error.message : "Prime retrieval failed",
+            action: "Provide an evidenced lender/current opening rate before creating the loan.",
+          });
+          extraction.reasoning = [
+            extraction.reasoning,
+            `${prefix}Unresolved rate finding: no validated public prime observation was available; no contractual fallback rate was inserted (${error instanceof Error ? error.message : "retrieval failed"}).`,
+          ].filter(Boolean).join(" ");
+        }
       } else if (loan.statedPrimeRate != null) {
         extraction.reasoning = [
           extraction.reasoning,
@@ -124,10 +139,13 @@ router.post("/files/:id/import-document", handleUpload, async (req, res): Promis
     // Retain the original PDF so it can be linked to the created loan/lease.
     // Goes to Azure Blob Storage when configured, otherwise to the app's own
     // database as a fallback.
-    let documentBlob: string | null = null;
+    let documentId: string | null = null;
     let documentName: string | null = null;
     if (extraction.classification !== "other") {
-      documentBlob = await storeDocument(settings, uploaded.buffer, uploaded.originalname);
+      documentId = await storeDocument(settings, uploaded.buffer, uploaded.originalname, {
+        tenantId: req.auth!.tenantId, firmId: req.auth!.firmId, clientId: client.id,
+        fileId: file.id, uploaderObjectId: req.auth!.objectId,
+      });
       documentName = uploaded.originalname;
     }
 
@@ -135,8 +153,9 @@ router.post("/files/:id/import-document", handleUpload, async (req, res): Promis
       classification: extraction.classification,
       confidence: extraction.confidence,
       reasoning: extraction.reasoning,
-      documentBlob: documentBlob ?? undefined,
+      documentId: documentId ?? undefined,
       documentName: documentName ?? undefined,
+      unresolvedRateFindings,
       loan: extraction.classification === "loan" ? (extraction.loan ?? undefined) : undefined,
       lease: extraction.classification === "lease" ? (extraction.lease ?? undefined) : undefined,
       masterAgreement:

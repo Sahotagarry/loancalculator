@@ -6,7 +6,4 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export interface UnlockSettingsInput {
-  /** @minLength 1 */
-  password: string;
-}
+export type LoanActiveRateEventsItem = { [key: string]: unknown };

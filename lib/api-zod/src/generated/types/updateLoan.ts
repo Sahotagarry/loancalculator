@@ -5,9 +5,17 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { AgreementModificationAssessment } from './agreementModificationAssessment';
 import type { RentStep } from './rentStep';
-import type { UpdateLoanFvDecision } from './updateLoanFvDecision';
 import type { UpdateLoanGraceInterestTreatment } from './updateLoanGraceInterestTreatment';
+import type { UpdateLoanGraceTermMode } from './updateLoanGraceTermMode';
+import type { UpdateLoanInitialFvRateAssumption } from './updateLoanInitialFvRateAssumption';
+import type { UpdateLoanPaymentTiming } from './updateLoanPaymentTiming';
+import type { UpdateLoanRateBenchmark } from './updateLoanRateBenchmark';
+import type { UpdateLoanRateEffectiveConvention } from './updateLoanRateEffectiveConvention';
+import type { UpdateLoanRatePaymentTreatment } from './updateLoanRatePaymentTreatment';
+import type { UpdateLoanRateResetFrequency } from './updateLoanRateResetFrequency';
+import type { UpdateLoanRateType } from './updateLoanRateType';
 
 export interface UpdateLoan {
   name?: string;
@@ -17,10 +25,33 @@ export interface UpdateLoan {
   principal?: number;
   downPayment?: number | null;
   interestRate?: number;
+  rateType?: UpdateLoanRateType;
+  /** Set boc_v80691311 to explicitly adopt the current BoC prime benchmark; retired identifiers cannot be written. */
+  rateBenchmark?: UpdateLoanRateBenchmark;
+  contractualPrimeName?: string | null;
+  benchmarkEquivalentToContractualPrime?: boolean | null;
+  rateSpread?: number | null;
+  rateResetFrequency?: UpdateLoanRateResetFrequency;
+  rateEffectiveConvention?: UpdateLoanRateEffectiveConvention;
+  ratePaymentTreatment?: UpdateLoanRatePaymentTreatment;
+  initialFvRateAssumption?: UpdateLoanInitialFvRateAssumption;
   amortizationYears?: number;
   termYears?: number;
   startDate?: Date;
   paymentFrequency?: string;
+  paymentTiming?: UpdateLoanPaymentTiming;
+  graceTermMode?: UpdateLoanGraceTermMode;
+  firstPaymentDate?: Date | null;
+  /**
+     * @minimum 1
+     * @maximum 31
+     */
+  semiMonthlyFirstDueDay?: number | null;
+  /**
+     * @minimum 1
+     * @maximum 31
+     */
+  semiMonthlySecondDueDay?: number | null;
   graceMonths?: number;
   graceInterestTreatment?: UpdateLoanGraceInterestTreatment;
   ioMonths?: number;
@@ -58,9 +89,12 @@ export interface UpdateLoan {
   camMonthly?: number | null;
   inducementReceivedInCash?: boolean;
   covenantViolation?: boolean;
-  fvRate?: number;
-  fvDecision?: UpdateLoanFvDecision;
-  fvDecisionNote?: string;
   dismissedFindings?: string[] | null;
   masterAgreementId?: string | null;
+  /** Explicitly links this agreement to a prior agreement. Send null with the other modification fields null to remove a link. */
+  predecessorAgreementId?: string | null;
+  modificationEffectiveDate?: Date | null;
+  modificationAssessment?: AgreementModificationAssessment | null;
+  /** Audit reason recorded when schedule-driving terms change. */
+  changeReason?: string;
 }

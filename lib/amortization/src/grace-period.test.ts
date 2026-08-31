@@ -113,4 +113,132 @@ describe("payment grace period", () => {
     // monthlyPayment reflects the regular repayment installment, not a grace row
     expect(fv.monthlyPayment).toBeCloseTo(P / 60, 2);
   });
+
+  it("included mode keeps a 60-month total term and leaves 47 payments after 13 months", () => {
+    const r = calculateAmortization(
+      P, 6, 5, 5, new Date(2025, 0, 1), 0, [], 0, "monthly", null, 13,
+      "capitalized", { graceTermMode: "included" },
+    );
+    expect(r.schedule).toHaveLength(60);
+    expect(r.schedule.filter((row) => row.isGrace)).toHaveLength(13);
+    expect(r.schedule.filter((row) => !row.isGrace)).toHaveLength(47);
+    expect(r.schedule[59].balance).toBeGreaterThan(0);
+  });
+
+  it("added mode makes 60 repayment months plus 13 grace months equal 73", () => {
+    const r = calculateAmortization(
+      P, 6, 5, 5, new Date(2025, 0, 1), 0, [], 0, "monthly", null, 13,
+      "capitalized", { graceTermMode: "added" },
+    );
+    expect(r.schedule).toHaveLength(73);
+    expect(r.schedule.filter((row) => row.isGrace)).toHaveLength(13);
+    expect(r.schedule.filter((row) => !row.isGrace)).toHaveLength(60);
+    expect(r.schedule[72].balance).toBeCloseTo(0, 1);
+  });
+
+  it("added grace is not capped by a shorter base contractual term", () => {
+    const r = calculateAmortization(
+      P, 0, 1, 0.25, new Date(2025, 0, 1), 0, [], 0, "monthly", null, 6,
+      "none", { graceTermMode: "added" },
+    );
+    // Three base-term months plus six deferred monthly payment dates.
+    expect(r.schedule).toHaveLength(9);
+    expect(r.schedule.filter((row) => row.isGrace)).toHaveLength(6);
+    expect(r.schedule.filter((row) => !row.isGrace)).toHaveLength(3);
+    expect(r.schedule[6].date).toEqual(new Date(2025, 6, 1));
+    expect(r.schedule[6].payment).toBeGreaterThan(0);
+  });
+
+  it("uses first-payment dates consistently on either side of the grace boundary", () => {
+    const beforeBoundary = calculateAmortization(
+      P, 0, 1, 1, new Date(2025, 0, 1), 0, [], 0, "monthly", null, 2, "none",
+      { graceTermMode: "added", firstPaymentDate: new Date(2025, 0, 15) },
+    );
+    // Jan 15 and Feb 15 are deferred; Mar 15 is the first due payment.
+    expect(beforeBoundary.schedule).toHaveLength(14);
+    expect(beforeBoundary.schedule.filter((row) => row.isGrace)).toHaveLength(2);
+    expect(beforeBoundary.schedule[2].date).toEqual(new Date(2025, 2, 15));
+    expect(beforeBoundary.schedule[2].payment).toBeGreaterThan(0);
+
+    const onBoundary = calculateAmortization(
+      P, 0, 1, 1, new Date(2025, 0, 1), 0, [], 0, "monthly", null, 2, "none",
+      { graceTermMode: "added", firstPaymentDate: new Date(2025, 2, 1) },
+    );
+    // The boundary payment is due, but the two economic grace periods are
+    // retained as no-payment rows before the explicit first due date.
+    expect(onBoundary.schedule).toHaveLength(14);
+    expect(onBoundary.schedule.slice(0, 2).every((row) => row.isGrace)).toBe(true);
+    expect(onBoundary.schedule[2].date).toEqual(new Date(2025, 2, 1));
+    expect(onBoundary.schedule[2].payment).toBeGreaterThan(0);
+  });
+
+  it("capitalizes economic grace before an explicit boundary payment", () => {
+    for (const paymentTiming of ["end", "beginning"] as const) {
+      const r = calculateAmortization(
+        P, 6, 1, 1, new Date(2025, 0, 1), 0, [], 0, "monthly", null, 2,
+        "capitalized", {
+          graceTermMode: "added",
+          firstPaymentDate: new Date(2025, 2, 1),
+          paymentTiming,
+        },
+      );
+      const grown = P * Math.pow(1.005, 2);
+      expect(r.schedule.slice(0, 2).map((row) => row.payment)).toEqual([0, 0]);
+      expect(r.schedule[1].balance).toBeCloseTo(grown, 6);
+      expect(r.schedule[2].date).toEqual(new Date(2025, 2, 1));
+      expect(r.schedule[2].interest).toBeCloseTo(
+        paymentTiming === "beginning"
+          ? (grown - r.schedule[2].payment) * 0.005
+          : grown * 0.005,
+        6,
+      );
+      expect(r.totalInterest).toBeGreaterThan(r.schedule.slice(2).reduce((n, row) => n + row.interest, 0));
+    }
+  });
+
+  it("waives economic grace before an explicit payment at or after the boundary", () => {
+    for (const firstPaymentDate of [new Date(2025, 2, 1), new Date(2025, 3, 1)]) {
+      const r = calculateAmortization(
+        P, 6, 1, 1, new Date(2025, 0, 1), 0, [], 0, "monthly", null, 2,
+        "none", { graceTermMode: "added", firstPaymentDate },
+      );
+      expect(r.schedule.slice(0, 2).every((row) => row.isGrace)).toBe(true);
+      expect(r.schedule.slice(0, 2).every((row) => row.interest === 0)).toBe(true);
+      expect(r.schedule[1].balance).toBeCloseTo(P, 8);
+      expect(r.schedule[2].date).toEqual(firstPaymentDate);
+      expect(r.schedule[2].payment).toBeCloseTo(
+        P * Math.pow(1.005, 12) * (0.005 / (Math.pow(1.005, 12) - 1)),
+        6,
+      );
+    }
+  });
+
+  it("keeps legacy grace accrual unchanged without an explicit first payment date", () => {
+    const legacy = calculateAmortization(
+      P, 6, 1, 1, new Date(2025, 0, 1), 0, [], 0, "monthly", null, 2,
+      "capitalized",
+    );
+    const explicitLegacy = calculateAmortization(
+      P, 6, 1, 1, new Date(2025, 0, 1), 0, [], 0, "monthly", null, 2,
+      "capitalized", { paymentTiming: "end", graceTermMode: "included" },
+    );
+    expect(explicitLegacy.schedule).toEqual(legacy.schedule);
+    expect(legacy.schedule[1].balance).toBeCloseTo(P * Math.pow(1.005, 2), 6);
+  });
+
+  it("treats a payment exactly on the grace boundary as due", () => {
+    const r = calculateAmortization(
+      P, 0, 1, 1, new Date(2025, 0, 15), 0, [], 0, "semi-monthly", null, 1,
+      "none", {
+        firstPaymentDate: new Date(2025, 0, 15),
+        semiMonthlyDueDays: [1, 15],
+      },
+    );
+    const grace = r.schedule.filter((row) => row.isGrace);
+    expect(grace.map((row) => [row.date.getMonth(), row.date.getDate()]))
+      .toEqual([[0, 15], [1, 1]]);
+    expect(r.schedule[2].date).toEqual(new Date(2025, 1, 15));
+    expect(r.schedule[2].isGrace).toBe(false);
+    expect(r.schedule[2].payment).toBeGreaterThan(0);
+  });
 });

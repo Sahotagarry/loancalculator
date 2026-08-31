@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { and, eq, isNull } from "drizzle-orm";
-import { db, masterAgreementsTable, loansTable } from "@workspace/db";
+import { db, masterAgreementsTable, loansTable, filesTable } from "@workspace/db";
 import {
   GetFileParams,
   CreateMasterAgreementBody,
@@ -9,8 +9,8 @@ import {
   UpdateMasterAgreementBody,
   DeleteMasterAgreementParams,
 } from "@workspace/api-zod";
-import { loadAzureSettings, requireSettings, UserFacingError } from "../lib/azure-settings";
-import { retrieveDocument } from "../lib/document-store";
+import { loadAzureSettings, UserFacingError } from "../lib/azure-settings";
+import { documentBelongsTo, retrieveDocument } from "../lib/document-store";
 
 const router: IRouter = Router();
 
@@ -60,6 +60,16 @@ router.post("/files/:id/master-agreements", async (req, res): Promise<void> => {
     return;
   }
   const data = parsed.data;
+  if ("sourceDocumentBlob" in (req.body as Record<string, unknown>)) {
+    res.status(400).json({ error: "sourceDocumentBlob is not accepted; use sourceDocumentId" }); return;
+  }
+  if (data.sourceDocumentId) {
+    const [file] = await db.select({ clientId: filesTable.clientId }).from(filesTable).where(eq(filesTable.id, params.data.id));
+    const document = file ? await documentBelongsTo(data.sourceDocumentId, {
+      tenantId: req.auth!.tenantId, firmId: req.auth!.firmId, clientId: file.clientId, fileId: params.data.id,
+    }) : null;
+    if (!document) { res.status(400).json({ error: "sourceDocumentId does not belong to this file" }); return; }
+  }
 
   if (!data.lender.trim()) {
     res.status(400).json({ error: "Lender is required" });
@@ -80,7 +90,7 @@ router.post("/files/:id/master-agreements", async (req, res): Promise<void> => {
       securityClauses: data.securityClauses ?? null,
       securityDescription: data.securityDescription ?? null,
       covenantDescription: data.covenantDescription ?? null,
-      sourceDocumentBlob: data.sourceDocumentBlob ?? null,
+       sourceDocumentBlob: data.sourceDocumentId ?? null,
       sourceDocumentName: data.sourceDocumentName ?? null,
     })
     .returning();
@@ -208,10 +218,10 @@ router.get("/master-agreements/:id/source-document", async (req, res): Promise<v
 
   try {
     const settings = await loadAzureSettings();
-    if (!master.sourceDocumentBlob.startsWith("db:")) {
-      requireSettings(settings, ["storageConnectionString"], "Downloading the source document");
-    }
-    const buffer = await retrieveDocument(settings, master.sourceDocumentBlob);
+    const [file] = await db.select({ clientId: filesTable.clientId }).from(filesTable).where(eq(filesTable.id, master.fileId));
+    const buffer = file ? await retrieveDocument(settings, master.sourceDocumentBlob, {
+      tenantId: req.auth!.tenantId, firmId: req.auth!.firmId, clientId: file.clientId, fileId: master.fileId,
+    }) : null;
     if (!buffer) {
       res.status(404).json({ error: "The stored document could not be found" });
       return;

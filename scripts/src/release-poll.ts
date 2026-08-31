@@ -10,6 +10,8 @@ export interface ActionsRun {
   html_url: string;
   /** Workflow file path, e.g. ".github/workflows/deploy.yml" */
   path?: string;
+  head_sha?: string;
+  event?: string;
 }
 
 export interface PollOptions {
@@ -23,6 +25,7 @@ export interface PollOptions {
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
   log?: (msg: string) => void;
+  expectedRunId?: number;
 }
 
 export class DeploymentFailedError extends Error {
@@ -60,6 +63,7 @@ export async function pollForRunCompletion(options: PollOptions): Promise<Action
     sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
     now = () => Date.now(),
     log = () => {},
+    expectedRunId,
   } = options;
 
   const deadline = now() + deadlineMs;
@@ -67,7 +71,14 @@ export async function pollForRunCompletion(options: PollOptions): Promise<Action
 
   while (now() < deadline) {
     const runs = await fetchRuns(headSha);
-    const run = runs[0];
+    const matchingRuns = runs.filter((run) =>
+      run.head_sha === headSha &&
+      (expectedRunId === undefined || run.id === expectedRunId),
+    );
+    if (matchingRuns.length > 1 && expectedRunId === undefined) {
+      throw new Error(`Multiple deployment runs found for ${headSha}; refusing an ambiguous Azure association.`);
+    }
+    const run = matchingRuns[0];
     if (run) {
       if (!sawRun) {
         sawRun = true;

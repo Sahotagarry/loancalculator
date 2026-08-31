@@ -1,8 +1,92 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, timestamp, date, numeric, boolean, integer, doublePrecision, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, timestamp, date, numeric, boolean, integer, doublePrecision, jsonb, type AnyPgColumn } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { filesTable } from "./files";
+
+export type AgreementModificationAssessment = {
+  status: "confirmed";
+  assessmentDate: string;
+  confirmedAt: string;
+  confirmedBy: string;
+  evidence: {
+    changeSummary: string;
+    contractualChanges: Array<{
+      term: string;
+      predecessorValue: string;
+      successorValue: string;
+      significance: string;
+      sourceReference: string;
+    }>;
+    qualitativeFactors: string[];
+    facts: {
+      creditorChanged: boolean;
+      creditorChangedEvidence?: string;
+      legalDischarge: boolean;
+      legalDischargeEvidence?: string;
+      relatedParty: boolean;
+      relatedPartyEvidence?: string;
+    };
+    quantitativeTest?: {
+      method: string;
+      originalEffectiveRate: number;
+      carryingAmount: number;
+      originalRemainingCashFlows: Array<{
+        date: string;
+        amount: number;
+        description: string;
+        sourceReference: string;
+      }>;
+      modifiedCashFlows: Array<{
+        date: string;
+        amount: number;
+        description: string;
+        sourceReference: string;
+      }>;
+      sameDayPaymentTreatment: "include" | "exclude";
+      creditorFees: number;
+      otherTransactionCosts: number;
+      accruedInterest: number;
+      accruedInterestTreatment:
+        | "included_in_carrying_amount"
+        | "include_in_cash_flows"
+        | "add_to_carrying_amount"
+        | "exclude";
+      predecessorAmount?: number;
+      successorAmount?: number;
+      presentValueOfOriginalRemainingCashFlows: number;
+      presentValueOfModifiedCashFlows: number;
+      differenceAmount: number;
+      differencePercent: number;
+      retainedFeesAndCosts: number;
+      retainedFeesAndCostsSourceReference: string;
+      newFeesAndCosts: number;
+      settlementConsideration?: number;
+      recommendation: "derecognize_original" | "account_as_modification";
+    } | null;
+  };
+  conclusion: {
+    agreementChangeType: "renewal" | "modification";
+    accountingTreatment: "continuation" | "extinguishment" | "new_lease";
+    rationale: string;
+    leaseTransition?: {
+      predecessorLeaseType: "operating" | "capital";
+      originalLeaseTerminated: boolean;
+      replacementLeaseExecuted: boolean;
+      terminationEvidenceReference: string;
+      entryDate: string;
+      debitAccount: string;
+      creditAccount: string;
+      amount: number;
+      entryEvidenceReference: string;
+      predecessorDeferredRentAsset: number | null;
+      predecessorDeferredRentLiability: number | null;
+      predecessorAssetCost: number | null;
+      predecessorAccumulatedDepreciation: number | null;
+      successorInitialAmount: number;
+    };
+  };
+};
 
 export const loansTable = pgTable("loans", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -18,11 +102,31 @@ export const loansTable = pgTable("loans", {
   // Lump-sum paid upfront; the amortized (financed) balance is principal - downPayment
   downPayment: numeric("down_payment", { precision: 15, scale: 2 }).notNull().default("0"),
   interestRate: numeric("interest_rate", { precision: 5, scale: 2 }).notNull(),
+  // Contractual rate basis. Public benchmark identity is deliberately distinct
+  // from a lender's contractual prime designation.
+  rateType: text("rate_type").notNull().default("fixed"), // fixed | prime_linked
+  rateBenchmark: text("rate_benchmark"), // current: boc_v80691311; boc_v122495 is retired/read-only
+  contractualPrimeName: text("contractual_prime_name"),
+  benchmarkEquivalentToContractualPrime: boolean("benchmark_equivalent_to_contractual_prime"),
+  rateSpread: numeric("rate_spread", { precision: 7, scale: 4 }),
+  rateResetFrequency: text("rate_reset_frequency"), // immediate | monthly | quarterly | annual
+  rateEffectiveConvention: text("rate_effective_convention"), // observation_date | next_business_day | next_payment_date
+  ratePaymentTreatment: text("rate_payment_treatment"), // keep_payment | keep_maturity
+  rateRefreshCheckpointDate: date("rate_refresh_checkpoint_date", { mode: "string" }),
+  // Frozen day-one variable-rate cash-flow assumption evidence. Realized
+  // resets never mutate this object.
+  initialFvRateAssumption: jsonb("initial_fv_rate_assumption").$type<Record<string, unknown>>(),
   amortizationYears: doublePrecision("amortization_years").notNull(),
   termYears: doublePrecision("term_years").notNull(),
   startDate: date("start_date", { mode: "string" }).notNull(),
   fiscalYearEnd: date("fiscal_year_end", { mode: "string" }).notNull(),
   paymentFrequency: text("payment_frequency").notNull().default("monthly"),
+  // Existing schedules pay at period end and include grace in the stated term.
+  paymentTiming: text("payment_timing").notNull().default("end"), // 'beginning' | 'end'
+  graceTermMode: text("grace_term_mode").notNull().default("included"), // 'included' | 'added'
+  firstPaymentDate: date("first_payment_date", { mode: "string" }),
+  semiMonthlyFirstDueDay: integer("semi_monthly_first_due_day"),
+  semiMonthlySecondDueDay: integer("semi_monthly_second_due_day"),
   // Payment grace period (no payments before repayment starts)
   graceMonths: integer("grace_months").notNull().default(0),
   graceInterestTreatment: text("grace_interest_treatment").notNull().default("capitalized"), // 'capitalized' | 'none'
@@ -83,6 +187,12 @@ export const loansTable = pgTable("loans", {
   covenantViolation: boolean("covenant_violation").notNull().default(false),
   // Roll-forward tracking
   rolledFromId: varchar("rolled_from_id"),
+  // User-selected legal agreement lineage. This is deliberately separate from
+  // annual file roll-forward lineage and is never inferred by the server.
+  predecessorAgreementId: varchar("predecessor_agreement_id")
+    .references((): AnyPgColumn => loansTable.id),
+  modificationEffectiveDate: date("modification_effective_date", { mode: "string" }),
+  modificationAssessment: jsonb("modification_assessment").$type<AgreementModificationAssessment>(),
   // Optional link to a master financing agreement (facility grouping).
   masterAgreementId: varchar("master_agreement_id"),
   // ASPE 3856 fair value rate adjustment
@@ -95,6 +205,15 @@ export const loansTable = pgTable("loans", {
   sourceDocumentName: text("source_document_name"),
   // Review diagnostics dismissed by the user as not applicable (finding ids)
   dismissedFindings: jsonb("dismissed_findings").$type<string[]>(),
+  // Compatibility projection of the active immutable contract revision.
+  // Nullable so pre-revision records remain readable until lazily backfilled.
+  currentRevisionId: varchar("current_revision_id"),
+  currentRevisionHash: text("current_revision_hash"),
+  calculationVersion: text("calculation_version"),
+  // Compatibility projection of the active immutable event timeline.
+  activeEventSetId: varchar("active_event_set_id"),
+  activeEventSetVersion: integer("active_event_set_version").notNull().default(0),
+  activeEventSetHash: text("active_event_set_hash"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
   // Soft delete: when set, the loan/lease is in the trash (hidden but recoverable)

@@ -5,6 +5,184 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+export type AuthMeRole = typeof AuthMeRole[keyof typeof AuthMeRole];
+
+
+export const AuthMeRole = {
+  admin: 'admin',
+  manager: 'manager',
+  accountant: 'accountant',
+  read_only: 'read_only',
+} as const;
+
+export interface AuthMe {
+  tenantId: string;
+  objectId: string;
+  firmId: string;
+  displayName?: string | null;
+  email?: string | null;
+  role: AuthMeRole;
+}
+
+export type AppUserRole = typeof AppUserRole[keyof typeof AppUserRole];
+
+
+export const AppUserRole = {
+  admin: 'admin',
+  manager: 'manager',
+  accountant: 'accountant',
+  read_only: 'read_only',
+} as const;
+
+export interface AppUser {
+  tenantId?: string;
+  objectId: string;
+  firmId?: string;
+  displayName?: string | null;
+  email?: string | null;
+  role: AppUserRole;
+  isActive: boolean;
+}
+
+export type AppUserInputRole = typeof AppUserInputRole[keyof typeof AppUserInputRole];
+
+
+export const AppUserInputRole = {
+  admin: 'admin',
+  manager: 'manager',
+  accountant: 'accountant',
+  read_only: 'read_only',
+} as const;
+
+export interface AppUserInput {
+  objectId: string;
+  displayName?: string | null;
+  email?: string | null;
+  role: AppUserInputRole;
+  isActive?: boolean;
+}
+
+export type AppUserUpdateRole = typeof AppUserUpdateRole[keyof typeof AppUserUpdateRole];
+
+
+export const AppUserUpdateRole = {
+  admin: 'admin',
+  manager: 'manager',
+  accountant: 'accountant',
+  read_only: 'read_only',
+} as const;
+
+export interface AppUserUpdate {
+  displayName?: string | null;
+  email?: string | null;
+  role?: AppUserUpdateRole;
+  isActive?: boolean;
+}
+
+export interface ClientMembersInput {
+  memberObjectIds: string[];
+}
+
+export type FvDecisionConfirmationInputTreatment = typeof FvDecisionConfirmationInputTreatment[keyof typeof FvDecisionConfirmationInputTreatment];
+
+
+export const FvDecisionConfirmationInputTreatment = {
+  use_fv: 'use_fv',
+  trivial: 'trivial',
+  immaterial: 'immaterial',
+} as const;
+
+export interface FvDecisionConfirmationInput {
+  /** @minimum 0 */
+  expectedVersion: number;
+  treatment: FvDecisionConfirmationInputTreatment;
+  /** @nullable */
+  marketEffectiveRate?: number | null;
+  /** @nullable */
+  rationaleNote?: string | null;
+  /** @minLength 1 */
+  confirmedBy: string;
+}
+
+export type FvDecisionConfirmationTreatment = typeof FvDecisionConfirmationTreatment[keyof typeof FvDecisionConfirmationTreatment];
+
+
+export const FvDecisionConfirmationTreatment = {
+  use_fv: 'use_fv',
+  trivial: 'trivial',
+  immaterial: 'immaterial',
+} as const;
+
+export type FvDecisionConfirmationEvidence = { [key: string]: unknown };
+
+export interface FvDecisionConfirmation {
+  id: string;
+  loanId: string;
+  /**
+     * Immutable confirmation from which this historical evidence was inherited.
+     * @nullable
+     */
+  sourceConfirmationId?: string | null;
+  /**
+     * Source loan that owned the inherited evidence.
+     * @nullable
+     */
+  inheritedFromLoanId?: string | null;
+  /**
+     * Source reporting file for the inherited evidence.
+     * @nullable
+     */
+  sourceFileId?: string | null;
+  version: number;
+  treatment: FvDecisionConfirmationTreatment;
+  /** @nullable */
+  marketEffectiveRate?: string | null;
+  /** @nullable */
+  rationaleNote?: string | null;
+  confirmedAt: string;
+  confirmedBy: string;
+  canonicalFingerprint: string;
+  contractFingerprint: string;
+  /** @nullable */
+  eventSetFingerprint?: string | null;
+  reportingContextFingerprint: string;
+  /** @nullable */
+  modificationFingerprint?: string | null;
+  evidenceVersion: string;
+  calculationVersion: string;
+  evidence: FvDecisionConfirmationEvidence;
+}
+
+export type FvDecisionHistoryStatus = typeof FvDecisionHistoryStatus[keyof typeof FvDecisionHistoryStatus];
+
+
+export const FvDecisionHistoryStatus = {
+  current: 'current',
+  stale: 'stale',
+  incomplete: 'incomplete',
+} as const;
+
+export type FvDecisionHistoryStaleReasonsItem = typeof FvDecisionHistoryStaleReasonsItem[keyof typeof FvDecisionHistoryStaleReasonsItem];
+
+
+export const FvDecisionHistoryStaleReasonsItem = {
+  contract_terms_changed: 'contract_terms_changed',
+  event_or_rate_history_changed: 'event_or_rate_history_changed',
+  reporting_context_changed: 'reporting_context_changed',
+  modification_assessment_changed: 'modification_assessment_changed',
+  compatibility_projection_mismatch: 'compatibility_projection_mismatch',
+  inherited_historical_evidence: 'inherited_historical_evidence',
+} as const;
+
+export interface FvDecisionHistory {
+  status: FvDecisionHistoryStatus;
+  reviewRequired: boolean;
+  staleReasons: FvDecisionHistoryStaleReasonsItem[];
+  missingRequirements: string[];
+  current?: FvDecisionConfirmation | null;
+  history: FvDecisionConfirmation[];
+}
+
 export interface TrashedClient {
   id: string;
   name: string;
@@ -73,6 +251,7 @@ export interface File {
   fiscalYearEnd: string;
   trivialThreshold?: number;
   materiality?: number;
+  rolledFromId?: string | null;
   dismissedFindings?: string[] | null;
   createdAt: string;
   updatedAt: string;
@@ -93,6 +272,76 @@ export interface UpdateFile {
   dismissedFindings?: string[] | null;
 }
 
+export type LoanRateType = typeof LoanRateType[keyof typeof LoanRateType];
+
+
+export const LoanRateType = {
+  fixed: 'fixed',
+  prime_linked: 'prime_linked',
+} as const;
+
+/**
+ * Current BoC prime is boc_v80691311; legacy boc_v122495 is returned only as retired, unresolved evidence.
+ */
+export type LoanRateBenchmark = typeof LoanRateBenchmark[keyof typeof LoanRateBenchmark] | null;
+
+
+export const LoanRateBenchmark = {
+  boc_v80691311: 'boc_v80691311',
+  boc_v122495: 'boc_v122495',
+} as const;
+
+export type LoanRateResetFrequency = typeof LoanRateResetFrequency[keyof typeof LoanRateResetFrequency] | null;
+
+
+export const LoanRateResetFrequency = {
+  immediate: 'immediate',
+  monthly: 'monthly',
+  quarterly: 'quarterly',
+  annual: 'annual',
+} as const;
+
+export type LoanRateEffectiveConvention = typeof LoanRateEffectiveConvention[keyof typeof LoanRateEffectiveConvention] | null;
+
+
+export const LoanRateEffectiveConvention = {
+  observation_date: 'observation_date',
+  next_business_day: 'next_business_day',
+  next_payment_date: 'next_payment_date',
+} as const;
+
+export type LoanRatePaymentTreatment = typeof LoanRatePaymentTreatment[keyof typeof LoanRatePaymentTreatment] | null;
+
+
+export const LoanRatePaymentTreatment = {
+  keep_payment: 'keep_payment',
+  keep_maturity: 'keep_maturity',
+} as const;
+
+export type LoanInitialFvRateAssumption = { [key: string]: unknown } | null;
+
+/**
+ * Whether scheduled payments are due at the end or beginning of each payment period.
+ */
+export type LoanPaymentTiming = typeof LoanPaymentTiming[keyof typeof LoanPaymentTiming];
+
+
+export const LoanPaymentTiming = {
+  beginning: 'beginning',
+  end: 'end',
+} as const;
+
+/**
+ * Whether grace months are included in the stated term or extend it.
+ */
+export type LoanGraceTermMode = typeof LoanGraceTermMode[keyof typeof LoanGraceTermMode];
+
+
+export const LoanGraceTermMode = {
+  included: 'included',
+  added: 'added',
+} as const;
+
 export type LoanGraceInterestTreatment = typeof LoanGraceInterestTreatment[keyof typeof LoanGraceInterestTreatment];
 
 
@@ -110,12 +359,257 @@ export const LoanFvDecision = {
   immaterial: 'immaterial',
 } as const;
 
+export type LoanActiveRateEventsItem = { [key: string]: unknown };
+
 export interface RentStep {
   fromYear: number;
   toYear: number;
   monthlyRent: number;
   annualRatePerSquareFoot?: number | null;
 }
+
+export type AgreementModificationAssessmentStatus = typeof AgreementModificationAssessmentStatus[keyof typeof AgreementModificationAssessmentStatus];
+
+
+export const AgreementModificationAssessmentStatus = {
+  confirmed: 'confirmed',
+} as const;
+
+export interface AgreementContractualChange {
+  /** @minLength 1 */
+  term: string;
+  /** @minLength 1 */
+  predecessorValue: string;
+  /** @minLength 1 */
+  successorValue: string;
+  /** @minLength 1 */
+  significance: string;
+  /** @minLength 1 */
+  sourceReference: string;
+}
+
+export interface AgreementModificationFacts {
+  creditorChanged: boolean;
+  creditorChangedEvidence?: string;
+  legalDischarge: boolean;
+  legalDischargeEvidence?: string;
+  relatedParty: boolean;
+  relatedPartyEvidence?: string;
+}
+
+export interface AgreementCashFlow {
+  date: string;
+  amount: number;
+  /** @minLength 1 */
+  description: string;
+  /** @minLength 1 */
+  sourceReference: string;
+}
+
+export type AgreementQuantitativeTestSameDayPaymentTreatment = typeof AgreementQuantitativeTestSameDayPaymentTreatment[keyof typeof AgreementQuantitativeTestSameDayPaymentTreatment];
+
+
+export const AgreementQuantitativeTestSameDayPaymentTreatment = {
+  include: 'include',
+  exclude: 'exclude',
+} as const;
+
+export type AgreementQuantitativeTestAccruedInterestTreatment = typeof AgreementQuantitativeTestAccruedInterestTreatment[keyof typeof AgreementQuantitativeTestAccruedInterestTreatment];
+
+
+export const AgreementQuantitativeTestAccruedInterestTreatment = {
+  included_in_carrying_amount: 'included_in_carrying_amount',
+  include_in_cash_flows: 'include_in_cash_flows',
+  add_to_carrying_amount: 'add_to_carrying_amount',
+  exclude: 'exclude',
+} as const;
+
+export type AgreementQuantitativeTestRecommendation = typeof AgreementQuantitativeTestRecommendation[keyof typeof AgreementQuantitativeTestRecommendation];
+
+
+export const AgreementQuantitativeTestRecommendation = {
+  derecognize_original: 'derecognize_original',
+  account_as_modification: 'account_as_modification',
+} as const;
+
+export interface AgreementQuantitativeTest {
+  /** @minLength 1 */
+  method: string;
+  originalEffectiveRate: number;
+  carryingAmount: number;
+  /** @minItems 1 */
+  originalRemainingCashFlows: AgreementCashFlow[];
+  /** @minItems 1 */
+  modifiedCashFlows: AgreementCashFlow[];
+  sameDayPaymentTreatment: AgreementQuantitativeTestSameDayPaymentTreatment;
+  creditorFees: number;
+  otherTransactionCosts: number;
+  accruedInterest: number;
+  accruedInterestTreatment: AgreementQuantitativeTestAccruedInterestTreatment;
+  predecessorAmount?: number;
+  successorAmount?: number;
+  /** Canonical server-computed denominator: present value of remaining original cash flows at the original effective rate. */
+  presentValueOfOriginalRemainingCashFlows: number;
+  /** Canonical server-computed present value of modified cash flows, including applicable creditor fees and accrued interest treatment. */
+  presentValueOfModifiedCashFlows: number;
+  differenceAmount: number;
+  differencePercent: number;
+  /**
+     * Separately evidenced prior unamortized fees and costs; never includes current transaction costs.
+     * @minimum 0
+     */
+  retainedFeesAndCosts: number;
+  /** @minLength 1 */
+  retainedFeesAndCostsSourceReference: string;
+  /**
+     * Resulting-basis input equal to creditorFees plus otherTransactionCosts.
+     * @minimum 0
+     */
+  newFeesAndCosts: number;
+  /**
+     * Explicit settlement consideration. Required and greater than zero when the accountant concludes extinguishment; never inferred from present value.
+     * @minimum 0
+     */
+  settlementConsideration?: number;
+  recommendation: AgreementQuantitativeTestRecommendation;
+}
+
+export interface AgreementModificationEvidence {
+  /** @minLength 1 */
+  changeSummary: string;
+  /** @minItems 1 */
+  contractualChanges: AgreementContractualChange[];
+  qualitativeFactors: string[];
+  facts: AgreementModificationFacts;
+  quantitativeTest?: AgreementQuantitativeTest | null;
+}
+
+export type AgreementModificationConclusionAgreementChangeType = typeof AgreementModificationConclusionAgreementChangeType[keyof typeof AgreementModificationConclusionAgreementChangeType];
+
+
+export const AgreementModificationConclusionAgreementChangeType = {
+  renewal: 'renewal',
+  modification: 'modification',
+} as const;
+
+export type AgreementModificationConclusionAccountingTreatment = typeof AgreementModificationConclusionAccountingTreatment[keyof typeof AgreementModificationConclusionAccountingTreatment];
+
+
+export const AgreementModificationConclusionAccountingTreatment = {
+  continuation: 'continuation',
+  extinguishment: 'extinguishment',
+  new_lease: 'new_lease',
+} as const;
+
+export type AgreementLeaseTransitionPredecessorLeaseType = typeof AgreementLeaseTransitionPredecessorLeaseType[keyof typeof AgreementLeaseTransitionPredecessorLeaseType];
+
+
+export const AgreementLeaseTransitionPredecessorLeaseType = {
+  operating: 'operating',
+  capital: 'capital',
+} as const;
+
+export interface AgreementLeaseTransition {
+  predecessorLeaseType: AgreementLeaseTransitionPredecessorLeaseType;
+  originalLeaseTerminated: boolean;
+  replacementLeaseExecuted: boolean;
+  /** @minLength 1 */
+  terminationEvidenceReference: string;
+  entryDate: string;
+  /** @minLength 1 */
+  debitAccount: string;
+  /** @minLength 1 */
+  creditAccount: string;
+  amount: number;
+  /** @minLength 1 */
+  entryEvidenceReference: string;
+  /** @minimum 0 */
+  predecessorDeferredRentAsset: number | null;
+  /** @minimum 0 */
+  predecessorDeferredRentLiability: number | null;
+  /** @minimum 0 */
+  predecessorAssetCost: number | null;
+  /** @minimum 0 */
+  predecessorAccumulatedDepreciation: number | null;
+  /** @minimum 0 */
+  successorInitialAmount: number;
+}
+
+export interface AgreementModificationConclusion {
+  agreementChangeType: AgreementModificationConclusionAgreementChangeType;
+  accountingTreatment: AgreementModificationConclusionAccountingTreatment;
+  /** @minLength 1 */
+  rationale: string;
+  leaseTransition?: AgreementLeaseTransition;
+}
+
+export interface AgreementModificationAssessment {
+  status: AgreementModificationAssessmentStatus;
+  assessmentDate: string;
+  confirmedAt: string;
+  /** @minLength 1 */
+  confirmedBy: string;
+  evidence: AgreementModificationEvidence;
+  conclusion: AgreementModificationConclusion;
+}
+
+export type LoanEventInputKind = typeof LoanEventInputKind[keyof typeof LoanEventInputKind];
+
+
+export const LoanEventInputKind = {
+  principal_prepayment: 'principal_prepayment',
+} as const;
+
+export type LoanEventInputOrdering = typeof LoanEventInputOrdering[keyof typeof LoanEventInputOrdering];
+
+
+export const LoanEventInputOrdering = {
+  before_scheduled_payment: 'before_scheduled_payment',
+  after_scheduled_payment: 'after_scheduled_payment',
+} as const;
+
+export type LoanEventInputTreatment = typeof LoanEventInputTreatment[keyof typeof LoanEventInputTreatment];
+
+
+export const LoanEventInputTreatment = {
+  keep_payment: 'keep_payment',
+  keep_maturity: 'keep_maturity',
+} as const;
+
+export type LoanEventInputClassification = typeof LoanEventInputClassification[keyof typeof LoanEventInputClassification];
+
+
+export const LoanEventInputClassification = {
+  ordinary: 'ordinary',
+  agreement_change: 'agreement_change',
+} as const;
+
+export interface LoanEventInput {
+  kind: LoanEventInputKind;
+  effectiveDate: string;
+  ordering: LoanEventInputOrdering;
+  /** @minimum 1 */
+  sequence: number;
+  /** @exclusiveMinimum 0 */
+  amount: number;
+  treatment: LoanEventInputTreatment;
+  classification: LoanEventInputClassification;
+  /** @minLength 1 */
+  source: string;
+  /** @minLength 1 */
+  reason: string;
+  authoredAt: string;
+  author?: string | null;
+  supersedesEventId?: string | null;
+  originEventId?: string | null;
+}
+
+export type LoanEvent = LoanEventInput & {
+  id: string;
+  setId: string;
+  loanId: string;
+  termRevisionId: string;
+};
 
 export interface Loan {
   id: string;
@@ -127,11 +621,37 @@ export interface Loan {
   principal: string;
   downPayment?: string;
   interestRate: string;
+  rateType?: LoanRateType;
+  /** Current BoC prime is boc_v80691311; legacy boc_v122495 is returned only as retired, unresolved evidence. */
+  rateBenchmark?: LoanRateBenchmark;
+  contractualPrimeName?: string | null;
+  benchmarkEquivalentToContractualPrime?: boolean | null;
+  rateSpread?: string | null;
+  rateResetFrequency?: LoanRateResetFrequency;
+  rateEffectiveConvention?: LoanRateEffectiveConvention;
+  ratePaymentTreatment?: LoanRatePaymentTreatment;
+  rateRefreshCheckpointDate?: string | null;
+  initialFvRateAssumption?: LoanInitialFvRateAssumption;
   amortizationYears: number;
   termYears: number;
   startDate: string;
   fiscalYearEnd: string;
   paymentFrequency: string;
+  /** Whether scheduled payments are due at the end or beginning of each payment period. */
+  paymentTiming: LoanPaymentTiming;
+  /** Whether grace months are included in the stated term or extend it. */
+  graceTermMode: LoanGraceTermMode;
+  firstPaymentDate?: string | null;
+  /**
+     * @minimum 1
+     * @maximum 31
+     */
+  semiMonthlyFirstDueDay?: number | null;
+  /**
+     * @minimum 1
+     * @maximum 31
+     */
+  semiMonthlySecondDueDay?: number | null;
   graceMonths?: number;
   graceInterestTreatment?: LoanGraceInterestTreatment;
   ioMonths: number;
@@ -170,15 +690,92 @@ export interface Loan {
   inducementReceivedInCash: boolean;
   covenantViolation: boolean;
   rolledFromId?: string;
+  /** Explicit user-selected predecessor agreement; never inferred from annual roll-forward lineage. */
+  predecessorAgreementId?: string | null;
+  modificationEffectiveDate?: string | null;
+  modificationAssessment?: AgreementModificationAssessment | null;
   masterAgreementId?: string | null;
   fvRate?: string;
   fvDecision?: LoanFvDecision;
   fvDecisionNote?: string;
   dismissedFindings?: string[] | null;
   sourceDocumentName?: string | null;
+  currentRevisionId?: string | null;
+  currentRevisionHash?: string | null;
+  calculationVersion?: string | null;
+  activeEventSetId?: string | null;
+  activeEventSetVersion: number;
+  activeEventSetHash?: string | null;
+  /** Events in the active immutable event set, in canonical effective-date, ordering, and sequence order. */
+  activeEvents: LoanEvent[];
+  /** Active immutable sourced or overridden rate-reset segments. */
+  activeRateEvents?: LoanActiveRateEventsItem[];
   createdAt: string;
   updatedAt: string;
 }
+
+export type CreateLoanRateType = typeof CreateLoanRateType[keyof typeof CreateLoanRateType];
+
+
+export const CreateLoanRateType = {
+  fixed: 'fixed',
+  prime_linked: 'prime_linked',
+} as const;
+
+/**
+ * Prime-linked contracts must explicitly adopt the current BoC prime benchmark.
+ */
+export type CreateLoanRateBenchmark = typeof CreateLoanRateBenchmark[keyof typeof CreateLoanRateBenchmark] | null;
+
+
+export const CreateLoanRateBenchmark = {
+  boc_v80691311: 'boc_v80691311',
+} as const;
+
+export type CreateLoanRateResetFrequency = typeof CreateLoanRateResetFrequency[keyof typeof CreateLoanRateResetFrequency] | null;
+
+
+export const CreateLoanRateResetFrequency = {
+  immediate: 'immediate',
+  monthly: 'monthly',
+  quarterly: 'quarterly',
+  annual: 'annual',
+} as const;
+
+export type CreateLoanRateEffectiveConvention = typeof CreateLoanRateEffectiveConvention[keyof typeof CreateLoanRateEffectiveConvention] | null;
+
+
+export const CreateLoanRateEffectiveConvention = {
+  observation_date: 'observation_date',
+  next_business_day: 'next_business_day',
+  next_payment_date: 'next_payment_date',
+} as const;
+
+export type CreateLoanRatePaymentTreatment = typeof CreateLoanRatePaymentTreatment[keyof typeof CreateLoanRatePaymentTreatment] | null;
+
+
+export const CreateLoanRatePaymentTreatment = {
+  keep_payment: 'keep_payment',
+  keep_maturity: 'keep_maturity',
+} as const;
+
+export type CreateLoanInitialFvRateAssumption = { [key: string]: unknown } | null;
+
+export type CreateLoanPaymentTiming = typeof CreateLoanPaymentTiming[keyof typeof CreateLoanPaymentTiming];
+
+
+export const CreateLoanPaymentTiming = {
+  beginning: 'beginning',
+  end: 'end',
+} as const;
+
+export type CreateLoanGraceTermMode = typeof CreateLoanGraceTermMode[keyof typeof CreateLoanGraceTermMode];
+
+
+export const CreateLoanGraceTermMode = {
+  included: 'included',
+  added: 'added',
+} as const;
 
 export type CreateLoanGraceInterestTreatment = typeof CreateLoanGraceInterestTreatment[keyof typeof CreateLoanGraceInterestTreatment];
 
@@ -188,6 +785,10 @@ export const CreateLoanGraceInterestTreatment = {
   none: 'none',
 } as const;
 
+/**
+ * Direct FV inputs are rejected; use the FV confirmation endpoint after creating the loan.
+ * @deprecated
+ */
 export type CreateLoanFvDecision = typeof CreateLoanFvDecision[keyof typeof CreateLoanFvDecision];
 
 
@@ -198,6 +799,12 @@ export const CreateLoanFvDecision = {
 } as const;
 
 export interface CreateLoan {
+  /** Optional complete initial principal-event timeline, saved atomically with the first contractual revision. */
+  initialEvents?: LoanEventInput[];
+  /** @minLength 1 */
+  initialEventSetReason?: string;
+  /** @minLength 1 */
+  initialEventSetSource?: string;
   name: string;
   description?: string;
   counterparty?: string | null;
@@ -205,11 +812,34 @@ export interface CreateLoan {
   principal: number;
   downPayment?: number | null;
   interestRate: number;
+  rateType?: CreateLoanRateType;
+  /** Prime-linked contracts must explicitly adopt the current BoC prime benchmark. */
+  rateBenchmark?: CreateLoanRateBenchmark;
+  contractualPrimeName?: string | null;
+  benchmarkEquivalentToContractualPrime?: boolean | null;
+  rateSpread?: number | null;
+  rateResetFrequency?: CreateLoanRateResetFrequency;
+  rateEffectiveConvention?: CreateLoanRateEffectiveConvention;
+  ratePaymentTreatment?: CreateLoanRatePaymentTreatment;
+  initialFvRateAssumption?: CreateLoanInitialFvRateAssumption;
   amortizationYears: number;
   termYears: number;
   startDate: string;
   fiscalYearEnd: string;
   paymentFrequency?: string;
+  paymentTiming?: CreateLoanPaymentTiming;
+  graceTermMode?: CreateLoanGraceTermMode;
+  firstPaymentDate?: string | null;
+  /**
+     * @minimum 1
+     * @maximum 31
+     */
+  semiMonthlyFirstDueDay?: number | null;
+  /**
+     * @minimum 1
+     * @maximum 31
+     */
+  semiMonthlySecondDueDay?: number | null;
   graceMonths?: number;
   graceInterestTreatment?: CreateLoanGraceInterestTreatment;
   ioMonths?: number;
@@ -247,13 +877,94 @@ export interface CreateLoan {
   camMonthly?: number | null;
   inducementReceivedInCash?: boolean;
   covenantViolation?: boolean;
+  /**
+     * Direct FV inputs are rejected; use the FV confirmation endpoint after creating the loan.
+     * @deprecated
+     */
   fvRate?: number;
+  /**
+     * Direct FV inputs are rejected; use the FV confirmation endpoint after creating the loan.
+     * @deprecated
+     */
   fvDecision?: CreateLoanFvDecision;
+  /**
+     * Direct FV inputs are rejected; use the FV confirmation endpoint after creating the loan.
+     * @deprecated
+     */
   fvDecisionNote?: string;
-  sourceDocumentBlob?: string | null;
+  sourceDocumentId?: string | null;
   sourceDocumentName?: string | null;
   masterAgreementId?: string | null;
+  /** Explicitly links this agreement to a prior agreement. Send null with the other modification fields null to remove a link. */
+  predecessorAgreementId?: string | null;
+  modificationEffectiveDate?: string | null;
+  modificationAssessment?: AgreementModificationAssessment | null;
+  /** Audit reason recorded on the initial contract revision. */
+  changeReason?: string;
 }
+
+export type UpdateLoanRateType = typeof UpdateLoanRateType[keyof typeof UpdateLoanRateType];
+
+
+export const UpdateLoanRateType = {
+  fixed: 'fixed',
+  prime_linked: 'prime_linked',
+} as const;
+
+/**
+ * Set boc_v80691311 to explicitly adopt the current BoC prime benchmark; retired identifiers cannot be written.
+ */
+export type UpdateLoanRateBenchmark = typeof UpdateLoanRateBenchmark[keyof typeof UpdateLoanRateBenchmark] | null;
+
+
+export const UpdateLoanRateBenchmark = {
+  boc_v80691311: 'boc_v80691311',
+} as const;
+
+export type UpdateLoanRateResetFrequency = typeof UpdateLoanRateResetFrequency[keyof typeof UpdateLoanRateResetFrequency] | null;
+
+
+export const UpdateLoanRateResetFrequency = {
+  immediate: 'immediate',
+  monthly: 'monthly',
+  quarterly: 'quarterly',
+  annual: 'annual',
+} as const;
+
+export type UpdateLoanRateEffectiveConvention = typeof UpdateLoanRateEffectiveConvention[keyof typeof UpdateLoanRateEffectiveConvention] | null;
+
+
+export const UpdateLoanRateEffectiveConvention = {
+  observation_date: 'observation_date',
+  next_business_day: 'next_business_day',
+  next_payment_date: 'next_payment_date',
+} as const;
+
+export type UpdateLoanRatePaymentTreatment = typeof UpdateLoanRatePaymentTreatment[keyof typeof UpdateLoanRatePaymentTreatment] | null;
+
+
+export const UpdateLoanRatePaymentTreatment = {
+  keep_payment: 'keep_payment',
+  keep_maturity: 'keep_maturity',
+} as const;
+
+export type UpdateLoanInitialFvRateAssumption = { [key: string]: unknown } | null;
+
+export type UpdateLoanPaymentTiming = typeof UpdateLoanPaymentTiming[keyof typeof UpdateLoanPaymentTiming];
+
+
+export const UpdateLoanPaymentTiming = {
+  beginning: 'beginning',
+  end: 'end',
+} as const;
+
+export type UpdateLoanGraceTermMode = typeof UpdateLoanGraceTermMode[keyof typeof UpdateLoanGraceTermMode];
+
+
+export const UpdateLoanGraceTermMode = {
+  included: 'included',
+  added: 'added',
+} as const;
 
 export type UpdateLoanGraceInterestTreatment = typeof UpdateLoanGraceInterestTreatment[keyof typeof UpdateLoanGraceInterestTreatment];
 
@@ -261,15 +972,6 @@ export type UpdateLoanGraceInterestTreatment = typeof UpdateLoanGraceInterestTre
 export const UpdateLoanGraceInterestTreatment = {
   capitalized: 'capitalized',
   none: 'none',
-} as const;
-
-export type UpdateLoanFvDecision = typeof UpdateLoanFvDecision[keyof typeof UpdateLoanFvDecision];
-
-
-export const UpdateLoanFvDecision = {
-  use_fv: 'use_fv',
-  trivial: 'trivial',
-  immaterial: 'immaterial',
 } as const;
 
 export interface UpdateLoan {
@@ -280,10 +982,33 @@ export interface UpdateLoan {
   principal?: number;
   downPayment?: number | null;
   interestRate?: number;
+  rateType?: UpdateLoanRateType;
+  /** Set boc_v80691311 to explicitly adopt the current BoC prime benchmark; retired identifiers cannot be written. */
+  rateBenchmark?: UpdateLoanRateBenchmark;
+  contractualPrimeName?: string | null;
+  benchmarkEquivalentToContractualPrime?: boolean | null;
+  rateSpread?: number | null;
+  rateResetFrequency?: UpdateLoanRateResetFrequency;
+  rateEffectiveConvention?: UpdateLoanRateEffectiveConvention;
+  ratePaymentTreatment?: UpdateLoanRatePaymentTreatment;
+  initialFvRateAssumption?: UpdateLoanInitialFvRateAssumption;
   amortizationYears?: number;
   termYears?: number;
   startDate?: string;
   paymentFrequency?: string;
+  paymentTiming?: UpdateLoanPaymentTiming;
+  graceTermMode?: UpdateLoanGraceTermMode;
+  firstPaymentDate?: string | null;
+  /**
+     * @minimum 1
+     * @maximum 31
+     */
+  semiMonthlyFirstDueDay?: number | null;
+  /**
+     * @minimum 1
+     * @maximum 31
+     */
+  semiMonthlySecondDueDay?: number | null;
   graceMonths?: number;
   graceInterestTreatment?: UpdateLoanGraceInterestTreatment;
   ioMonths?: number;
@@ -321,11 +1046,14 @@ export interface UpdateLoan {
   camMonthly?: number | null;
   inducementReceivedInCash?: boolean;
   covenantViolation?: boolean;
-  fvRate?: number;
-  fvDecision?: UpdateLoanFvDecision;
-  fvDecisionNote?: string;
   dismissedFindings?: string[] | null;
   masterAgreementId?: string | null;
+  /** Explicitly links this agreement to a prior agreement. Send null with the other modification fields null to remove a link. */
+  predecessorAgreementId?: string | null;
+  modificationEffectiveDate?: string | null;
+  modificationAssessment?: AgreementModificationAssessment | null;
+  /** Audit reason recorded when schedule-driving terms change. */
+  changeReason?: string;
 }
 
 export interface MasterAgreement {
@@ -350,7 +1078,7 @@ export interface CreateMasterAgreement {
   securityClauses?: string[] | null;
   securityDescription?: string | null;
   covenantDescription?: string | null;
-  sourceDocumentBlob?: string | null;
+  sourceDocumentId?: string | null;
   sourceDocumentName?: string | null;
 }
 
@@ -370,6 +1098,56 @@ export interface PrimeRateResponse {
   source: string;
 }
 
+export interface RateOverrideInput {
+  effectiveDate: string;
+  /**
+     * @minimum 0
+     * @maximum 100
+     */
+  benchmarkRate: number;
+  /** @minLength 1 */
+  reason: string;
+  /** @minLength 1 */
+  author: string;
+  /** @minLength 1 */
+  sourceUrl: string;
+}
+
+export interface RateRestoreInput {
+  effectiveDate: string;
+  /** @minLength 1 */
+  author: string;
+}
+
+export interface RateTimeline { [key: string]: unknown }
+
+export type RateRefreshRunStatus = typeof RateRefreshRunStatus[keyof typeof RateRefreshRunStatus];
+
+
+export const RateRefreshRunStatus = {
+  running: 'running',
+  succeeded: 'succeeded',
+  partial: 'partial',
+  failed: 'failed',
+} as const;
+
+export type RateRefreshRunEvidence = { [key: string]: unknown } | null;
+
+export interface RateRefreshRun {
+  id: string;
+  startedAt: string;
+  completedAt?: string | null;
+  status: RateRefreshRunStatus;
+  attempted: number;
+  applied: number;
+  unresolved: number;
+  evidence?: RateRefreshRunEvidence;
+}
+
+export interface RateRefreshInput {
+  date?: string;
+}
+
 export interface RollForwardRequest {
   fileId: string;
   newFiscalYearEnd: string;
@@ -377,7 +1155,31 @@ export interface RollForwardRequest {
 
 export interface RollForwardFileRequest {
   newFiscalYearEnd: string;
+  /**
+     * @minLength 1
+     * @maxLength 500
+     */
+  name?: string;
+  /**
+     * @minimum 0
+     * @maximum 9999999999.99
+     */
+  trivialThreshold?: number | null;
+  /**
+     * @minimum 0
+     * @maximum 9999999999.99
+     */
+  materiality?: number | null;
 }
+
+export type RollForwardFileResult = File & {
+  /** @minimum 0 */
+  rolledLoanCount: number;
+  /** @minimum 0 */
+  skippedLoanCount: number;
+  evidenceVersion: string;
+  idempotent: boolean;
+};
 
 export interface AzureSettingsStatus {
   docIntelEndpoint: string;
@@ -397,16 +1199,6 @@ export interface AzureSettingsInput {
   storageConnectionString?: string;
 }
 
-export interface UnlockSettingsInput {
-  /** @minLength 1 */
-  password: string;
-}
-
-export interface UnlockSettingsResult {
-  token: string;
-  expiresAt: string;
-}
-
 export interface DocumentUpload {
   file: Blob;
 }
@@ -421,6 +1213,22 @@ export const ImportedLoanFieldsPaymentFrequency = {
   weekly: 'weekly',
 } as const;
 
+export type ImportedLoanFieldsPaymentTiming = typeof ImportedLoanFieldsPaymentTiming[keyof typeof ImportedLoanFieldsPaymentTiming] | null;
+
+
+export const ImportedLoanFieldsPaymentTiming = {
+  beginning: 'beginning',
+  end: 'end',
+} as const;
+
+export type ImportedLoanFieldsGraceTermMode = typeof ImportedLoanFieldsGraceTermMode[keyof typeof ImportedLoanFieldsGraceTermMode] | null;
+
+
+export const ImportedLoanFieldsGraceTermMode = {
+  included: 'included',
+  added: 'added',
+} as const;
+
 export type ImportedLoanFieldsGraceInterestTreatment = typeof ImportedLoanFieldsGraceInterestTreatment[keyof typeof ImportedLoanFieldsGraceInterestTreatment] | null;
 
 
@@ -428,6 +1236,49 @@ export const ImportedLoanFieldsGraceInterestTreatment = {
   capitalized: 'capitalized',
   none: 'none',
 } as const;
+
+export type SuggestedLoanEventKind = typeof SuggestedLoanEventKind[keyof typeof SuggestedLoanEventKind];
+
+
+export const SuggestedLoanEventKind = {
+  principal_prepayment: 'principal_prepayment',
+} as const;
+
+export type SuggestedLoanEventOrdering = typeof SuggestedLoanEventOrdering[keyof typeof SuggestedLoanEventOrdering];
+
+
+export const SuggestedLoanEventOrdering = {
+  before_scheduled_payment: 'before_scheduled_payment',
+  after_scheduled_payment: 'after_scheduled_payment',
+} as const;
+
+export type SuggestedLoanEventTreatment = typeof SuggestedLoanEventTreatment[keyof typeof SuggestedLoanEventTreatment] | null;
+
+
+export const SuggestedLoanEventTreatment = {
+  keep_payment: 'keep_payment',
+  keep_maturity: 'keep_maturity',
+} as const;
+
+export type SuggestedLoanEventClassification = typeof SuggestedLoanEventClassification[keyof typeof SuggestedLoanEventClassification] | null;
+
+
+export const SuggestedLoanEventClassification = {
+  ordinary: 'ordinary',
+  agreement_change: 'agreement_change',
+} as const;
+
+export interface SuggestedLoanEvent {
+  kind: SuggestedLoanEventKind;
+  effectiveDate: string;
+  ordering: SuggestedLoanEventOrdering;
+  amount: number;
+  treatment?: SuggestedLoanEventTreatment;
+  classification?: SuggestedLoanEventClassification;
+  source: string;
+  reason: string;
+  requiresConfirmation: boolean;
+}
 
 export interface ImportedLoanFields {
   name?: string | null;
@@ -441,12 +1292,26 @@ export interface ImportedLoanFields {
   termYears?: number | null;
   startDate?: string | null;
   paymentFrequency?: ImportedLoanFieldsPaymentFrequency;
+  paymentTiming?: ImportedLoanFieldsPaymentTiming;
+  graceTermMode?: ImportedLoanFieldsGraceTermMode;
+  firstPaymentDate?: string | null;
+  /**
+     * @minimum 1
+     * @maximum 31
+     */
+  semiMonthlyFirstDueDay?: number | null;
+  /**
+     * @minimum 1
+     * @maximum 31
+     */
+  semiMonthlySecondDueDay?: number | null;
   paymentAmount?: number | null;
   interestOnlyMonths?: number | null;
   graceMonths?: number | null;
   graceInterestTreatment?: ImportedLoanFieldsGraceInterestTreatment;
   balloonPayment?: number | null;
   securityDescription?: string | null;
+  suggestedEvents?: SuggestedLoanEvent[] | null;
 }
 
 export type ImportedLeaseFieldsAssetType = typeof ImportedLeaseFieldsAssetType[keyof typeof ImportedLeaseFieldsAssetType] | null;
@@ -504,6 +1369,58 @@ export interface ImportedMasterAgreementFields {
   covenantDescription?: string | null;
 }
 
+export interface CreateLoanEventSet {
+  /** @minimum 0 */
+  expectedVersion: number;
+  termRevisionId: string;
+  /** @minLength 1 */
+  reason: string;
+  /** @minLength 1 */
+  source: string;
+  author?: string | null;
+  events: LoanEventInput[];
+}
+
+export interface LoanEventSet {
+  id: string;
+  loanId: string;
+  termRevisionId: string;
+  version: number;
+  fingerprint: string;
+  supersedesSetId?: string | null;
+  reason: string;
+  source: string;
+  author?: string | null;
+  createdAt: string;
+  events: LoanEvent[];
+}
+
+export interface LoanEventSetHistory {
+  active: LoanEventSet | null;
+  history: LoanEventSet[];
+}
+
+export type LoanEventSetPreviewEvidence = { [key: string]: unknown };
+
+export interface LoanEventSetPreviewMetrics {
+  nextRegularPayment: number;
+  payoffDate: string | null;
+  contractualMaturity: string | null;
+  totalInterest: number;
+  endingBalance: number;
+}
+
+export interface LoanEventSetPreview {
+  valid: boolean;
+  nextVersion: number;
+  fingerprint: string;
+  termRevisionId: string;
+  orderedEvents: LoanEventInput[];
+  evidence: LoanEventSetPreviewEvidence;
+  before: LoanEventSetPreviewMetrics;
+  after: LoanEventSetPreviewMetrics;
+}
+
 export type DocumentImportResultClassification = typeof DocumentImportResultClassification[keyof typeof DocumentImportResultClassification];
 
 
@@ -514,12 +1431,20 @@ export const DocumentImportResultClassification = {
   other: 'other',
 } as const;
 
+export type DocumentImportResultUnresolvedRateFindingsItem = {
+  loanName?: string | null;
+  observationDate: string;
+  reason: string;
+  action: string;
+};
+
 export interface DocumentImportResult {
   classification: DocumentImportResultClassification;
   confidence: number;
   reasoning: string;
-  documentBlob?: string | null;
+  documentId?: string | null;
   documentName?: string | null;
+  unresolvedRateFindings?: DocumentImportResultUnresolvedRateFindingsItem[];
   loan?: ImportedLoanFields | null;
   lease?: ImportedLeaseFields | null;
   masterAgreement?: ImportedMasterAgreementFields | null;
@@ -533,4 +1458,10 @@ export interface Error {
 export type GetPrimeRateParams = {
 date?: string;
 };
+
+export type OverrideLoanRate201 = { [key: string]: unknown };
+
+export type RestoreLoanSourcedRate201 = { [key: string]: unknown };
+
+export type GetRateResetStatus200 = { [key: string]: unknown };
 

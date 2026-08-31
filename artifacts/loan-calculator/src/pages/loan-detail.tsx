@@ -1,7 +1,8 @@
+import { useAuth } from "@/hooks/use-auth";
 import { useState, useMemo } from "react";
 import { useRoute } from "wouter";
 import { Link } from "wouter";
-import { useGetLoan, useGetFile, useGetClient, useUpdateLoan, useGetPrimeRate, useListMasterAgreements } from "@workspace/api-client-react";
+import { useGetLoan, getGetLoanQueryKey, useGetFile, useGetClient, useUpdateLoan, useGetPrimeRate, useListLoans, useListMasterAgreements, useCreateLoanEventSet, usePreviewLoanEventSet, getListLoanEventSetsQueryKey, useGetLoanRateTimeline, getGetLoanRateTimelineQueryKey, useOverrideLoanRate, useRestoreLoanSourcedRate, useGetFvDecisionHistory, getGetFvDecisionHistoryQueryKey, getListLoansQueryKey, useConfirmFvDecision, type LoanEventInput } from "@workspace/api-client-react";
 import { queryClient } from "@/lib/queryClient";
 import {
   Card,
@@ -66,40 +67,57 @@ import {
   TooltipContent,
 } from "@/components/ui/tooltip";
 import ConfirmDialog from "@/components/confirm-dialog";
+import { FvDecisionPanel } from "@/components/fv-decision-panel";
 import { ArrowLeft, Download, FileText, Calendar, Pencil, ShieldCheck, AlertTriangle, CheckCircle2, XCircle, RotateCcw, DollarSign, TrendingDown, Clock, Percent, Star, ClipboardList, ChevronDown, ChevronUp, Paperclip } from "lucide-react";
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import CapitalLeaseAssessment, { formatAssetType, parseAssetType, type AssessmentAnswers, type AssessmentResult, type StraightLineAnswers } from "@/components/capital-lease-assessment";
 import { PageHeader } from "@/components/page-header";
-import { calculateAmortization, calculateFairValueSchedule } from "@workspace/amortization";
 import { calculateStraightLineLease, buildYearlyStraightLine } from "@/lib/straight-line";
 import { formatCurrency } from "@/lib/format";
 import { toast } from "@/hooks/use-toast";
 import { getErrorMessage } from "@/lib/errors";
 import { format, addYears, isAfter, addMonths, parseISO, subMonths, subDays } from "date-fns";
-import { exportScheduleXlsx, exportSchedulePdf, exportAnnualXlsx, exportAnnualPdf } from "@/lib/loan-export";
+import {
+  exportScheduleXlsx,
+  exportSchedulePdf,
+  exportAnnualXlsx,
+  exportAnnualPdf,
+  type LoanExportMeta,
+} from "@/lib/loan-export";
 import { buildLoanWorkpaper, exportLoanWorkpaperPdf, exportLoanWorkpaperXlsx } from "@/lib/workpaper-export";
 import { runLoanDiagnostics } from "@/lib/diagnostics";
 import { FindingsList } from "@/components/review-findings";
-import { buildAssetDepreciationSchedule, isOperatingLeaseLoan } from "@/lib/aspe-utils";
+import { buildAssetDepreciationSchedule, isOperatingLeaseLoan, calculateBookedSchedule, buildFairValueAccountingEntries } from "@/lib/aspe-utils";
 import { needsFvAssessment, needsUrgentFvAssessment } from "@/lib/fv-assessment";
 import { resolveSuggestedFvRate, resolveEffectiveRate, parseFvRateInput, canSaveFvRate, resolveFvRateForDecision, isValidFvRate } from "@/lib/fv-rate";
 import { getFiscalYear, getFyEndParts } from "@/lib/fiscal";
+import { normalizeEventSequences } from "@/lib/import-events";
+import ModificationAssessment, { type ModificationAssessmentValue } from "@/components/modification-assessment";
 
 export default function LoanDetail() {
+  const { canWrite } = useAuth();
   const [_, params] = useRoute("/client/:id/file/:fileId/loan/:loanId");
   const clientId = params?.id ?? "";
   const fileId = params?.fileId ?? "";
   const loanId = params?.loanId ?? "";
 
   const [tab, setTab] = useState("schedule");
-  const [fvDecisionExpanded, setFvDecisionExpanded] = useState(false);
   const [fvTab, setFvTab] = useState("actual");
   const [editOpen, setEditOpen] = useState(false);
   const [reevaluateOpen, setReevaluateOpen] = useState(false);
   const [adjEntryYear, setAdjEntryYear] = useState<number | null>(null);
   // Draft text for the editable fair-value rate input in the ASPE 3856 panel.
   // null means "not edited" — the input shows the current suggested/saved rate.
-  const [fvRateDraft, setFvRateDraft] = useState<string | null>(null);
+  const [eventEditorOpen, setEventEditorOpen] = useState(false);
+  const [eventDraft, setEventDraft] = useState<LoanEventInput[]>([]);
+  const [eventReason, setEventReason] = useState("");
+  const [eventPreview, setEventPreview] = useState<any>(null);
+  const [modification, setModification] = useState<ModificationAssessmentValue>({
+    predecessorAgreementId: null,
+    modificationEffectiveDate: null,
+    modificationAssessment: null,
+    valid: true,
+  });
 
   const [editForm, setEditForm] = useState<LoanFormState>({
     name: "",
@@ -109,10 +127,25 @@ export default function LoanDetail() {
     principal: 0,
     downPayment: 0,
     interestRate: 0,
+    rateType: "fixed",
+    rateBenchmark: null,
+    contractualPrimeName: null,
+    benchmarkEquivalentToContractualPrime: false,
+    rateSpread: null,
+    rateResetFrequency: null,
+    rateEffectiveConvention: null,
+    ratePaymentTreatment: null,
+    initialFvRateAssumption: null,
     amortizationYears: 0,
     termYears: 0,
     startDate: "",
     paymentFrequency: "monthly",
+    paymentTiming: "end",
+    graceTermMode: "included",
+    firstPaymentDate: "",
+    firstPaymentDateDerived: true,
+    semiMonthlyFirstDueDay: undefined,
+    semiMonthlySecondDueDay: undefined,
     ioMonths: 0,
     graceMonths: 0,
     graceInterestTreatment: "capitalized",
@@ -154,6 +187,28 @@ export default function LoanDetail() {
   });
 
   const { data: loan } = useGetLoan(loanId);
+  const { data: fvDecisionHistory } = useGetFvDecisionHistory(loanId, { query: { enabled: !!loanId, queryKey: getGetFvDecisionHistoryQueryKey(loanId) } as any });
+  const confirmFvDecision = useConfirmFvDecision({
+    mutation: {
+      onSuccess: () => {
+        queryClient.invalidateQueries({ queryKey: getGetFvDecisionHistoryQueryKey(loanId) });
+        queryClient.invalidateQueries({ queryKey: getGetLoanQueryKey(loanId) });
+        queryClient.invalidateQueries({ queryKey: getListLoansQueryKey(fileId) });
+        toast({ title: "Fair value decision confirmed" });
+      },
+      onError: (err) => {
+        toast({ title: "Couldn't confirm decision", description: getErrorMessage(err), variant: "destructive" });
+      }
+    }
+  });
+
+  const { data: linkedPredecessor } = useGetLoan(loan?.predecessorAgreementId ?? "", {
+    query: {
+      enabled: !!loan?.predecessorAgreementId,
+      queryKey: getGetLoanQueryKey(loan?.predecessorAgreementId ?? ""),
+      retry: false,
+    },
+  });
 
   const editMode: LoanFormMode = (() => {
     if (!loan) return "loan";
@@ -163,7 +218,48 @@ export default function LoanDetail() {
   })();
   const { data: file } = useGetFile(fileId);
   const { data: client } = useGetClient(clientId);
+  const { data: fileLoans } = useListLoans(fileId);
   const { data: masters } = useListMasterAgreements(fileId);
+
+  const { data: rateTimeline, isLoading: isRateTimelineLoading } = useGetLoanRateTimeline(loanId, {
+    query: { enabled: loan?.rateType === "prime_linked", queryKey: getGetLoanRateTimelineQueryKey(loanId) },
+  });
+
+  const overrideLoanRate = useOverrideLoanRate({
+    mutation: {
+      onSuccess: () => {
+        queryClient.invalidateQueries({ queryKey: getGetLoanRateTimelineQueryKey(loanId) });
+        queryClient.invalidateQueries({ queryKey: [`/api/loans/${loanId}`] });
+        setOverrideOpen(false);
+      },
+      onError: (err) => {
+        toast({ title: "Couldn't save override", description: getErrorMessage(err), variant: "destructive" });
+      }
+    }
+  });
+
+  const restoreLoanRate = useRestoreLoanSourcedRate({
+    mutation: {
+      onSuccess: () => {
+        queryClient.invalidateQueries({ queryKey: getGetLoanRateTimelineQueryKey(loanId) });
+        queryClient.invalidateQueries({ queryKey: [`/api/loans/${loanId}`] });
+        setRestoreOpen(false);
+      },
+      onError: (err) => {
+        toast({ title: "Couldn't restore rate", description: getErrorMessage(err), variant: "destructive" });
+      }
+    }
+  });
+
+  const [overrideOpen, setOverrideOpen] = useState(false);
+  const [overrideDate, setOverrideDate] = useState("");
+  const [overrideRate, setOverrideRate] = useState<number | "">("");
+  const [overrideReason, setOverrideReason] = useState("");
+  const [overrideUrl, setOverrideUrl] = useState("");
+
+  const [restoreOpen, setRestoreOpen] = useState(false);
+  const [restoreDate, setRestoreDate] = useState("");
+
 
   const updateLoan = useUpdateLoan({
     mutation: {
@@ -172,11 +268,35 @@ export default function LoanDetail() {
         queryClient.invalidateQueries({ queryKey: [`/api/files/${fileId}/loans`] });
         setEditOpen(false);
       },
-      onError: (err) => {
-        toast({ title: "Couldn't save changes", description: getErrorMessage(err), variant: "destructive" });
+      onError: (err: any) => {
+        if (err?.response?.status === 409 && err?.response?.data?.error?.includes("modification")) {
+          toast({
+            title: "Modification assessment required",
+            description: "Existing prime-linked loans with applied history cannot directly change spread, reset basis, frequency, convention, treatment, or equivalence. To make these changes, you must initiate a modification assessment (Task 30). Ordinary overrides/restores remain available in the rate timeline.",
+            variant: "destructive",
+            duration: 10000,
+          });
+        } else {
+          toast({ title: "Couldn't save changes", description: getErrorMessage(err), variant: "destructive" });
+        }
       },
     },
   });
+  const createEventSet = useCreateLoanEventSet({
+    mutation: {
+      onSuccess: () => {
+        queryClient.invalidateQueries({ queryKey: [`/api/loans/${loanId}`] });
+        queryClient.invalidateQueries({ queryKey: getListLoanEventSetsQueryKey(loanId) });
+        setEventEditorOpen(false);
+        toast({ title: "Principal payment events saved", description: "A successor event-set version was created." });
+      },
+      onError: (err: any) => {
+        const conflict = err?.status === 409 || /version|conflict/i.test(getErrorMessage(err));
+        toast({ title: conflict ? "Events changed elsewhere" : "Couldn't save events", description: conflict ? "Refresh the loan, review the current event set, then apply your changes again." : getErrorMessage(err), variant: "destructive" });
+      },
+    },
+  });
+  const previewEventSet = usePreviewLoanEventSet({ mutation: { onSuccess: setEventPreview, onError: (err) => toast({ title: "Couldn't preview events", description: getErrorMessage(err), variant: "destructive" }) } });
 
   const rate = Number(loan?.interestRate ?? 0);
 
@@ -195,32 +315,21 @@ export default function LoanDetail() {
 
   const contractualResult = useMemo(() => {
     if (!loan) return null;
-    return calculateAmortization(
-      Number(loan.principal) - Number(loan.downPayment ?? 0),
-      Number(loan.interestRate),
-      loan.amortizationYears,
-      loan.termYears,
-      parseISO(loan.startDate),
-      loan.ioMonths,
-      loan.specificIoMonths ? loan.specificIoMonths.split(",").map(Number).filter((n) => !isNaN(n)) : [],
-      Number(loan.balloonPayment),
-      loan.paymentFrequency as "monthly" | "semi-monthly" | "bi-weekly" | "weekly",
-      loan.paymentOverride != null ? Number(loan.paymentOverride) : null,
-      loan.graceMonths ?? 0,
-      (loan.graceInterestTreatment as "capitalized" | "none") ?? "capitalized",
-    );
-  }, [loan]);
+    return calculateBookedSchedule({
+      ...loan,
+      predecessorAgreement: linkedPredecessor as any,
+      fvDecision: "contractual",
+    });
+  }, [loan, linkedPredecessor]);
 
   const fvResult = useMemo(() => {
     if (!loan || !contractualResult || !isValidFvRate(suggestedFvRate)) return null;
-    // Effective-interest method: the contractual payments are fixed; only the
-    // principal/interest split changes at the fair-value rate.
-    return calculateFairValueSchedule(
-      contractualResult.schedule,
-      suggestedFvRate,
-      loan.paymentFrequency as "monthly" | "semi-monthly" | "bi-weekly" | "weekly",
-    );
-  }, [loan, contractualResult, suggestedFvRate]);
+    // The shared booked-schedule path uses frozen recognition-date assumptions
+    // for FV cash flows and live timeline evidence only for contractual rows.
+    return calculateBookedSchedule({
+      ...loan, predecessorAgreement: linkedPredecessor as any, fvDecision: "use_fv", fvRate: suggestedFvRate,
+    });
+  }, [loan, linkedPredecessor, contractualResult, suggestedFvRate]);
 
   // When fair value is adopted, the booked schedule is the effective-interest
   // schedule (contractual payments fixed, interest at the FV rate on the
@@ -232,7 +341,7 @@ export default function LoanDetail() {
   }, [loan, contractualResult, fvResult]);
 
   const fvDiff = useMemo(() => {
-    if (!loan || !fvResult) return null;
+    if (!loan || !fvResult || fvResult.fairValue == null) return null;
     // Day-one fair-value adjustment = financed amount less the discounted fair value.
     return Number((Number(loan.principal) - Number(loan.downPayment ?? 0) - fvResult.fairValue).toFixed(2));
   }, [loan, fvResult]);
@@ -345,53 +454,14 @@ export default function LoanDetail() {
       .sort((a, b) => a.year - b.year);
   }, [contractualResult, loan]);
 
-  /* ── Cumulative FV adjusting entries per fiscal year ─────────────
-     For each fiscal year end we build the "unrecorded adjustment": the
-     cumulative catch-up needed to restate the loan from the unadjusted
-     (contractual/face) basis to fair value. Because the client keeps the
-     loan on the books at contractual amounts and the day-one discount
-     unwinds over time through extra interest, the required adjustment as
-     at any year end is the day-one discount less the discount already
-     accreted. The P&L effect is split between prior fiscal years (opening
-     retained earnings) and the current fiscal year (interest expense),
-     with the initial fair-value benefit recognised at inception. Computed
-     on-the-fly; never stored. */
-  const adjustingEntriesByYear = useMemo(() => {
-    const map = new Map<
-      number,
-      {
-        year: number;
-        label: string;
-        day1Discount: number;
-        priorExtra: number;
-        currentExtra: number;
-        cumulativeExtra: number;
-        remainingDiscount: number;
-      }
-    >();
-    if (!loan || !fvResult || fvDiff == null) return map;
-    if (Math.abs(fvDiff) < 0.01) return map;
-    const day1Discount = fvDiff; // face principal less discounted fair value
-    let running = 0;
-    for (const row of yearlyTotalsActual) {
-      const fv = yearlyTotalsFv.find((r) => r.year === row.year);
-      const currentExtra = fv ? Number((fv.interest - row.interest).toFixed(2)) : 0;
-      const priorExtra = Number(running.toFixed(2));
-      running += currentExtra;
-      const cumulativeExtra = Number(running.toFixed(2));
-      const remainingDiscount = Number((day1Discount - cumulativeExtra).toFixed(2));
-      map.set(row.year, {
-        year: row.year,
-        label: row.label,
-        day1Discount,
-        priorExtra,
-        currentExtra,
-        cumulativeExtra,
-        remainingDiscount,
-      });
-    }
-    return map;
-  }, [loan, fvResult, fvDiff, yearlyTotalsActual, yearlyTotalsFv]);
+  const fvAccounting = useMemo(() => {
+    if (!loan || !file?.fiscalYearEnd) return null;
+    return buildFairValueAccountingEntries({
+      loan: { ...loan, startDate: loan.startDate },
+      reportingFiscalYearEnd: file.fiscalYearEnd,
+      decisionHistory: fvDecisionHistory,
+    });
+  }, [loan, file, fvDecisionHistory]);
 
 
   const chartData = useMemo(() => {
@@ -568,44 +638,52 @@ export default function LoanDetail() {
     return null;
   }, [loan]);
 
+  const exportEvidence = loan ? {
+    ...loan,
+    ...({ predecessorAgreement: linkedPredecessor } as any),
+    principal: Number(loan.principal),
+    interestRate: Number(loan.interestRate),
+    termYears: loan.termYears,
+    fvDecisionHistory,
+    fairValueAccountingEntries: fvAccounting,
+  } as unknown as LoanExportMeta : undefined;
+
   const downloadExcel = () => {
     if (!result) return;
-    exportScheduleXlsx(loan?.name ?? "Loan", result.schedule);
+    exportScheduleXlsx(loan?.name ?? "Loan", result.schedule, exportEvidence);
   };
 
   const downloadPDF = () => {
-    if (!result || !loan) return;
-    exportSchedulePdf(
-      {
-        name: loan.name,
-        principal: Number(loan.principal),
-        interestRate: Number(loan.interestRate),
-        termYears: loan.termYears,
-      },
-      result.schedule,
-    );
+    if (!result || !exportEvidence) return;
+    exportSchedulePdf(exportEvidence, result.schedule);
   };
 
   const downloadAnnualExcel = () => {
     if (!yearlyTotals.length) return;
-    exportAnnualXlsx(loan?.name ?? "Loan", yearlyTotals);
+    exportAnnualXlsx(loan?.name ?? "Loan", yearlyTotals, exportEvidence);
   };
 
   const downloadAnnualPDF = () => {
     if (!yearlyTotals.length || !loan) return;
-    exportAnnualPdf(loan.name, yearlyTotals);
+    exportAnnualPdf(loan.name, yearlyTotals, exportEvidence);
   };
 
   const loanDiagnostics = useMemo(() => {
     if (!loan || !file?.fiscalYearEnd) return null;
-    return runLoanDiagnostics(loan, {
-      fiscalYearEnd: file.fiscalYearEnd,
-      trivialThreshold: file.trivialThreshold,
-      materiality: file.materiality,
-    });
-  }, [loan, file]);
+    return runLoanDiagnostics(
+      { ...loan, fvDecisionHistory },
+      {
+        id: file.id,
+        clientId: file.clientId,
+        fiscalYearEnd: file.fiscalYearEnd,
+        trivialThreshold: file.trivialThreshold,
+        materiality: file.materiality,
+      }
+    );
+  }, [loan, file, fvDecisionHistory]);
 
   const setFindingDismissed = (findingId: string, dismiss: boolean) => {
+    if (!canWrite) return;
     if (!loan) return;
     const current = loan.dismissedFindings ?? [];
     const next = dismiss ? Array.from(new Set([...current, findingId])) : current.filter((id) => id !== findingId);
@@ -622,10 +700,25 @@ export default function LoanDetail() {
       principal: Number(loan.principal),
       downPayment: Number(loan.downPayment ?? 0),
       interestRate: Number(loan.interestRate),
+      rateType: loan.rateType ?? "fixed",
+      rateBenchmark: loan.rateBenchmark ?? null,
+      contractualPrimeName: loan.contractualPrimeName ?? null,
+      benchmarkEquivalentToContractualPrime: loan.benchmarkEquivalentToContractualPrime === true,
+      rateSpread: loan.rateSpread != null ? Number(loan.rateSpread) : null,
+      rateResetFrequency: loan.rateResetFrequency ?? null,
+      rateEffectiveConvention: loan.rateEffectiveConvention ?? null,
+      ratePaymentTreatment: loan.ratePaymentTreatment ?? null,
+      initialFvRateAssumption: loan.initialFvRateAssumption ?? null,
       amortizationYears: loan.amortizationYears,
       termYears: loan.termYears,
       startDate: loan.startDate.split("T")[0],
       paymentFrequency: loan.paymentFrequency as any,
+      paymentTiming: loan.paymentTiming ?? "end",
+      graceTermMode: loan.graceTermMode ?? "included",
+      firstPaymentDate: loan.firstPaymentDate ? loan.firstPaymentDate.split("T")[0] : "",
+      firstPaymentDateDerived: false,
+      semiMonthlyFirstDueDay: loan.semiMonthlyFirstDueDay ?? undefined,
+      semiMonthlySecondDueDay: loan.semiMonthlySecondDueDay ?? undefined,
       ioMonths: loan.ioMonths,
       graceMonths: loan.graceMonths ?? 0,
       graceInterestTreatment: (loan.graceInterestTreatment as "capitalized" | "none") ?? "capitalized",
@@ -665,6 +758,12 @@ export default function LoanDetail() {
       collateralDecliningRate: Number(loan.collateralDecliningRate ?? 0),
       collateralSalvageValue: Number(loan.collateralSalvageValue ?? 0),
     });
+    setModification({
+      predecessorAgreementId: loan.predecessorAgreementId ?? null,
+      modificationEffectiveDate: loan.modificationEffectiveDate ?? null,
+      modificationAssessment: loan.modificationAssessment ?? null,
+      valid: !loan.predecessorAgreementId || !!loan.modificationAssessment,
+    });
     setEditOpen(true);
   };
 
@@ -675,7 +774,7 @@ export default function LoanDetail() {
     const master = loan.masterAgreementId
       ? (masters?.find((m) => m.id === loan.masterAgreementId) ?? null)
       : null;
-    const wp = buildLoanWorkpaper(loan, {
+    const wp = buildLoanWorkpaper({ ...loan, predecessorAgreement: linkedPredecessor, fvDecisionHistory, fairValueAccountingEntries: fvAccounting } as any, {
       clientName: client?.name ?? "Client",
       fiscalYearEnd: file.fiscalYearEnd,
     }, master);
@@ -825,7 +924,50 @@ export default function LoanDetail() {
         }
       />
       <div className="max-w-6xl mx-auto p-4 md:p-8 space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
+        {loan.predecessorAgreementId && !loan.modificationAssessment && (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-300 bg-amber-50 p-4 text-amber-950" data-testid="status-modification-unresolved">
+            <div><p className="font-semibold">Renewal/modification assessment required</p><p className="text-sm">This agreement has a predecessor link, but the evidence and accountant-confirmed conclusion are incomplete.</p></div>
+            <Button variant="outline" onClick={openEditDialog} data-testid="button-complete-modification-assessment">Complete assessment</Button>
+          </div>
+        )}
+        {loan.modificationAssessment && (
+          <div className="rounded-lg border border-emerald-300 bg-emerald-50 p-4 text-sm text-emerald-950" data-testid="status-modification-confirmed">
+            <p className="font-semibold">Modification assessment confirmed by {loan.modificationAssessment.confirmedBy}</p>
+            <p>{loan.modificationAssessment.conclusion.accountingTreatment.replaceAll("_", " ")} — {loan.modificationAssessment.conclusion.rationale}</p>
+          </div>
+        )}
         <main className="space-y-6">
+          {!isOperatingLeaseLoan(loan) && (
+            <Card>
+              <CardHeader className="flex-row items-center justify-between space-y-0">
+                <div>
+                  <CardTitle className="text-base">Mid-term Principal Payments</CardTitle>
+                  <CardDescription>Immutable, ordered principal-only events used in this schedule.</CardDescription>
+                </div>
+                {canWrite && (
+                <Button size="sm" variant="outline" onClick={() => {
+                  setEventDraft(normalizeEventSequences((loan.activeEvents ?? []).map(({ id: _id, setId: _setId, loanId: _loanId, termRevisionId: _termId, ...event }) => event)));
+                  setEventReason("");
+                  setEventPreview(null);
+                  setEventEditorOpen(true);
+                }}>Manage payments</Button>
+                )}
+              </CardHeader>
+              <CardContent className="space-y-2 text-sm">
+                {(loan.activeEvents ?? []).length === 0 ? <p className="text-muted-foreground">No active mid-term principal payments.</p> : (
+                  <div className="rounded-md border divide-y">
+                    {loan.activeEvents.map((event) => <div key={event.id} className="p-2 grid grid-cols-1 md:grid-cols-4 gap-1">
+                      <span>{format(parseISO(event.effectiveDate), "MMM d, yyyy")} · {formatCurrency(Number(event.amount))}</span>
+                      <span className="text-muted-foreground">{event.ordering === "before_scheduled_payment" ? "Before payment" : "After payment"} · #{event.sequence}</span>
+                      <span>{event.treatment === "keep_maturity" ? "Keep maturity / recast" : "Keep payment / earlier payoff"}</span>
+                      <span className="text-muted-foreground">{event.source}: {event.reason}</span>
+                    </div>)}
+                  </div>
+                )}
+                <p className="text-xs text-muted-foreground">Revision {loan.currentRevisionId ?? "—"} · event set {loan.activeEventSetId ?? "—"} v{loan.activeEventSetVersion} · {loan.activeEventSetHash ?? "no fingerprint"}</p>
+              </CardContent>
+            </Card>
+          )}
           {/* Quick Stats */}
           {result && (
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -910,233 +1052,27 @@ export default function LoanDetail() {
                 <FindingsList
                   findings={loanDiagnostics.findings}
                   dismissed={loanDiagnostics.dismissed}
-                  onDismiss={(id) => setFindingDismissed(id, true)}
-                  onRestore={(id) => setFindingDismissed(id, false)}
+                  onDismiss={canWrite ? (id) => setFindingDismissed(id, true) : undefined}
+                  onRestore={canWrite ? (id) => setFindingDismissed(id, false) : undefined}
                 />
               </CardContent>
             </Card>
           )}
 
-          {/* ASPE 3856 Low-Rate Warning */}
-          {isLowRate && (
-            <div className={`rounded-lg border p-4 flex items-start gap-3 ${isVeryLowRate ? "bg-red-50 border-red-200" : "bg-amber-50 border-amber-200"}`}>
-              <div className="mt-0.5 shrink-0">
-                <AlertTriangle className={`h-5 w-5 ${isVeryLowRate ? "text-red-600" : "text-amber-600"}`} />
-              </div>
-              <div className="space-y-2 w-full">
-                <p className={`text-sm font-semibold ${isVeryLowRate ? "text-red-900" : "text-amber-900"}`}>
-                  {isVeryLowRate ? "Very Low Interest Rate — ASPE 3856 Fair Value Adjustment Required" : "Low Interest Rate — ASPE 3856 Fair Value Adjustment May Be Required"}
-                </p>
-                <p className={`text-xs ${isVeryLowRate ? "text-red-800" : "text-amber-800"}`}>
-                  The contractual rate of {rate.toFixed(2)}% is below the market threshold. ASPE 3856 requires that loans/leases with below-market rates be recorded at fair value using an imputed rate.
-                </p>
-                <div className="flex flex-wrap items-end gap-3 pt-1">
-                  <div className="space-y-1">
-                    <Label htmlFor="fv-rate-input" className="text-xs font-medium">
-                      Fair value rate (%)
-                    </Label>
-                    <div className="flex items-center gap-2">
-                      <Input
-                        id="fv-rate-input"
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        className="h-8 w-28 bg-white text-xs"
-                        value={fvRateDraft ?? (suggestedFvRate > 0 ? suggestedFvRate.toFixed(2) : "")}
-                        onChange={(e) => setFvRateDraft(e.target.value)}
-                      />
-                      <Button
-                        size="sm"
-                        className="h-8 text-xs"
-                        disabled={!canSaveFvRate(fvRateDraft, suggestedFvRate, updateLoan.isPending)}
-                        onClick={() => {
-                          const parsed = parseFvRateInput(fvRateDraft);
-                          if (parsed == null) return;
-                          updateLoan.mutate(
-                            { id: loanId, data: { fvRate: parsed } },
-                            { onSuccess: () => setFvRateDraft(null) },
-                          );
-                        }}
-                      >
-                        Save rate
-                      </Button>
-                      {loan?.fvRate != null &&
-                        primeData?.suggestedRate != null &&
-                        Number(loan.fvRate) !== primeData.suggestedRate && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-8 text-xs"
-                            disabled={updateLoan.isPending}
-                            onClick={() => {
-                              updateLoan.mutate(
-                                { id: loanId, data: { fvRate: primeData.suggestedRate } },
-                                { onSuccess: () => setFvRateDraft(null) },
-                              );
-                            }}
-                          >
-                            Reset to suggested
-                          </Button>
-                        )}
-                    </div>
-                    <p className="text-[11px] text-muted-foreground">
-                      {loan?.fvRate != null
-                        ? primeData?.suggestedRate != null && Number(loan.fvRate) !== primeData.suggestedRate
-                          ? `Overridden — suggested rate is ${primeData.suggestedRate.toFixed(2)}% (prime + 2%).`
-                          : "Saved on this loan (prime + 2% suggestion)."
-                        : primeData?.suggestedRate != null
-                          ? "Suggested: Bank of Canada prime at the start date + 2%. Edit to use your own market rate."
-                          : "Enter the market rate to use for the fair value calculation."}
-                    </p>
-                  </div>
-                  {fvDiff != null && (
-                    <span className="text-xs font-medium pb-6">
-                      FV adjustment: ${Math.abs(fvDiff).toLocaleString()} ({fvDiff >= 0 ? "higher" : "lower"})
-                    </span>
-                  )}
-                </div>
-                {loan?.fvRate == null && primeData?.source === "Fallback default" && (
-                  <div className="flex items-start gap-2 rounded-md border border-red-300 bg-red-50 p-2 mt-1">
-                    <AlertTriangle className="h-3.5 w-3.5 text-red-700 mt-0.5 shrink-0" />
-                    <span className="text-xs text-red-800">
-                      The live Bank of Canada prime rate could not be retrieved for this date, so a default of 7.20% (prime) was used to derive the suggested fair-value rate above. Verify the rate against the actual prime rate at the loan's start date before relying on this adjustment.
-                    </span>
-                  </div>
-                )}
-                {/* Three-way FV decision */}
-                <div className="pt-2">
-                  {loan.fvDecision && !fvDecisionExpanded ? (
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between gap-2 rounded-md border p-2 bg-white/60">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <CheckCircle2 className="h-4 w-4 text-green-600 shrink-0" />
-                          <span className="text-xs font-semibold truncate">
-                            FV Treatment Decision:{" "}
-                            {loan.fvDecision === "use_fv"
-                              ? "Use fair value rate (material)"
-                              : loan.fvDecision === "trivial"
-                                ? "Trivial — document only"
-                                : "Immaterial but non-trivial — track as unadjusted misstatement"}
-                          </span>
-                        </div>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="h-7 gap-1 text-xs shrink-0"
-                          onClick={() => setFvDecisionExpanded(true)}
-                        >
-                          <ChevronDown className="h-3.5 w-3.5" />
-                          Change
-                        </Button>
-                      </div>
-                      {loan.fvDecisionNote && (
-                        <p className="text-[11px] text-muted-foreground rounded-md border bg-white/60 p-2">
-                          {loan.fvDecisionNote}
-                        </p>
-                      )}
-                    </div>
-                  ) : (
-                  <>
-                  <div className="flex items-center gap-2 mb-1">
-                    <Label className="text-xs font-semibold block">FV Treatment Decision</Label>
-                    {loan.fvDecision && (
-                      <span className="text-[10px] font-medium text-muted-foreground bg-muted rounded px-1.5 py-0.5">
-                        Auto-suggested — override if needed
-                      </span>
-                    )}
-                    {loan.fvDecision && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-6 gap-1 text-xs ml-auto"
-                        onClick={() => setFvDecisionExpanded(false)}
-                      >
-                        <ChevronUp className="h-3.5 w-3.5" />
-                        Minimize
-                      </Button>
-                    )}
-                  </div>
-                  <RadioGroup
-                    value={loan.fvDecision ?? ""}
-                    onValueChange={(val) => {
-                      const decision = val as "use_fv" | "trivial" | "immaterial";
-                      const diffText = fvDiff != null ? `$${Math.abs(fvDiff).toLocaleString()}` : "The fair value difference";
-                      const autoNote =
-                        decision === "trivial"
-                          ? `FV difference of ${diffText} is below the trivial threshold${file?.trivialThreshold != null ? ` of $${Number(file.trivialThreshold).toLocaleString()}` : ""} — contractual rate retained, no adjustment recorded.`
-                          : decision === "immaterial"
-                            ? `FV difference of ${diffText} is below materiality${file?.materiality != null ? ` of $${Number(file.materiality).toLocaleString()}` : ""} but above trivial — tracked on the unadjusted misstatement schedule, no adjustment booked.`
-                            : undefined;
-                      // If the accountant typed a rate but hasn't hit Save yet,
-                      // freeze that override with the decision instead of the suggestion.
-                      const rateToFreeze = resolveFvRateForDecision(fvRateDraft, suggestedFvRate);
-                      updateLoan.mutate(
-                        {
-                          id: loanId,
-                          data: {
-                            fvDecision: decision,
-                            // Never persist a non-positive rate — when no valid
-                            // rate exists (suggestion not loaded), save the
-                            // decision without touching fvRate.
-                            ...(rateToFreeze != null ? { fvRate: rateToFreeze } : {}),
-                            ...(autoNote ? { fvDecisionNote: autoNote } : {}),
-                          },
-                        },
-                        { onSuccess: () => setFvRateDraft(null) },
-                      );
-                      setFvDecisionExpanded(false);
-                    }}
-                    className="gap-2"
-                  >
-                    <div className="flex items-start gap-2 rounded-md border p-2 bg-white/60">
-                      <RadioGroupItem value="use_fv" id="fv-use" className="mt-0.5" />
-                      <div className="space-y-0.5">
-                        <Label htmlFor="fv-use" className="text-xs font-medium cursor-pointer">
-                          Use fair value rate (material)
-                        </Label>
-                        <p className="text-[11px] text-muted-foreground">Apply the FV rate to the amortization schedule and financial statements.</p>
-                      </div>
-                    </div>
-                    <div className="flex items-start gap-2 rounded-md border p-2 bg-white/60">
-                      <RadioGroupItem value="trivial" id="fv-trivial" className="mt-0.5" />
-                      <div className="space-y-0.5">
-                        <Label htmlFor="fv-trivial" className="text-xs font-medium cursor-pointer">
-                          Trivial — document only
-                        </Label>
-                        <p className="text-[11px] text-muted-foreground">Below trivial threshold. Keep contractual rate; add a note to working papers.</p>
-                      </div>
-                    </div>
-                    <div className="flex items-start gap-2 rounded-md border p-2 bg-white/60">
-                      <RadioGroupItem value="immaterial" id="fv-immaterial" className="mt-0.5" />
-                      <div className="space-y-0.5">
-                        <Label htmlFor="fv-immaterial" className="text-xs font-medium cursor-pointer">
-                          Immaterial but non-trivial — track as unadjusted misstatement
-                        </Label>
-                        <p className="text-[11px] text-muted-foreground">Above trivial but below materiality. Log in the unadjusted misstatement schedule.</p>
-                      </div>
-                    </div>
-                  </RadioGroup>
-                  {loan.fvDecision && loan.fvDecisionNote && (
-                    <p className="text-[11px] text-muted-foreground rounded-md border bg-white/60 p-2 mt-2">
-                      {loan.fvDecisionNote}
-                    </p>
-                  )}
-                  {loan.fvDecision === "trivial" && (file?.trivialThreshold == null) && (
-                    <p className="text-[11px] text-amber-700 pt-1">
-                      Set a trivial threshold on the year-end file to auto-drive this decision.
-                    </p>
-                  )}
-                  {loan.fvDecision === "immaterial" && (file?.materiality == null) && (
-                    <p className="text-[11px] text-amber-700 pt-1">
-                      Set a materiality threshold on the year-end file to auto-drive this decision.
-                    </p>
-                  )}
-                  </>
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
+          {/* ASPE 3856 Fair Value Assessment */}
+          <FvDecisionPanel
+            loan={loan}
+            file={file}
+            isLowRate={isLowRate}
+            isVeryLowRate={isVeryLowRate}
+            rate={rate}
+            fvDecisionHistory={fvDecisionHistory}
+            confirmFvDecision={confirmFvDecision}
+            updateLoan={updateLoan}
+            suggestedFvRate={suggestedFvRate}
+            fvDiff={fvDiff}
+            primeData={primeData}
+          />
 
           {!isOperatingLeaseLoan(loan) ? (
             <Tabs value={tab} onValueChange={setTab}>
@@ -1147,6 +1083,14 @@ export default function LoanDetail() {
                   </TooltipTrigger>
                   <TooltipContent>Full period-by-period amortization schedule</TooltipContent>
                 </Tooltip>
+                {loan?.rateType === "prime_linked" && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <TabsTrigger value="rate-timeline">Rate Timeline</TabsTrigger>
+                    </TooltipTrigger>
+                    <TooltipContent>Variable rate history and overrides</TooltipContent>
+                  </Tooltip>
+                )}
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <TabsTrigger value="annual">Annual Breakdown</TabsTrigger>
@@ -1252,7 +1196,7 @@ export default function LoanDetail() {
                             const isFyeRow = fyeRowMonths.has(row.month);
                             return (
                             <TableRow
-                              key={row.month}
+                               key={`${row.month}-${row.date.toISOString()}-${row.rowType ?? "scheduled"}-${row.eventId ?? i}`}
                               className={
                                 isFyeRow
                                   ? "bg-primary/10 font-semibold border-b-2 border-primary/30"
@@ -1308,6 +1252,142 @@ export default function LoanDetail() {
                   </CardContent>
                 </Card>
               </TabsContent>
+
+              {loan?.rateType === "prime_linked" && (
+                <TabsContent value="rate-timeline" className="space-y-6">
+                  {isRateTimelineLoading ? (
+                    <div className="flex justify-center p-8 text-muted-foreground">Loading timeline...</div>
+                  ) : (
+                    <>
+                      {/* Unresolved Rate Findings */}
+                      {((rateTimeline as any)?.findings || []).filter((f: any) => f.status === "unresolved").length > 0 && (
+                        <div className="rounded-lg border border-red-200 bg-red-50/50 p-4">
+                          <h3 className="flex items-center gap-2 font-semibold text-red-900 mb-2">
+                            <AlertTriangle className="h-5 w-5" /> Action Required: Missing Rate Observations
+                          </h3>
+                          <p className="text-sm text-red-800 mb-3">
+                            The application could not automatically retrieve one or more prime rate observations required by the loan agreement's reset rules.
+                          </p>
+                          <ul className="list-disc pl-5 text-sm text-red-800 space-y-1">
+                            {((rateTimeline as any)?.findings || []).filter((f: any) => f.status === "unresolved").map((finding: any) => (
+                              <li key={finding.id}>
+                                {finding.reason || "Prime observation unavailable"}
+                                {finding.contractualEffectiveDate
+                                  ? ` (contractual effective date ${String(finding.contractualEffectiveDate).slice(0, 10)})`
+                                  : ""}
+                              </li>
+                            ))}
+                          </ul>
+                          <div className="mt-4">
+                            {canWrite && (
+                            <Button variant="outline" className="border-red-300 text-red-900 hover:bg-red-100" onClick={() => setOverrideOpen(true)}>
+                              Enter Manual Override
+                            </Button>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      <Card>
+                        <CardHeader className="flex flex-row items-center justify-between space-y-0">
+                          <div>
+                            <CardTitle className="font-display">Variable Rate History</CardTitle>
+                            <CardDescription>Immutable record of applied benchmark rates and spreads</CardDescription>
+                          </div>
+                          {canWrite && (
+                          <Button variant="outline" size="sm" onClick={() => {
+                            setOverrideDate(new Date().toISOString().split("T")[0]);
+                            setOverrideRate("");
+                            setOverrideReason("");
+                            setOverrideUrl("");
+                            setOverrideOpen(true);
+                          }}>
+                            Override Rate
+                          </Button>
+                          )}
+                        </CardHeader>
+                        <CardContent>
+                          {((rateTimeline as any)?.events || []).length === 0 ? (
+                            <div className="text-center py-8 text-muted-foreground border rounded-lg bg-muted/10">
+                              No rate reset events recorded yet.
+                            </div>
+                          ) : (
+                            <div className="rounded-md border overflow-hidden">
+                              <Table>
+                                <TableHeader className="bg-muted/50">
+                                  <TableRow>
+                                    <TableHead>Effective Date</TableHead>
+                                    <TableHead>Benchmark Rate</TableHead>
+                                    <TableHead>Spread</TableHead>
+                                    <TableHead>Resulting Rate</TableHead>
+                                    <TableHead>Source</TableHead>
+                                    <TableHead>Origin</TableHead>
+                                    <TableHead></TableHead>
+                                  </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                  {((rateTimeline as any)?.events || []).map((ev: any) => (
+                                    <TableRow key={ev.id}>
+                                      <TableCell className="font-medium whitespace-nowrap">
+                                        {format(parseISO(ev.effectiveDate), "MMM d, yyyy")}
+                                      </TableCell>
+                                      <TableCell>{Number(ev.benchmarkRate).toFixed(2)}%</TableCell>
+                                      <TableCell>{Number(ev.spread) >= 0 ? "+" : ""}{Number(ev.spread).toFixed(2)}%</TableCell>
+                                      <TableCell className="font-semibold">{Number(ev.resultingRate).toFixed(2)}%</TableCell>
+                                      <TableCell>
+                                        <div className="flex flex-col">
+                                          <span className="text-sm truncate max-w-[200px]" title={ev.source}>{ev.source}</span>
+                                          {ev.sourceUrl && (
+                                            <a href={ev.sourceUrl} target="_blank" rel="noreferrer" className="text-xs text-primary hover:underline">View source</a>
+                                          )}
+                                          {ev.publishedDate && (
+                                            <span className="text-[10px] text-muted-foreground">Pub: {ev.publishedDate}</span>
+                                          )}
+                                        </div>
+                                      </TableCell>
+                                      <TableCell>
+                                        {ev.rateOrigin === "override" ? (
+                                          <span className="inline-flex items-center gap-1 rounded bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">
+                                            Manual Override
+                                          </span>
+                                        ) : ev.rateOrigin === "restore" ? (
+                                          <span className="inline-flex items-center gap-1 rounded bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800">
+                                            Restored
+                                          </span>
+                                        ) : (
+                                          <span className="inline-flex items-center gap-1 rounded bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-800">
+                                            Automatic
+                                          </span>
+                                        )}
+                                        {ev.author && <div className="text-[10px] text-muted-foreground mt-0.5">by {ev.author}</div>}
+                                      </TableCell>
+                                      <TableCell className="text-right">
+                                        {ev.rateOrigin === "override" && (
+                                          <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            className="text-xs text-muted-foreground hover:text-foreground"
+                                            onClick={() => {
+                                              setRestoreDate(ev.effectiveDate);
+                                              setRestoreOpen(true);
+                                            }}
+                                          >
+                                            Restore Sourced Rate
+                                          </Button>
+                                        )}
+                                      </TableCell>
+                                    </TableRow>
+                                  ))}
+                                </TableBody>
+                              </Table>
+                            </div>
+                          )}
+                        </CardContent>
+                      </Card>
+                    </>
+                  )}
+                </TabsContent>
+              )}
 
               <TabsContent value="annual" className="space-y-6">
                 <Card>
@@ -1522,7 +1602,18 @@ export default function LoanDetail() {
                       </div>
                       <div className="flex justify-between">
                         <span className="text-muted-foreground">Interest Rate</span>
-                        <span className="font-semibold">{Number(loan.interestRate).toFixed(2)}%</span>
+                        <span className="font-semibold">
+                          {loan.rateType === "prime_linked" ? (
+                            <div className="flex flex-col items-end">
+                              <span>{Number(loan.interestRate).toFixed(2)}% (Prime Linked)</span>
+                              <span className="text-xs text-muted-foreground font-normal">
+                                {loan.contractualPrimeName || "Benchmark"} {Number(loan.rateSpread) >= 0 ? "+" : ""}{Number(loan.rateSpread).toFixed(2)}%
+                              </span>
+                            </div>
+                          ) : (
+                            `${Number(loan.interestRate).toFixed(2)}%`
+                          )}
+                        </span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-muted-foreground">Term</span>
@@ -1754,7 +1845,10 @@ export default function LoanDetail() {
                               </TableHeader>
                               <TableBody>
                                 {contractualResult?.schedule.slice(0, 60).map((row, i) => (
-                                  <TableRow key={row.month} className={i % 2 === 1 ? "bg-muted/20" : ""}>
+                                   <TableRow
+                                     key={`${row.month}-${row.date.toISOString()}-${row.rowType ?? "scheduled"}-${row.eventId ?? i}`}
+                                     className={i % 2 === 1 ? "bg-muted/20" : ""}
+                                   >
                                     <TableCell>{row.month}</TableCell>
                                     <TableCell>{format(row.date, "MMMM d, yyyy")}</TableCell>
                                     <TableCell className="text-right">{formatCurrency(row.payment)}</TableCell>
@@ -1794,7 +1888,10 @@ export default function LoanDetail() {
                               </TableHeader>
                               <TableBody>
                                 {fvResult?.schedule.slice(0, 60).map((row, i) => (
-                                  <TableRow key={row.month} className={i % 2 === 1 ? "bg-muted/20" : ""}>
+                                   <TableRow
+                                     key={`${row.month}-${row.date.toISOString()}-${row.rowType ?? "scheduled"}-${row.eventId ?? i}`}
+                                     className={i % 2 === 1 ? "bg-muted/20" : ""}
+                                   >
                                     <TableCell>{row.month}</TableCell>
                                     <TableCell>{format(row.date, "MMMM d, yyyy")}</TableCell>
                                     <TableCell className="text-right">{formatCurrency(row.payment)}</TableCell>
@@ -1839,7 +1936,7 @@ export default function LoanDetail() {
                               const fv = yearlyTotalsFv.find((r) => r.year === row.year);
                               const prinDiff = fv ? Number((fv.principal - row.principal).toFixed(2)) : 0;
                               const intDiff = fv ? Number((fv.interest - row.interest).toFixed(2)) : 0;
-                              const hasAdjEntry = adjustingEntriesByYear.has(row.year);
+                              const hasAdjEntry = !!fvAccounting?.annualEntries.some(e => (e.evidence as any).fiscalYear === row.year) || !!fvAccounting?.cumulativeSupport.some(e => (e.evidence as any).fiscalYear === row.year);
                               const diffCell = (v: number) => (
                                 <span className={v > 0 ? "text-amber-600" : ""}>
                                   {v !== 0 ? (v > 0 ? "+" : "") + formatCurrency(v) : "-"}
@@ -2320,123 +2417,104 @@ export default function LoanDetail() {
       <Dialog open={adjEntryYear != null} onOpenChange={(open) => !open && setAdjEntryYear(null)}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           {(() => {
-            const adj = adjEntryYear != null ? adjustingEntriesByYear.get(adjEntryYear) : undefined;
-            if (!adj) return null;
-            const liabilityLabel = loan?.isCapitalLease
-              ? "Obligation under Capital Lease"
-              : "Loan Payable";
-            // Positive amount => debit, negative => credit.
-            // Retained earnings absorbs both the day-one fair-value benefit
-            // (credit) and any prior-year interest accretion (debit); netting
-            // them keeps a single RE line. Signed = priorExtra - day1Discount.
-            const retainedEarnings = Number((adj.priorExtra - adj.day1Discount).toFixed(2));
-            const reNote =
-              Math.abs(adj.priorExtra) >= 0.01
-                ? "Initial fair-value benefit, net of prior-year interest accretion"
-                : "Initial fair-value benefit recognized at inception";
-            const lines: { account: string; note: string; amount: number }[] = [
-              {
-                account: liabilityLabel,
-                note: "Restate carrying amount to fair value (remaining unamortized discount)",
-                amount: adj.remainingDiscount,
-              },
-              {
-                account: "Interest Expense",
-                note: "Current-year fair-value interest accretion",
-                amount: adj.currentExtra,
-              },
-              {
-                account: "Retained Earnings (opening)",
-                note: reNote,
-                amount: retainedEarnings,
-              },
-            ];
-            const totalDebit = lines.reduce((s, l) => s + (l.amount > 0 ? l.amount : 0), 0);
-            const totalCredit = lines.reduce((s, l) => s + (l.amount < 0 ? -l.amount : 0), 0);
+            if (adjEntryYear == null || !fvAccounting) return null;
+
+            const annualEntry = fvAccounting.annualEntries.find(e => (e.evidence as any).fiscalYear === adjEntryYear);
+            const cumulative = fvAccounting.cumulativeSupport.find(e => (e.evidence as any).fiscalYear === adjEntryYear);
+
+            // Only show day-one if it's the first year of the loan
+            const isFirstYear = fvAccounting.annualEntries.length > 0 && (fvAccounting.annualEntries[0].evidence as any).fiscalYear === adjEntryYear;
+            const dayOneEntry = isFirstYear ? fvAccounting.dayOne : null;
+
+            if (!annualEntry && !cumulative) return null;
+
             return (
               <>
                 <DialogHeader>
                   <DialogTitle className="font-display flex items-center gap-2">
                     <FileText className="h-5 w-5" />
-                    Adjusting Journal Entry — {adj.label}
+                    Fair Value Accounting Entries — Year {adjEntryYear}
                   </DialogTitle>
                   <DialogDescription>
-                    Cumulative unrecorded fair-value adjustment (ASPE 3856) as at this fiscal
-                    year end, restating the loan from the unadjusted (contractual) basis to
-                    fair value. Includes prior-year catch-up where applicable. Computed
-                    on-the-fly for working-paper documentation.
+                    Distinct day-one and annual effective-interest entries for the year.
                   </DialogDescription>
                 </DialogHeader>
 
-                <div className="space-y-4">
-                  <div className="grid grid-cols-3 gap-3 text-sm">
-                    <div className="rounded-lg border p-3">
-                      <div className="text-xs text-muted-foreground">Day-one FV difference</div>
-                      <div className="font-semibold">{formatCurrency(adj.day1Discount)}</div>
-                    </div>
-                    <div className="rounded-lg border p-3">
-                      <div className="text-xs text-muted-foreground">Accreted to date</div>
-                      <div className="font-semibold">{formatCurrency(adj.cumulativeExtra)}</div>
-                    </div>
-                    <div className="rounded-lg border p-3">
-                      <div className="text-xs text-muted-foreground">Remaining discount</div>
-                      <div className="font-semibold">{formatCurrency(adj.remainingDiscount)}</div>
-                    </div>
-                  </div>
-
-                  <div className="rounded-lg border overflow-hidden text-sm">
-                    <div className="bg-muted/40 p-2 text-xs font-medium text-muted-foreground">
-                      Proposed adjusting entry — {adj.label}
-                    </div>
-                    <table className="w-full">
-                      <thead>
-                        <tr className="border-b bg-muted/20">
-                          <th className="text-left p-2 font-medium">Account</th>
-                          <th className="text-right p-2 font-medium">Debit</th>
-                          <th className="text-right p-2 font-medium">Credit</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {lines.map((line, idx) => (
-                          <tr key={idx} className="border-t align-top">
-                            <td className="p-2">
-                              <div className="font-medium">{line.account}</div>
-                              <div className="text-xs text-muted-foreground">{line.note}</div>
-                            </td>
-                            <td className="p-2 text-right whitespace-nowrap">
-                              {line.amount > 0 ? formatCurrency(line.amount) : ""}
-                            </td>
-                            <td className="p-2 text-right whitespace-nowrap">
-                              {line.amount < 0 ? formatCurrency(-line.amount) : ""}
-                            </td>
+                <div className="space-y-6">
+                  {dayOneEntry && (
+                    <div className="rounded-lg border overflow-hidden text-sm">
+                      <div className="bg-muted/40 p-2 text-xs font-medium text-muted-foreground border-b">
+                        {dayOneEntry.label}
+                      </div>
+                      <table className="w-full">
+                        <thead>
+                          <tr className="border-b bg-muted/20">
+                            <th className="text-left p-2 font-medium">Account</th>
+                            <th className="text-right p-2 font-medium">Debit</th>
+                            <th className="text-right p-2 font-medium">Credit</th>
                           </tr>
-                        ))}
-                      </tbody>
-                      <tfoot>
-                        <tr className="border-t bg-muted/30 font-semibold">
-                          <td className="p-2 text-right">Totals</td>
-                          <td className="p-2 text-right whitespace-nowrap">{formatCurrency(totalDebit)}</td>
-                          <td className="p-2 text-right whitespace-nowrap">{formatCurrency(totalCredit)}</td>
-                        </tr>
-                      </tfoot>
-                    </table>
-                  </div>
+                        </thead>
+                        <tbody>
+                          {dayOneEntry.lines.map((line: any, idx: number) => (
+                            <tr key={idx} className="border-t align-top">
+                              <td className="p-2 font-medium">{line.account}</td>
+                              <td className="p-2 text-right">{line.debit ? formatCurrency(line.debit) : ""}</td>
+                              <td className="p-2 text-right">{line.credit ? formatCurrency(line.credit) : ""}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
 
-                  <div className="bg-muted/50 border rounded-lg p-3 text-xs text-muted-foreground space-y-1">
-                    <p>
-                      <strong>Basis:</strong> The client's records carry the loan at the
-                      contractual (face) basis. This entry flags the unadjusted difference
-                      between actual and fair value as at {adj.label.toLowerCase()}. The
-                      balance-sheet line equals the remaining unamortized discount; the
-                      current-year interest accretion is taken to interest expense.
-                    </p>
-                    <p>
-                      <strong>Retained earnings:</strong> The initial fair-value benefit and any
-                      prior-year interest accretion are both taken to opening retained earnings
-                      (shown net). Here that is the ${formatCurrency(adj.day1Discount)} day-one
-                      benefit{Math.abs(adj.priorExtra) >= 0.01 ? ` less ${formatCurrency(adj.priorExtra)} of prior-year accretion` : ""}.
-                    </p>
-                  </div>
+                  {annualEntry && (
+                    <div className="rounded-lg border overflow-hidden text-sm">
+                      <div className="bg-muted/40 p-2 text-xs font-medium text-muted-foreground border-b">
+                        {annualEntry.label}
+                      </div>
+                      <table className="w-full">
+                        <thead>
+                          <tr className="border-b bg-muted/20">
+                            <th className="text-left p-2 font-medium">Account</th>
+                            <th className="text-right p-2 font-medium">Debit</th>
+                            <th className="text-right p-2 font-medium">Credit</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {annualEntry.lines.map((line: any, idx: number) => (
+                            <tr key={idx} className="border-t align-top">
+                              <td className="p-2 font-medium">{line.account}</td>
+                              <td className="p-2 text-right">{line.debit ? formatCurrency(line.debit) : ""}</td>
+                              <td className="p-2 text-right">{line.credit ? formatCurrency(line.credit) : ""}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {cumulative && (
+                    <div className="rounded-lg border p-4 bg-muted/20 space-y-3">
+                      <h4 className="text-sm font-semibold">Supporting Cumulative Reconciliation</h4>
+                      <div className="grid grid-cols-3 gap-3 text-sm">
+                        <div className="rounded-lg border bg-background p-3">
+                          <div className="text-xs text-muted-foreground">Day-one FV difference</div>
+                          <div className="font-semibold">{formatCurrency(cumulative.dayOneDifference)}</div>
+                        </div>
+                        <div className="rounded-lg border bg-background p-3">
+                          <div className="text-xs text-muted-foreground">Accreted to date</div>
+                          <div className="font-semibold">{formatCurrency(cumulative.cumulativeAccretion)}</div>
+                        </div>
+                        <div className="rounded-lg border bg-background p-3">
+                          <div className="text-xs text-muted-foreground">Remaining discount</div>
+                          <div className="font-semibold">{formatCurrency(cumulative.remainingDiscount)}</div>
+                        </div>
+                      </div>
+                      <p className="text-[11px] text-muted-foreground leading-relaxed mt-2">
+                        The cumulative unrecorded adjustment as at the fiscal year end. Because the client keeps the loan on the books at contractual amounts and the day-one discount unwinds over time through extra interest, the required adjustment is the day-one discount less the discount already accreted.
+                      </p>
+                    </div>
+                  )}
                 </div>
 
                 <DialogFooter>
@@ -2461,6 +2539,17 @@ export default function LoanDetail() {
             </DialogDescription>
           </DialogHeader>
           <LoanFormFields form={editForm} setForm={setEditForm} mode={editMode} />
+          <ModificationAssessment
+            key={`${loanId}-${modification.predecessorAgreementId ?? "none"}`}
+            agreements={[...(fileLoans ?? []), ...(linkedPredecessor ? [linkedPredecessor] : [])].filter((item, index, all) => all.findIndex((other) => other.id === item.id) === index)}
+            currentAgreementId={loanId}
+            successor={editForm}
+            mode={editMode}
+            initialPredecessorId={modification.predecessorAgreementId}
+            initialEffectiveDate={modification.modificationEffectiveDate}
+            initialAssessment={modification.modificationAssessment}
+            onChange={setModification}
+          />
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditOpen(false)}>Cancel</Button>
             <Button
@@ -2480,11 +2569,27 @@ export default function LoanDetail() {
                       isCapitalLease: editForm.isCapitalLease,
                       principal: editForm.principal,
                       downPayment: editForm.downPayment,
-                      interestRate: editForm.interestRate,
+                      interestRate: Number(editForm.interestRate),
+                      rateType: editForm.rateType,
+                      rateBenchmark: editForm.rateType === "prime_linked"
+                        ? editForm.rateBenchmark === "boc_v80691311" ? "boc_v80691311" : undefined
+                        : null,
+                      contractualPrimeName: editForm.contractualPrimeName,
+                      benchmarkEquivalentToContractualPrime: editForm.benchmarkEquivalentToContractualPrime,
+                      rateSpread: editForm.rateSpread,
+                      rateResetFrequency: editForm.rateResetFrequency,
+                      rateEffectiveConvention: editForm.rateEffectiveConvention,
+                      ratePaymentTreatment: editForm.ratePaymentTreatment,
+                      initialFvRateAssumption: editForm.initialFvRateAssumption,
                       amortizationYears: editForm.amortizationYears,
                       termYears: editForm.termYears,
                       startDate: editForm.startDate,
                       paymentFrequency: editForm.paymentFrequency,
+                      paymentTiming: editForm.paymentTiming,
+                      graceTermMode: editForm.graceTermMode,
+                      firstPaymentDate: editForm.firstPaymentDate || null,
+                      semiMonthlyFirstDueDay: editForm.semiMonthlyFirstDueDay ?? null,
+                      semiMonthlySecondDueDay: editForm.semiMonthlySecondDueDay ?? null,
                       ioMonths: editForm.ioMonths,
                       graceMonths: editForm.graceMonths,
                       graceInterestTreatment: editForm.graceInterestTreatment,
@@ -2510,10 +2615,7 @@ export default function LoanDetail() {
                       otherInducements: editForm.otherInducements,
                       inducementReceivedInCash: editForm.inducementReceivedInCash,
                       covenantViolation: editForm.covenantViolation,
-                      fvRate: editForm.fvRate,
-                      fvDecision: editForm.fvDecision,
-                      fvDecisionNote: editForm.fvDecisionNote || undefined,
-                      securityClauses: editForm.securityClauses,
+                                                                                        securityClauses: editForm.securityClauses,
                       collateralType: editForm.collateralType || null,
                       collateralDescription: editForm.collateralDescription || null,
                       collateralDepreciableCost: editForm.collateralDepreciableCost || null,
@@ -2523,11 +2625,14 @@ export default function LoanDetail() {
                       collateralUsefulLifeYears: editForm.collateralUsefulLifeYears || null,
                       collateralDecliningRate: editForm.collateralDecliningRate || null,
                       collateralSalvageValue: editForm.collateralSalvageValue || null,
+                      predecessorAgreementId: modification.predecessorAgreementId,
+                      modificationEffectiveDate: modification.modificationEffectiveDate,
+                      modificationAssessment: modification.modificationAssessment,
                     },
                   });
                 }
               }}
-              disabled={validateLoanForm(editForm, editMode) !== null || updateLoan.isPending}
+              disabled={validateLoanForm(editForm, editMode) !== null || !modification.valid || updateLoan.isPending}
             >
               {updateLoan.isPending ? "Saving..." : "Save Changes"}
             </Button>
@@ -2561,6 +2666,7 @@ export default function LoanDetail() {
         };
         return (
           <CapitalLeaseAssessment
+            readOnly={!canWrite}
             open={reevaluateOpen}
             onOpenChange={setReevaluateOpen}
             onConfirm={(result) => {
@@ -2634,6 +2740,134 @@ export default function LoanDetail() {
           />
         );
       })()}
+      <Dialog open={eventEditorOpen} onOpenChange={setEventEditorOpen}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader><DialogTitle>Mid-term Principal Payments</DialogTitle><DialogDescription>Edit the complete draft timeline. Saving creates a successor event set; existing evidence is never patched.</DialogDescription></DialogHeader>
+          <div className="max-h-[55vh] overflow-y-auto space-y-3">
+            {eventDraft.map((event, index) => (
+              <div key={`${event.effectiveDate}-${index}`} className="rounded-lg border p-3 grid grid-cols-1 md:grid-cols-3 gap-2 text-sm">
+                <Label>Date<Input type="date" value={event.effectiveDate.slice(0, 10)} onChange={e => setEventDraft(d => d.map((v, i) => i === index ? { ...v, effectiveDate: e.target.value } : v))} /></Label>
+                <Label>Principal amount<Input type="number" min="0.01" value={event.amount} onChange={e => setEventDraft(d => d.map((v, i) => i === index ? { ...v, amount: Number(e.target.value) } : v))} /></Label>
+                <Label>Same-day order<Input type="number" min="1" value={event.sequence} onChange={e => setEventDraft(d => d.map((v, i) => i === index ? { ...v, sequence: Math.max(1, Number(e.target.value)) } : v))} /></Label>
+                <Label>Relative to scheduled payment<select className="w-full h-9 border rounded px-2" value={event.ordering} onChange={e => setEventDraft(d => d.map((v, i) => i === index ? { ...v, ordering: e.target.value as LoanEventInput["ordering"] } : v))}><option value="before_scheduled_payment">Before scheduled payment</option><option value="after_scheduled_payment">After scheduled payment</option></select></Label>
+                <Label>Treatment<select className="w-full h-9 border rounded px-2" value={event.treatment} onChange={e => setEventDraft(d => d.map((v, i) => i === index ? { ...v, treatment: e.target.value as LoanEventInput["treatment"] } : v))}><option value="keep_payment">Keep payment / earlier payoff</option><option value="keep_maturity">Keep maturity / recast payments</option></select></Label>
+                <Label>Classification<select className="w-full h-9 border rounded px-2" value={event.classification} onChange={e => setEventDraft(d => d.map((v, i) => i === index ? { ...v, classification: e.target.value as LoanEventInput["classification"] } : v))}><option value="ordinary">Ordinary contractual prepayment</option><option value="agreement_change">Agreement change</option></select></Label>
+                <Label>Source<Input value={event.source} onChange={e => setEventDraft(d => d.map((v, i) => i === index ? { ...v, source: e.target.value } : v))} /></Label>
+                <Label className="md:col-span-2">Reason<Input value={event.reason} onChange={e => setEventDraft(d => d.map((v, i) => i === index ? { ...v, reason: e.target.value } : v))} /></Label>
+                <Button variant="ghost" className="text-destructive" onClick={() => setEventDraft(d => d.filter((_, i) => i !== index))}>Remove</Button>
+              </div>
+            ))}
+            {eventDraft.some(e => e.classification === "agreement_change") && <p className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">Agreement-change items must be assessed in the renewal/modification workflow. They cannot be saved as ordinary principal payments.</p>}
+            {eventPreview && <div className="rounded-md bg-muted p-3 text-sm grid grid-cols-2 gap-2"><b>Preview (before → after)</b><span /><span>Next payment: {formatCurrency(eventPreview.before.nextRegularPayment)} → {formatCurrency(eventPreview.after.nextRegularPayment)}</span><span>Payoff: {eventPreview.before.payoffDate ?? "—"} → {eventPreview.after.payoffDate ?? "—"}</span><span>Total interest: {formatCurrency(eventPreview.before.totalInterest)} → {formatCurrency(eventPreview.after.totalInterest)}</span><span>Ending balance: {formatCurrency(eventPreview.before.endingBalance)} → {formatCurrency(eventPreview.after.endingBalance)}</span></div>}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEventDraft(d => normalizeEventSequences([...d, { kind: "principal_prepayment", effectiveDate: loan.startDate.slice(0, 10), ordering: "after_scheduled_payment", sequence: d.length + 1, amount: 0, treatment: "keep_payment", classification: "ordinary", source: "Loan agreement", reason: "", authoredAt: new Date().toISOString() }]))}>Add payment</Button>
+            <Label className="flex-1">Set reason<Input value={eventReason} onChange={e => setEventReason(e.target.value)} placeholder="Why this successor set is being created" /></Label>
+            <Button variant="secondary" disabled={!eventReason || eventDraft.some(e => !e.effectiveDate || e.amount <= 0 || !e.source || !e.reason || e.classification === "agreement_change")} onClick={() => { const events = normalizeEventSequences(eventDraft); setEventDraft(events); previewEventSet.mutate({ id: loanId, data: { expectedVersion: loan.activeEventSetVersion, termRevisionId: loan.currentRevisionId!, reason: eventReason, source: "Loan detail", events } }); }}>Preview</Button>
+            <Button disabled={!eventReason || !loan.currentRevisionId || eventDraft.some(e => !e.effectiveDate || e.amount <= 0 || !e.source || !e.reason || e.classification === "agreement_change")} onClick={() => { const events = normalizeEventSequences(eventDraft); setEventDraft(events); createEventSet.mutate({ id: loanId, data: { expectedVersion: loan.activeEventSetVersion, termRevisionId: loan.currentRevisionId!, reason: eventReason, source: "Loan detail", events } }); }}>Save successor set</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Override Loan Rate Dialog */}
+      <Dialog open={overrideOpen} onOpenChange={setOverrideOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Override Variable Rate</DialogTitle>
+            <DialogDescription>
+              Record a confirmed rate observation when the automated fetch fails or the lender's contractual rate differs from the public benchmark.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label>Effective Date</Label>
+              <Input
+                type="date"
+                value={overrideDate}
+                onChange={(e) => setOverrideDate(e.target.value)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Benchmark Rate (%)</Label>
+              <Input
+                type="number"
+                step="0.001"
+                min="0"
+                max="100"
+                value={overrideRate}
+                onChange={(e) => setOverrideRate(e.target.value === "" ? "" : Number(e.target.value))}
+              />
+              <p className="text-xs text-muted-foreground">The public rate before the loan's contractual spread is applied.</p>
+            </div>
+            <div className="space-y-2">
+              <Label>Source URL or Document</Label>
+              <Input
+                value={overrideUrl}
+                onChange={(e) => setOverrideUrl(e.target.value)}
+                placeholder="e.g. Bank statement pg 2, or public URL"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Reason for override</Label>
+              <Input
+                value={overrideReason}
+                onChange={(e) => setOverrideReason(e.target.value)}
+                placeholder="e.g. Contractual prime differs from public BOC prime"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setOverrideOpen(false)}>Cancel</Button>
+            <Button
+              disabled={!overrideDate || overrideRate === "" || !overrideUrl.trim() || !overrideReason.trim() || overrideLoanRate.isPending}
+              onClick={() => {
+                overrideLoanRate.mutate({
+                  id: loanId,
+                  data: {
+                    effectiveDate: overrideDate,
+                    benchmarkRate: overrideRate as number,
+                    sourceUrl: overrideUrl,
+                    reason: overrideReason,
+                    author: "Current User",
+                  }
+                });
+              }}
+            >
+              {overrideLoanRate.isPending ? "Saving..." : "Save Override"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Restore Loan Rate Dialog */}
+      <Dialog open={restoreOpen} onOpenChange={setRestoreOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Restore Sourced Rate</DialogTitle>
+            <DialogDescription>
+              Remove the manual override effective on {restoreDate ? format(parseISO(restoreDate), "MMMM d, yyyy") : ""} and restore the automatically fetched benchmark rate. The override will remain visible in the audit trail.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="mt-4">
+            <Button variant="outline" onClick={() => setRestoreOpen(false)}>Cancel</Button>
+            <Button
+              variant="default"
+              disabled={!restoreDate || restoreLoanRate.isPending}
+              onClick={() => {
+                restoreLoanRate.mutate({
+                  id: loanId,
+                  data: {
+                    effectiveDate: restoreDate,
+                    author: "Current User",
+                  }
+                });
+              }}
+            >
+              {restoreLoanRate.isPending ? "Restoring..." : "Restore Rate"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

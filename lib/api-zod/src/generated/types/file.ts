@@ -13,6 +13,7 @@ export interface File {
   fiscalYearEnd: Date;
   trivialThreshold?: number;
   materiality?: number;
+  rolledFromId?: string | null;
   dismissedFindings?: string[] | null;
   createdAt: Date;
   updatedAt: Date;

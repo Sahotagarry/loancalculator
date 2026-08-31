@@ -1,6 +1,7 @@
 import { useState } from "react";
 import {
   useListTrash,
+  getListTrashQueryKey,
   useRestoreTrashItem,
   usePurgeTrashItem,
 } from "@workspace/api-client-react";
@@ -11,7 +12,9 @@ import { Button } from "@/components/ui/button";
 import ConfirmDialog from "@/components/confirm-dialog";
 import { toast } from "@/hooks/use-toast";
 import { getErrorMessage } from "@/lib/errors";
-import { Trash2, Undo2, Building2, FolderOpen, Landmark, FileText } from "lucide-react";
+import { Trash2, Undo2, Building2, FolderOpen, Landmark, FileText, ShieldAlert } from "lucide-react";
+import { Link } from "wouter";
+import { useAuth } from "@/hooks/use-auth";
 
 type TrashType = "client" | "file" | "loan";
 
@@ -23,7 +26,13 @@ function formatDeletedAt(iso: string | null | undefined): string {
 }
 
 export default function TrashPage() {
-  const { data: trash, isLoading } = useListTrash();
+  const { canDelete, canPurge, isLoading: authLoading } = useAuth();
+  const { data: trash, isLoading } = useListTrash({
+    query: {
+      queryKey: getListTrashQueryKey(),
+      enabled: canDelete
+    }
+  });
   const [purgeTarget, setPurgeTarget] = useState<{ type: TrashType; id: string; label: string } | null>(null);
 
   const invalidateAll = () => {
@@ -90,18 +99,49 @@ export default function TrashPage() {
         <Undo2 className="h-4 w-4 mr-1.5" />
         Restore
       </Button>
-      <Button
-        variant="ghost"
-        size="sm"
-        className="text-destructive hover:text-destructive"
-        disabled={restore.isPending || purge.isPending}
-        onClick={() => setPurgeTarget({ type: opts.type, id: opts.id, label: opts.title })}
-      >
-        <Trash2 className="h-4 w-4" />
-        <span className="sr-only">Delete permanently</span>
-      </Button>
+      {canPurge && (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="text-destructive hover:text-destructive"
+          disabled={restore.isPending || purge.isPending}
+          onClick={() => setPurgeTarget({ type: opts.type, id: opts.id, label: opts.title })}
+        >
+          <Trash2 className="h-4 w-4" />
+          <span className="sr-only">Delete permanently</span>
+        </Button>
+      )}
     </div>
   );
+
+  if (authLoading) return null;
+
+  if (!canDelete) {
+    return (
+      <div className="min-h-screen bg-background">
+        <PageHeader
+          backHref="/"
+          title="Access Denied"
+        />
+        <div className="max-w-md mx-auto p-4 md:p-8 mt-10">
+          <Card className="border-destructive/20 bg-destructive/5">
+            <CardHeader className="pb-3 text-center">
+              <ShieldAlert className="h-10 w-10 text-destructive mx-auto mb-2" />
+              <CardTitle>Manager Access Required</CardTitle>
+              <CardDescription>
+                You do not have permission to view or restore deleted items.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex justify-center">
+              <Button asChild variant="outline">
+                <Link href="/">Return to Dashboard</Link>
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background">

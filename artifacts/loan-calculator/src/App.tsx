@@ -9,6 +9,7 @@ import ClientDetail from "@/pages/client-detail";
 import FileDetail from "@/pages/file-detail";
 import LoanDetail from "@/pages/loan-detail";
 import SettingsPage from "@/pages/settings";
+import AccessSettingsPage from "@/pages/settings-access";
 import TrashPage from "@/pages/trash";
 
 function Router() {
@@ -16,6 +17,7 @@ function Router() {
     <Switch>
       <Route path="/" component={Home} />
       <Route path="/settings" component={SettingsPage} />
+      <Route path="/settings/access" component={AccessSettingsPage} />
       <Route path="/trash" component={TrashPage} />
       <Route path="/client/:id" component={ClientDetail} />
       <Route path="/client/:id/file/:fileId" component={FileDetail} />

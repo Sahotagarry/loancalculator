@@ -2,7 +2,9 @@ import { useEffect, useState } from "react";
 import {
   useGetAzureSettings,
   useUpdateAzureSettings,
-  useUnlockSettings,
+  useGetRateResetStatus,
+  getGetAzureSettingsQueryKey,
+  getGetRateResetStatusQueryKey,
 } from "@workspace/api-client-react";
 import { queryClient } from "@/lib/queryClient";
 import { PageHeader } from "@/components/page-header";
@@ -10,12 +12,12 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import { toast } from "@/hooks/use-toast";
 import { getErrorMessage } from "@/lib/errors";
-import { CheckCircle2, XCircle, KeyRound, FileScan, Sparkles, Database, Lock } from "lucide-react";
-
-const TOKEN_KEY = "settingsAdminToken";
+import { CheckCircle2, XCircle, KeyRound, FileScan, Sparkles, Database, Lock, Activity, AlertTriangle, ShieldAlert } from "lucide-react";
+import { format, parseISO } from "date-fns";
+import { useAuth } from "@/hooks/use-auth";
 
 function KeyStatus({ set }: { set: boolean }) {
   return set ? (
@@ -30,31 +32,8 @@ function KeyStatus({ set }: { set: boolean }) {
 }
 
 export default function SettingsPage() {
-  const [adminToken, setAdminToken] = useState<string | null>(
-    () => sessionStorage.getItem(TOKEN_KEY),
-  );
-  const [password, setPassword] = useState("");
-
-  const authHeaders: Record<string, string> = adminToken
-    ? { authorization: `Bearer ${adminToken}` }
-    : {};
-
-  const unlockMutation = useUnlockSettings({
-    mutation: {
-      onSuccess: (result) => {
-        sessionStorage.setItem(TOKEN_KEY, result.token);
-        setAdminToken(result.token);
-        setPassword("");
-      },
-      onError: (err) => {
-        toast({
-          title: "Couldn't unlock settings",
-          description: getErrorMessage(err),
-          variant: "destructive",
-        });
-      },
-    },
-  });
+  const { canManageSettings, isLoading: authLoading } = useAuth();
+  const [location] = useLocation();
 
   const {
     data: settings,
@@ -62,21 +41,19 @@ export default function SettingsPage() {
     error: settingsError,
   } = useGetAzureSettings({
     query: {
-      queryKey: ["/api/settings/azure"],
-      enabled: Boolean(adminToken),
+      queryKey: getGetAzureSettingsQueryKey(),
+      enabled: canManageSettings,
       retry: false,
     },
-    request: { headers: authHeaders },
   });
 
-  // An expired or invalid token sends the user back to the password prompt.
-  useEffect(() => {
-    if (settingsError && (settingsError as { status?: number }).status === 401) {
-      sessionStorage.removeItem(TOKEN_KEY);
-      setAdminToken(null);
-      queryClient.removeQueries({ queryKey: ["/api/settings/azure"] });
+  const { data: resetStatus, isLoading: statusLoading } = useGetRateResetStatus({
+    query: {
+      queryKey: getGetRateResetStatusQueryKey(),
+      enabled: canManageSettings,
+      refetchInterval: 15000,
     }
-  }, [settingsError]);
+  }) as { data: any; isLoading: boolean };
 
   const [docIntelEndpoint, setDocIntelEndpoint] = useState("");
   const [docIntelKey, setDocIntelKey] = useState("");
@@ -93,27 +70,15 @@ export default function SettingsPage() {
   }, [settings]);
 
   const update = useUpdateAzureSettings({
-    request: { headers: authHeaders },
     mutation: {
       onSuccess: () => {
-        queryClient.invalidateQueries({ queryKey: ["/api/settings/azure"] });
+        queryClient.invalidateQueries({ queryKey: getGetAzureSettingsQueryKey() });
         setDocIntelKey("");
         setOpenaiKey("");
         setStorageConnectionString("");
         toast({ title: "Settings saved", description: "Your Azure credentials have been updated." });
       },
       onError: (err) => {
-        if ((err as { status?: number }).status === 401) {
-          sessionStorage.removeItem(TOKEN_KEY);
-          setAdminToken(null);
-          queryClient.removeQueries({ queryKey: ["/api/settings/azure"] });
-          toast({
-            title: "Session expired",
-            description: "Please enter the admin password again, then save.",
-            variant: "destructive",
-          });
-          return;
-        }
         toast({ title: "Couldn't save settings", description: getErrorMessage(err), variant: "destructive" });
       },
     },
@@ -132,58 +97,28 @@ export default function SettingsPage() {
     });
   };
 
-  if (!adminToken) {
+  if (authLoading) return null;
+
+  if (!canManageSettings) {
     return (
       <div className="min-h-screen bg-background">
         <PageHeader
           backHref="/"
-          breadcrumb={
-            <>
-              <Link href="/" className="hover:text-foreground transition-colors font-semibold cursor-pointer">Clients</Link>
-              <span className="text-border">/</span>
-              <span className="text-foreground font-semibold">Settings</span>
-            </>
-          }
-          title="Settings"
+          title="Access Denied"
         />
-        <div className="max-w-md mx-auto p-4 md:p-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base flex items-center gap-2">
-                <Lock className="h-4 w-4 text-primary" /> Admin access required
-              </CardTitle>
+        <div className="max-w-md mx-auto p-4 md:p-8 mt-10">
+          <Card className="border-destructive/20 bg-destructive/5">
+            <CardHeader className="pb-3 text-center">
+              <ShieldAlert className="h-10 w-10 text-destructive mx-auto mb-2" />
+              <CardTitle>Administrator Access Required</CardTitle>
               <CardDescription>
-                The Azure credentials are protected. Enter the admin password to view or change
-                them. You'll stay unlocked for this browser session.
+                You do not have permission to view or manage settings.
               </CardDescription>
             </CardHeader>
-            <CardContent>
-              <form
-                className="space-y-3"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  if (password) unlockMutation.mutate({ data: { password } });
-                }}
-              >
-                <div className="space-y-1.5">
-                  <Label htmlFor="adminPassword">Admin password</Label>
-                  <Input
-                    id="adminPassword"
-                    type="password"
-                    autoFocus
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                  />
-                </div>
-                <Button
-                  type="submit"
-                  className="w-full gap-2"
-                  disabled={!password || unlockMutation.isPending}
-                >
-                  <KeyRound className="h-4 w-4" />
-                  {unlockMutation.isPending ? "Checking…" : "Unlock Settings"}
-                </Button>
-              </form>
+            <CardContent className="flex justify-center">
+              <Button asChild variant="outline">
+                <Link href="/">Return to Dashboard</Link>
+              </Button>
             </CardContent>
           </Card>
         </div>
@@ -203,13 +138,75 @@ export default function SettingsPage() {
           </>
         }
         title="Settings"
-        meta={
-          <span className="text-sm text-muted-foreground hidden md:inline">
-            Azure credentials for PDF document import.
-          </span>
-        }
       />
+
       <div className="max-w-3xl mx-auto p-4 md:p-8 space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-700">
+        <div className="flex border-b">
+          <Link href="/settings">
+            <div className={`px-4 py-2 text-sm font-medium border-b-2 cursor-pointer transition-colors ${location === "/settings" ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}>
+              Azure Integration
+            </div>
+          </Link>
+          <Link href="/settings/access">
+            <div className={`px-4 py-2 text-sm font-medium border-b-2 cursor-pointer transition-colors ${location === "/settings/access" ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}>
+              Access & Users
+            </div>
+          </Link>
+        </div>
+
+        <Card>
+          <CardHeader className="pb-3 bg-muted/30 rounded-t-xl">
+            <CardTitle className="text-base flex items-center justify-between">
+              <span className="flex items-center gap-2">
+                <Activity className="h-4 w-4 text-primary" /> Prime Rate Sync Status
+              </span>
+            </CardTitle>
+            <CardDescription>
+              Automatic retrieval of benchmark rate observations and calculation of required prime-linked resets.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="pt-4">
+            {statusLoading ? (
+              <div className="text-sm text-muted-foreground">Checking status...</div>
+            ) : !resetStatus?.runs || resetStatus.runs.length === 0 ? (
+              <div className="text-sm text-muted-foreground">No sync runs recorded yet.</div>
+            ) : (
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                  <div className="space-y-1">
+                    <span className="text-muted-foreground block text-xs uppercase tracking-wider">Last Run</span>
+                    <span className="font-medium whitespace-nowrap">
+                      {format(parseISO(resetStatus.runs[0].startedAt), "MMM d, h:mm a")}
+                    </span>
+                  </div>
+                  <div className="space-y-1">
+                    <span className="text-muted-foreground block text-xs uppercase tracking-wider">Status</span>
+                    <span className={`inline-flex items-center gap-1 font-medium capitalize ${resetStatus.runs[0].status === 'failed' ? 'text-red-600' : resetStatus.runs[0].status === 'partial' ? 'text-amber-600' : resetStatus.runs[0].status === 'succeeded' ? 'text-emerald-600' : 'text-blue-600'}`}>
+                      {resetStatus.runs[0].status}
+                    </span>
+                  </div>
+                  <div className="space-y-1">
+                    <span className="text-muted-foreground block text-xs uppercase tracking-wider">Applied</span>
+                    <span className="font-medium">{resetStatus.runs[0].applied} / {resetStatus.runs[0].attempted}</span>
+                  </div>
+                  <div className="space-y-1">
+                    <span className="text-muted-foreground block text-xs uppercase tracking-wider">Unresolved</span>
+                    <span className={`font-medium ${resetStatus.unresolved?.length > 0 ? 'text-red-600 font-bold' : ''}`}>
+                      {resetStatus.unresolved?.length || 0}
+                    </span>
+                  </div>
+                </div>
+                {(resetStatus.unresolved?.length || 0) > 0 && (
+                  <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+                    <AlertTriangle className="inline h-4 w-4 mr-1.5 align-text-bottom" />
+                    <strong>{resetStatus.unresolved.length} unresolved rate {resetStatus.unresolved.length === 1 ? 'finding' : 'findings'}</strong> across the system. Check affected loans to provide manual overrides.
+                  </div>
+                )}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
         <p className="text-sm text-muted-foreground">
           The PDF import feature uses three Azure services: Document Intelligence reads the PDF,
           Azure OpenAI identifies the loan or lease details, and Blob Storage keeps a copy of the

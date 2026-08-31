@@ -1,5 +1,6 @@
 import { parseISO, addMonths, addYears, isAfter, isBefore } from "date-fns";
-import { isOperatingLeaseLoan } from "./aspe-utils";
+import { calculateProspectiveModificationSchedule } from "@workspace/amortization";
+import { isOperatingLeaseLoan, PROSPECTIVE_EIR_EVIDENCE_WARNING } from "./aspe-utils";
 
 /* ── Types ───────────────────────────────────────────────────── */
 
@@ -10,6 +11,8 @@ export interface DiagnosticFinding {
   severity: DiagnosticSeverity;
   message: string;
   suggestion: string;
+  actionHref?: string;
+  actionLabel?: string;
 }
 
 export interface LoanDiagnosticInput {
@@ -20,10 +23,27 @@ export interface LoanDiagnosticInput {
   isCapitalLease: boolean;
   principal: string | number;
   interestRate: string | number;
+  rateType?: "fixed" | "prime_linked" | string | null;
+  rateBenchmark?: string | null;
+  contractualPrimeName?: string | null;
+  benchmarkEquivalentToContractualPrime?: boolean | null;
+  rateSpread?: string | number | null;
+  rateResetFrequency?: string | null;
+  rateEffectiveConvention?: string | null;
+  ratePaymentTreatment?: string | null;
+  initialFvRateAssumption?: Record<string, unknown> | null;
+  rateTimelineEvents?: Array<{ effectiveDate: string; observationDate?: string | null; setId?: string | null }> | null;
+  activeRateSetId?: string | null;
   amortizationYears: number;
   termYears: number;
   startDate: string;
   paymentFrequency: string;
+  paymentTiming?: "beginning" | "end" | null;
+  graceTermMode?: "included" | "added" | null;
+  firstPaymentDate?: string | null;
+  semiMonthlyFirstDueDay?: number | null;
+  semiMonthlySecondDueDay?: number | null;
+  graceMonths?: number | null;
   balloonPayment?: string | number | null;
   transferOfOwnership?: boolean;
   bargainPurchaseOption?: boolean;
@@ -53,10 +73,43 @@ export interface LoanDiagnosticInput {
   collateralMethod?: string | null;
   collateralDecliningRate?: string | number | null;
   collateralInServiceDate?: string | null;
+  fvDecisionHistory?: any; // FairValueDecisionHistory
   dismissedFindings?: string[] | null;
+  currentRevisionId?: string | null;
+  activeEventSetId?: string | null;
+  activeEventSetVersion?: number | null;
+  activeEventSetHash?: string | null;
+  activeEvents?: Array<{
+    id: string; effectiveDate: string; amount: number; sequence: number;
+    ordering: "before_scheduled_payment" | "after_scheduled_payment";
+    treatment: "keep_payment" | "keep_maturity"; classification: "ordinary" | "agreement_change";
+    termRevisionId: string;
+  }> | null;
+  predecessorAgreementId?: string | null;
+  modificationEffectiveDate?: string | null;
+  modificationAssessment?: {
+    status?: string;
+    conclusion?: { accountingTreatment?: string; rationale?: string };
+    evidence?: {
+      quantitativeTest?: {
+        carryingAmount?: number;
+        retainedFeesAndCosts?: number;
+        newFeesAndCosts?: number;
+        modifiedCashFlows?: Array<{
+          date: string;
+          amount: number;
+          description?: string;
+          sourceReference?: string;
+        }>;
+        sameDayPaymentTreatment?: "include" | "exclude";
+      } | null;
+    };
+  } | null;
 }
 
 export interface FileDiagnosticInput {
+  id: string;
+  clientId: string;
   fiscalYearEnd: string;
   trivialThreshold?: number | null;
   materiality?: number | null;
@@ -118,8 +171,8 @@ export function runLoanDiagnostics(
   const fye = parseISO(file.fiscalYearEnd);
   const start = loan.startDate ? parseISO(loan.startDate) : null;
 
-  const add = (id: string, severity: DiagnosticSeverity, message: string, suggestion: string) =>
-    findings.push({ id, severity, message, suggestion });
+  const add = (id: string, severity: DiagnosticSeverity, message: string, suggestion: string, actionHref?: string, actionLabel?: string) =>
+    findings.push({ id, severity, message, suggestion, actionHref, actionLabel });
 
   /* Common checks */
   if (blank(loan.counterparty)) {
@@ -146,38 +199,221 @@ export function runLoanDiagnostics(
       "This item has no activity in the current year. Confirm the start date or the file's year end.",
     );
   }
+  if (loan.firstPaymentDate && isNaN(parseISO(loan.firstPaymentDate).getTime())) {
+    add("first-payment-date-invalid", "error", "First payment date is invalid", "Enter a valid contractual first payment date, or clear it only when retaining a legacy schedule anchor.");
+  }
+  if (loan.paymentFrequency === "semi-monthly") {
+    const first = loan.semiMonthlyFirstDueDay;
+    const second = loan.semiMonthlySecondDueDay;
+    if (first == null || second == null) {
+      add("semi-monthly-due-days-missing", "warning", "Semi-monthly due days are not recorded", "Record both contractual due days (1–31); do not infer them from the payment frequency.");
+    } else if (first < 1 || first > 31 || second < 1 || second > 31 || first === second) {
+      add("semi-monthly-due-days-invalid", "error", "Semi-monthly due days are invalid", "Enter two distinct due days from 1 through 31.");
+    }
+  }
+  if ((loan.graceMonths ?? 0) > 0 && loan.graceTermMode === "included" && loan.termYears * 12 <= loan.graceMonths!) {
+    add("grace-term-inconsistent", "error", "Included grace period consumes the stated term", "Increase the stated term, reduce grace months, or mark grace as added to the term.");
+  }
+  const events = loan.activeEvents ?? [];
+  const transitionParts = [
+    !!loan.predecessorAgreementId,
+    !!loan.modificationEffectiveDate,
+    !!loan.modificationAssessment,
+  ];
+  if (transitionParts.some(Boolean) && !transitionParts.every(Boolean)) {
+    add(
+      "modification-assessment-unresolved",
+      "error",
+      "Agreement transition is linked but its assessment is unresolved",
+      "Select the predecessor, effective date, and confirmed modification assessment together.",
+    );
+  } else if (transitionParts.every(Boolean) && loan.modificationAssessment?.status !== "confirmed") {
+    add(
+      "modification-assessment-unconfirmed",
+      "error",
+      "Linked predecessor assessment is not confirmed",
+      "Confirm whether the change is a modification continuation or an extinguishment before reporting it.",
+    );
+  } else if (
+    loan.modificationAssessment?.status === "confirmed" &&
+    loan.modificationAssessment.conclusion?.accountingTreatment === "new_lease" &&
+    kind === "loan"
+  ) {
+    add(
+      "new-lease-classification-inconsistent",
+      "error",
+      "New-lease treatment is selected for a successor classified as a loan",
+      "ASPE 3065 new-lease treatment requires a capital or operating lease successor; correct the classification or conclude debt accounting.",
+    );
+  }
+  if (
+    loan.modificationAssessment?.status === "confirmed" &&
+    loan.modificationAssessment.conclusion?.accountingTreatment === "continuation"
+  ) {
+    try {
+      const quantitative = loan.modificationAssessment.evidence?.quantitativeTest;
+      if (
+        !loan.modificationEffectiveDate ||
+        !quantitative ||
+        !Array.isArray(quantitative.modifiedCashFlows) ||
+        quantitative.modifiedCashFlows.length === 0
+      ) {
+        throw new Error("Incomplete prospective effective-interest evidence");
+      }
+      calculateProspectiveModificationSchedule({
+        effectiveDate: parseISO(loan.modificationEffectiveDate),
+        openingCarryingAmount: quantitative.carryingAmount!,
+        retainedFeesAndCosts: quantitative.retainedFeesAndCosts!,
+        newFeesAndCosts: quantitative.newFeesAndCosts!,
+        modifiedCashFlows: quantitative.modifiedCashFlows.map((flow) => ({
+          date: parseISO(flow.date),
+          amount: flow.amount,
+          description: flow.description ?? "",
+          sourceReference: flow.sourceReference ?? "",
+        })),
+        sameDayPaymentTreatment: quantitative.sameDayPaymentTreatment!,
+      });
+    } catch {
+      add(
+        "prospective-eir-evidence-invalid",
+        "error",
+        PROSPECTIVE_EIR_EVIDENCE_WARNING,
+        "Correct the carrying amount, fee and cost treatment, same-day treatment, and dated modified cash flows, then reconfirm the assessment.",
+      );
+    }
+  }
+  if (events.length > 0 && !loan.activeEventSetId) {
+    add("event-set-missing", "error", "Active payment events have no active event-set evidence", "Refresh the loan and confirm the event set was saved as a successor version.");
+  }
+  if (events.length > 0 && (!loan.activeEventSetHash || loan.activeEventSetVersion == null)) {
+    add("event-set-fingerprint-missing", "warning", "Payment-event set fingerprint or version is missing", "Record a versioned event set so the schedule calculation can be reproduced.");
+  }
+  for (let i = 0; i < events.length; i++) {
+    const event = events[i];
+    if (isNaN(parseISO(event.effectiveDate).getTime()) || event.amount <= 0) {
+      add("event-invalid-values", "error", "A payment event has an invalid date or non-positive amount", "Correct the event in a successor event set.");
+      break;
+    }
+    if (event.termRevisionId !== loan.currentRevisionId) {
+      add("event-stale-revision", "warning", "A payment event is linked to a stale contract revision", "Review the event against the current contractual terms and create a successor event set if appropriate.");
+      break;
+    }
+    if (event.classification === "agreement_change") {
+      add("event-agreement-change", "warning", "A principal payment is classified as an agreement change", "Complete the renewal/modification assessment before treating this as an ordinary prepayment.");
+      break;
+    }
+    const prior = events[i - 1];
+    if (prior && `${prior.effectiveDate}|${prior.ordering}|${prior.sequence}` >= `${event.effectiveDate}|${event.ordering}|${event.sequence}`) {
+      add("event-ordering", "error", "Active payment events are not in canonical order", "Create a successor set ordered by effective date, before/after scheduled payment, then sequence.");
+      break;
+    }
+  }
+
+  if (loan.rateType === "prime_linked") {
+    if (!loan.rateBenchmark || !loan.contractualPrimeName || loan.rateSpread == null ||
+        !loan.rateResetFrequency || !loan.rateEffectiveConvention || !loan.ratePaymentTreatment) {
+      add("prime-reset-terms-missing", "error", "Prime-linked loan is missing contractual reset terms", "Record the benchmark, lender prime distinction, spread, reset frequency, effective-date convention, and payment treatment.");
+    }
+    if (!loan.initialFvRateAssumption || Object.keys(loan.initialFvRateAssumption).length === 0) {
+      add("prime-fv-assumption-not-frozen", "error", "Prime-linked day-one FV assumption is not frozen", "Approve and save the recognition-date expected-rate assumption separately from realized resets.");
+    }
+    if (loan.benchmarkEquivalentToContractualPrime !== true &&
+        loan.rateBenchmark && !((loan.rateTimelineEvents ?? []).some((e) => !!e.observationDate))) {
+      add("lender-prime-unsupported", "warning", "Public benchmark equivalence to lender prime is unconfirmed", "Do not use the public benchmark as a fallback; obtain lender-equivalence evidence or enter a documented override.");
+    }
+    if ((loan.rateTimelineEvents ?? []).some((e) => !e.observationDate)) {
+      add("prime-observation-unresolved", "error", "A required prime reset observation is unresolved", "Retrieve the observation or enter an evidenced override from its contractual effective date.");
+    }
+    if (loan.activeRateSetId && (loan.rateTimelineEvents ?? []).some((e) => e.setId && e.setId !== loan.activeRateSetId)) {
+      add("rate-timeline-stale-revision", "warning", "Rate timeline includes a stale event-set revision", "Use the active event-set fingerprint for the calculation; retain prior events as historical evidence only.");
+    }
+  }
 
   if (kind === "loan") {
     /* Fair value assessment (ASPE 3856) */
-    if (blank(loan.fvDecision)) {
-      const rate = num(loan.interestRate);
-      const fvSeverity: DiagnosticSeverity = rate < 1 ? "error" : rate <= 3 ? "warning" : "info";
-      add(
-        "fv-pending",
-        fvSeverity,
-        "Fair value assessment not completed (ASPE 3856)",
-        rate > 3
-          ? "The stated rate is above 3%, so the fair value difference is likely small — complete the assessment or dismiss this if not applicable."
-          : "Open the loan and complete the fair value assessment: adopt a market-rate schedule, or document why the difference is trivial/immaterial.",
-      );
-    } else {
-      if (loan.fvDecision === "use_fv" && num(loan.fvRate) === 0) {
+    const fvUrl = `/client/${(file as any).clientId || "..."}/file/${(file as any).id || "..."}/loan/${loan.id}#fv-decision`;
+    if (loan.fvDecisionHistory) {
+      const history = loan.fvDecisionHistory;
+      if (history.status === "incomplete") {
+        const rate = num(loan.interestRate);
+        const fvSeverity: DiagnosticSeverity = rate < 1 ? "error" : rate <= 3 ? "warning" : "info";
         add(
-          "fv-rate-missing",
-          "error",
-          "Fair value adopted but no market rate entered",
-          "Enter the market interest rate used to book the fair value schedule.",
+          "fv-pending",
+          fvSeverity,
+          "Fair value assessment not completed (ASPE 3856)",
+          rate > 3
+            ? "The stated rate is above 3%, so the fair value difference is likely small — complete the assessment or dismiss this if not applicable."
+            : "Open the loan and complete the fair value assessment: adopt a market-rate schedule, or document why the difference is trivial/immaterial.",
+          fvUrl,
+          "Complete assessment"
+        );
+      } else if (history.status === "stale") {
+        add(
+          "fv-stale",
+          "warning",
+          "Fair value assessment is stale",
+          `The assessment must be reviewed because: ${history.staleReasons.join("; ") || "underlying evidence changed"}.`,
+          fvUrl,
+          "Review assessment"
         );
       }
-      if (loan.fvDecision !== "use_fv" && blank(loan.fvDecisionNote)) {
+
+      const currentDecision = history.current;
+      if (currentDecision) {
+        if (currentDecision.treatment === "use_fv" && num(currentDecision.marketEffectiveRate) === 0) {
+          add(
+            "fv-rate-missing",
+            "error",
+            "Fair value adopted but no market rate entered",
+            "Enter the market interest rate used to book the fair value schedule.",
+            fvUrl,
+            "Edit market rate"
+          );
+        }
+        if (currentDecision.treatment !== "use_fv" && blank(currentDecision.rationaleNote)) {
+          add(
+            "fv-note-missing",
+            "warning",
+            `Fair value difference marked ${currentDecision.treatment} with no supporting note`,
+            "Add a short note documenting the rationale so the file supports the conclusion.",
+            fvUrl,
+            "Add supporting note"
+          );
+        }
+      }
+    } else {
+      // Fallback for when history is not available
+      if (blank(loan.fvDecision)) {
+        const rate = num(loan.interestRate);
+        const fvSeverity: DiagnosticSeverity = rate < 1 ? "error" : rate <= 3 ? "warning" : "info";
         add(
-          "fv-note-missing",
-          "warning",
-          `Fair value difference marked ${loan.fvDecision === "trivial" ? "trivial" : "immaterial"} with no supporting note`,
-          "Add a short note documenting the rationale so the file supports the conclusion.",
+          "fv-pending",
+          fvSeverity,
+          "Fair value assessment not completed (ASPE 3856)",
+          rate > 3
+            ? "The stated rate is above 3%, so the fair value difference is likely small — complete the assessment or dismiss this if not applicable."
+            : "Open the loan and complete the fair value assessment: adopt a market-rate schedule, or document why the difference is trivial/immaterial.",
         );
+      } else {
+        if (loan.fvDecision === "use_fv" && num(loan.fvRate) === 0) {
+          add(
+            "fv-rate-missing",
+            "error",
+            "Fair value adopted but no market rate entered",
+            "Enter the market interest rate used to book the fair value schedule.",
+          );
+        }
+        if (loan.fvDecision !== "use_fv" && blank(loan.fvDecisionNote)) {
+          add(
+            "fv-note-missing",
+            "warning",
+            `Fair value difference marked ${loan.fvDecision === "trivial" ? "trivial" : "immaterial"} with no supporting note`,
+            "Add a short note documenting the rationale so the file supports the conclusion.",
+          );
+        }
       }
     }
+
     if (num(loan.interestRate) === 0) {
       add(
         "zero-rate",

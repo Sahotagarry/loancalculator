@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { DocumentImportResultClassification } from './documentImportResultClassification';
+import type { DocumentImportResultUnresolvedRateFindingsItem } from './documentImportResultUnresolvedRateFindingsItem';
 import type { ImportedLeaseFields } from './importedLeaseFields';
 import type { ImportedLoanFields } from './importedLoanFields';
 import type { ImportedMasterAgreementFields } from './importedMasterAgreementFields';
@@ -14,8 +15,9 @@ export interface DocumentImportResult {
   classification: DocumentImportResultClassification;
   confidence: number;
   reasoning: string;
-  documentBlob?: string | null;
+  documentId?: string | null;
   documentName?: string | null;
+  unresolvedRateFindings?: DocumentImportResultUnresolvedRateFindingsItem[];
   loan?: ImportedLoanFields | null;
   lease?: ImportedLeaseFields | null;
   masterAgreement?: ImportedMasterAgreementFields | null;

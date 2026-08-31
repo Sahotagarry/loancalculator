@@ -201,7 +201,7 @@ jobs:
       numbered("steps8")("Health check: https://YOUR-APP-NAME.azurewebsites.net/api/healthz should show a small OK response."),
       numbered("steps8")("Create a test client and a loan — confirms the database connection."),
       numbered("steps8")("Import a PDF loan agreement — confirms Document Intelligence + Azure OpenAI + Blob Storage."),
-      numbered("steps8")("Open a loan's fair value assessment — confirms the Bank of Canada prime-rate lookup (no setup needed; if the public API is unreachable the app falls back to a built-in rate)."),
+      numbered("steps8")("Open a loan's fair value assessment — confirms the Bank of Canada V80691311 prime-rate lookup (no setup needed; any built-in fallback is explicitly disclosed and applies only to the fair-value suggestion, never contractual resets)."),
 
       h1("10. Good to know"),
       bullet(b("Costs: "), "typical light usage ≈ App Service B1 + PostgreSQL B1ms + storage + pay-per-use AI. Roughly CAD $40–70/month depending on region and AI volume."),

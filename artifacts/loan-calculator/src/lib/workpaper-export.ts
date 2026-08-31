@@ -3,16 +3,34 @@ import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 import { format, parseISO, subYears, isAfter } from "date-fns";
 import { formatCurrency } from "@/lib/format";
-import { calculateAmortization, type AmortizationRow, type Frequency } from "@workspace/amortization";
+import { type AmortizationRow } from "@workspace/amortization";
 import {
+  buildFairValueAccountingEntries,
   buildLoanSummary,
+  buildTransitionJournalEntries,
   calculateBookedSchedule,
   usesFairValue,
   type LoanSummary,
   type CapitalLeaseSummary,
   type OperatingLeaseSummary,
+  type BookedScheduleInput,
+  type FairValueDecisionHistory,
+  type FairValueAccountingEntries,
 } from "./aspe-utils";
 import { getFiscalYear, getFyEndParts } from "./fiscal";
+
+// Standalone presentation/disclosure exports. Existing lead-sheet and
+// supporting-workpaper exports below remain unchanged.
+export {
+  downloadPresentationDisclosureDocx,
+  downloadPresentationDisclosurePdf,
+  renderPresentationDisclosureDocx,
+  renderPresentationDisclosurePdf,
+  buildDisclosureRenderPlan,
+  buildPresentationDisclosureDocxPlan,
+  buildPresentationDisclosurePdfPlan,
+  serializeDisclosureRenderPlan,
+} from "./disclosure-export";
 
 /* ────────────────────────────────────────────────────────────────
    Workpaper exports for audit / review engagement files.
@@ -24,9 +42,24 @@ import { getFiscalYear, getFyEndParts } from "./fiscal";
    always ties to what is displayed on screen.
    ──────────────────────────────────────────────────────────────── */
 
-export type WorkpaperLoanInput = Parameters<typeof buildLoanSummary>[0] & {
+export type WorkpaperLoanInput = Omit<Parameters<typeof buildLoanSummary>[0], "activeEvents"> & {
   description?: string | null;
   masterAgreementId?: string | null;
+  assetCost?: number | string | null;
+  assetUsefulLife?: number | null;
+  activeEvents?: Array<{
+    id: string;
+    effectiveDate: string;
+    ordering: "before_scheduled_payment" | "after_scheduled_payment";
+    sequence: number;
+    amount: number;
+    treatment: "keep_payment" | "keep_maturity";
+    classification: "ordinary" | "agreement_change";
+    source: string;
+    reason: string;
+  }> | null;
+  fvDecisionHistory?: FairValueDecisionHistory | null;
+  fairValueAccountingEntries?: FairValueAccountingEntries | null;
 };
 
 /** Shared base terms of a master financing agreement; facilities fall back to
@@ -92,17 +125,106 @@ export function buildLoanWorkpaper(
 
   const fyeLabel = format(reportYearEnd, "MMMM d, yyyy");
 
-  if ("monthlyStraightLineExpense" in summary) {
-    return buildOperatingLeaseWorkpaper(loan, summary, meta, fyeLabel, reportYearEnd);
+  const workpaper = "monthlyStraightLineExpense" in summary
+    ? buildOperatingLeaseWorkpaper(loan, summary, meta, fyeLabel, reportYearEnd)
+    : buildDebtWorkpaper(
+        loan,
+        summary as LoanSummary | CapitalLeaseSummary,
+        meta,
+        fyeLabel,
+        reportYearEnd,
+        master ?? null,
+      );
+  appendTransitionEvidence(workpaper, loan);
+  return workpaper;
+}
+
+function agreementKind(loan: WorkpaperLoanInput): "loan" | "capital_lease" | "operating_lease" {
+  if (loan.isCapitalLease) return "capital_lease";
+  return Number(loan.interestRate) === 0 && loan.monthlyPayment != null && loan.termMonths != null
+    ? "operating_lease"
+    : "loan";
+}
+
+function appendTransitionEvidence(workpaper: Workpaper, loan: WorkpaperLoanInput): void {
+  const assessment = loan.modificationAssessment;
+  const predecessor = loan.predecessorAgreement as WorkpaperLoanInput | null | undefined;
+  const effectiveDate = loan.modificationEffectiveDate;
+  if (!assessment || assessment.status !== "confirmed" || !predecessor || !effectiveDate) return;
+
+  workpaper.sections.push({
+    title: "Agreement Transition Assessment",
+    head: ["Item", "Evidence"],
+    rows: [
+      ["Predecessor agreement", `${predecessor.name} (${loan.predecessorAgreementId ?? predecessor.id ?? "linked"})`],
+      ["Effective date", effectiveDate],
+      ["Conclusion", `${assessment.conclusion.agreementChangeType} — ${assessment.conclusion.accountingTreatment}`],
+      ["Change summary", assessment.evidence.changeSummary],
+      ["Rationale", assessment.conclusion.rationale],
+      ["Confirmed", `${assessment.confirmedBy} · ${assessment.confirmedAt}`],
+      ...(assessment.evidence.quantitativeTest ? [
+        ["Original effective rate", `${assessment.evidence.quantitativeTest.originalEffectiveRate.toFixed(4)}%`],
+        ["Carrying amount at effective date", money(assessment.evidence.quantitativeTest.carryingAmount)],
+        ["PV — original remaining cash flows", assessment.evidence.quantitativeTest.presentValueOfOriginalRemainingCashFlows == null ? "Not supplied" : money(assessment.evidence.quantitativeTest.presentValueOfOriginalRemainingCashFlows)],
+        ["PV — modified cash flows", assessment.evidence.quantitativeTest.presentValueOfModifiedCashFlows == null ? "Not supplied" : money(assessment.evidence.quantitativeTest.presentValueOfModifiedCashFlows)],
+        ["PV difference / percentage", `${money(assessment.evidence.quantitativeTest.differenceAmount)} / ${assessment.evidence.quantitativeTest.differencePercent.toFixed(4)}%`],
+        ["Retained / new fees and costs", `${money(assessment.evidence.quantitativeTest.retainedFeesAndCosts)} / ${money(assessment.evidence.quantitativeTest.newFeesAndCosts)}`],
+        ["Settlement consideration", assessment.evidence.quantitativeTest.settlementConsideration == null ? "Not applicable" : money(assessment.evidence.quantitativeTest.settlementConsideration)],
+        ["Quantitative recommendation", assessment.evidence.quantitativeTest.recommendation],
+        ["Original remaining cash flows", assessment.evidence.quantitativeTest.originalRemainingCashFlows.map((flow) => `${flow.date} ${money(flow.amount)} (${flow.description}; ${flow.sourceReference})`).join("; ")],
+        ["Modified cash flows", assessment.evidence.quantitativeTest.modifiedCashFlows.map((flow) => `${flow.date} ${money(flow.amount)} (${flow.description}; ${flow.sourceReference})`).join("; ")],
+        ["Same-day / accrued-interest treatment", `${assessment.evidence.quantitativeTest.sameDayPaymentTreatment} / ${assessment.evidence.quantitativeTest.accruedInterestTreatment}; accrued interest ${money(assessment.evidence.quantitativeTest.accruedInterest)}`],
+      ] : []),
+      ...(assessment.conclusion.leaseTransition ? [
+        ["Lease transition evidence", assessment.conclusion.leaseTransition.terminationEvidenceReference],
+        ["Transition entry evidence", `${assessment.conclusion.leaseTransition.entryDate}: ${assessment.conclusion.leaseTransition.debitAccount} / ${assessment.conclusion.leaseTransition.creditAccount} ${money(assessment.conclusion.leaseTransition.amount)}; ${assessment.conclusion.leaseTransition.entryEvidenceReference}`],
+        ["Predecessor lease balances", `Deferred rent asset ${money(assessment.conclusion.leaseTransition.predecessorDeferredRentAsset ?? 0)}; liability ${money(assessment.conclusion.leaseTransition.predecessorDeferredRentLiability ?? 0)}; asset cost ${money(assessment.conclusion.leaseTransition.predecessorAssetCost ?? 0)}; accumulated depreciation ${money(assessment.conclusion.leaseTransition.predecessorAccumulatedDepreciation ?? 0)}`],
+        ["Successor lease initial amount", money(assessment.conclusion.leaseTransition.successorInitialAmount)],
+      ] : []),
+      ...assessment.evidence.contractualChanges.map((change) => [
+        change.term,
+        `${change.predecessorValue} → ${change.successorValue}; ${change.significance}; source: ${change.sourceReference}`,
+      ]),
+    ],
+    notes: ["The reporting timeline retains predecessor activity through the effective date and successor activity afterward; neither complete agreement is counted twice."],
+  });
+
+  const effective = parseISO(effectiveDate);
+  const predecessorBooked = calculateBookedSchedule({ ...predecessor, startDate: predecessor.startDate! });
+  const predecessorCarryingAmount = predecessorBooked.schedule
+    .filter((row) => !isAfter(row.date, effective))
+    .slice(-1)[0]?.balance ?? Number(predecessor.principal) - Number(predecessor.downPayment ?? 0);
+  const successorInitialAmount = assessment.evidence.quantitativeTest?.successorAmount
+    ?? Number(loan.principal) - Number(loan.downPayment ?? 0);
+  const predecessorKind = agreementKind(predecessor);
+  const successorKind = agreementKind(loan);
+  const entries = buildTransitionJournalEntries({
+    effectiveDate,
+    assessment,
+    predecessorKind,
+    successorKind,
+    predecessorCarryingAmount,
+    successorInitialAmount: assessment.conclusion.leaseTransition?.successorInitialAmount ?? successorInitialAmount,
+  });
+  if (entries.length > 0) {
+    workpaper.sections.push({
+      title: "Agreement Transition Journal Entries",
+      head: ["Entry", "Account", "Debit", "Credit"],
+      rows: entries.flatMap((entry) => entry.lines.map((line, index) => [
+        index === 0 ? `${entry.date} — ${entry.memo}` : "",
+        line.account,
+        line.debit ? money(line.debit) : "",
+        line.credit ? money(line.credit) : "",
+      ])),
+      notes: [
+        assessment.conclusion.accountingTreatment === "continuation"
+          ? "Enter retained and incremental fees/costs in the transition helper when supported; they reduce the liability's continued carrying amount and form part of its prospective effective-interest basis."
+          : assessment.conclusion.accountingTreatment === "new_lease"
+            ? "ASPE 3065 new-lease treatment terminates or derecognizes the predecessor lease and records the successor commencement separately; it does not apply debt continuation or extinguishment accounting."
+          : "The extinguishment gain or loss is presented separately from recognition of any successor financing or lease.",
+      ],
+    });
   }
-  return buildDebtWorkpaper(
-    loan,
-    summary as LoanSummary | CapitalLeaseSummary,
-    meta,
-    fyeLabel,
-    reportYearEnd,
-    master ?? null,
-  );
 }
 
 function buildDebtWorkpaper(
@@ -143,6 +265,11 @@ function buildDebtWorkpaper(
         : `${loan.termYears} yr term / ${loan.amortizationYears} yr amortization`,
     ],
     ["Payment", `${money(summary.regularPayment)} ${summary.paymentFrequency}`],
+    ["Payment timing", loan.paymentTiming === "beginning" ? "Beginning of each payment period" : "End of each payment period"],
+    [
+      "First payment date",
+      loan.firstPaymentDate ? format(parseISO(loan.firstPaymentDate), "MMMM d, yyyy") : "Not specified — legacy inception-date schedule anchor retained",
+    ],
   ];
   if (downPayment > 0) {
     termsRows.splice(2, 0,
@@ -159,10 +286,71 @@ function buildDebtWorkpaper(
   if ((loan.graceMonths ?? 0) > 0) {
     termsRows.push([
       "Payment grace period",
-      `${loan.graceMonths} months (${loan.graceInterestTreatment === "none" ? "interest-free" : "interest capitalized"})`,
+      `${loan.graceMonths} months (${loan.graceInterestTreatment === "none" ? "interest-free" : "interest capitalized"}; ${loan.graceTermMode === "added" ? "extends" : "included in"} stated term)`,
+    ]);
+  }
+  const statedMonths = loan.termMonths ?? Math.round(loan.termYears * 12);
+  const repaymentMonths = Math.max(0, statedMonths - (loan.graceTermMode === "included" ? (loan.graceMonths ?? 0) : 0));
+  const totalMonths = statedMonths + (loan.graceTermMode === "added" ? (loan.graceMonths ?? 0) : 0);
+  termsRows.push(["Repayment / total contractual term", `${repaymentMonths} repayment months / ${totalMonths} total months`]);
+  if (loan.rateType === "prime_linked") {
+    termsRows.push(
+      ["Rate basis", `Prime-linked: public benchmark ${loan.rateBenchmark ?? "—"}; lender contractual prime ${loan.contractualPrimeName ?? "—"}`],
+      ["Benchmark equivalence evidence", loan.benchmarkEquivalentToContractualPrime === true ? "Confirmed equivalent to contractual lender prime" : "Not confirmed — lender evidence or override required"],
+      ["Spread / resulting rate", `${loan.rateSpread ?? "—"}% / dated timeline`],
+      ["Reset rule / payment treatment", `${loan.rateResetFrequency ?? "—"} · ${loan.rateEffectiveConvention ?? "—"} · ${loan.ratePaymentTreatment ?? "—"}`],
+      ["Day-one FV assumption", loan.initialFvRateAssumption && Object.keys(loan.initialFvRateAssumption).length ? "Frozen approved assumption retained separately from realized resets" : "Not frozen — review required"],
+    );
+  }
+  if (loan.currentRevisionId || loan.currentRevisionHash || loan.calculationVersion) {
+    termsRows.push([
+      "Calculation evidence",
+      [
+        loan.currentRevisionId ? `Revision ${loan.currentRevisionId}` : null,
+        loan.currentRevisionHash ? `Hash ${loan.currentRevisionHash}` : null,
+        loan.calculationVersion ? `Calculation version ${loan.calculationVersion}` : null,
+      ].filter(Boolean).join(" · "),
+    ]);
+  }
+  if (loan.activeEventSetId || (loan.activeEvents?.length ?? 0) > 0) {
+    termsRows.push([
+      "Event-set evidence",
+      [
+        loan.activeEventSetId ? `Set ${loan.activeEventSetId}` : null,
+        loan.activeEventSetVersion != null ? `Version ${loan.activeEventSetVersion}` : null,
+        loan.activeEventSetHash ? `Fingerprint ${loan.activeEventSetHash}` : null,
+      ].filter(Boolean).join(" · "),
     ]);
   }
   sections.push({ title: "Terms", head: ["Item", "Detail"], rows: termsRows });
+  const rateEvidence = (loan.activeRateEvents ?? loan.rateTimelineEvents ?? []) as Array<any>;
+  if (rateEvidence.length > 0) {
+    sections.push({
+      title: "Contractual Rate Timeline Evidence",
+      head: ["Effective", "Observed / published / fetched", "Benchmark / source", "Rate calculation", "Origin / provenance"],
+      rows: rateEvidence.map((event) => [
+        event.effectiveDate,
+        [event.observationDate, event.publishedDate, event.fetchedAt].filter(Boolean).join(" / ") || "—",
+        `${event.benchmark ?? "—"} / ${event.sourceSeries ?? event.source ?? "—"}`,
+        `${Number(event.benchmarkRate).toFixed(4)}% + ${Number(event.spread).toFixed(4)}% = ${Number(event.resultingContractualRate ?? event.resultingRate).toFixed(4)}%`,
+        `${event.rateOrigin ?? "sourced"} · ${event.reason ?? "—"} · ${event.author ?? "—"} · ${event.authoredAt ?? "—"}${event.setId ? ` · set ${event.setId}` : ""}`,
+      ]),
+      notes: ["All timeline rows, including replaced values when supplied by the endpoint, are retained as audit evidence. The schedule uses the active event set only."],
+    });
+  }
+  if ((loan.activeEvents?.length ?? 0) > 0) {
+    sections.push({
+      title: "Mid-term Principal Payment Events",
+      head: ["Date", "Amount", "Order / treatment", "Classification & provenance"],
+      rows: loan.activeEvents!.map((event) => [
+        format(parseISO(event.effectiveDate), "MMMM d, yyyy"),
+        money(Number(event.amount)),
+        `${event.ordering === "before_scheduled_payment" ? "Before scheduled payment" : "After scheduled payment"} · #${event.sequence} · ${event.treatment === "keep_maturity" ? "Keep maturity / recast" : "Keep payment / earlier payoff"}`,
+        `${event.classification} · ${event.source} · ${event.reason}`,
+      ]),
+      notes: ["Events are immutable evidence. Editing creates a successor event set; the ordered rows above are the set used for this calculation."],
+    });
+  }
 
   /* 2 — Fair value assessment (ASPE 3856) — loans only */
   if (!isCapital) {
@@ -181,6 +369,35 @@ function buildDebtWorkpaper(
       head: ["Item", "Detail"],
       rows: fvRows,
     });
+    if (loan.fvDecisionHistory) {
+      const decision = loan.fvDecisionHistory;
+      sections.push({
+        title: "Fair Value Decision Status & History",
+        head: ["Version / status", "Decision evidence"],
+        rows: [
+          [
+            `Current status: ${decision.status}`,
+            decision.reviewRequired
+              ? `Review required — ${decision.staleReasons.join("; ") || decision.missingRequirements.join("; ")}`
+              : "Confirmed evidence remains current",
+          ],
+          ...decision.history.map((item) => [
+            `Version ${item.version} — ${item.treatment}`,
+            [
+              `${item.confirmedBy} · ${typeof item.confirmedAt === "string" ? item.confirmedAt : item.confirmedAt.toISOString()}`,
+              item.rationaleNote || null,
+              `contract ${item.contractFingerprint}`,
+              item.eventSetFingerprint ? `events ${item.eventSetFingerprint}` : null,
+              `reporting ${item.reportingContextFingerprint}`,
+              item.modificationFingerprint ? `modification ${item.modificationFingerprint}` : null,
+              `evidence ${item.evidenceVersion} / calculation ${item.calculationVersion}`,
+              Object.keys(item.evidence).length ? `evidence inputs: ${JSON.stringify(item.evidence)}` : null,
+            ].filter(Boolean).join(" · "),
+          ]),
+        ],
+        notes: ["Prior confirmations are retained as history; a changed contract, event set, reporting context, or modification requires a new confirmation rather than overwriting prior evidence."],
+      });
+    }
   } else {
     sections.push({
       title: "Lease Classification (ASPE 3065)",
@@ -279,55 +496,48 @@ function buildDebtWorkpaper(
     });
   }
 
-  /* 5 — Fair value adjusting entry (when FV adopted) */
-  if (!isCapital && loan.fvDecision === "use_fv" && booked.usedFairValue && booked.fairValue != null) {
-    const frequency = (loan.paymentFrequency ?? "monthly") as Frequency;
-    const contractual = calculateAmortization(
-      financed,
-      statedRate,
-      loan.amortizationYears,
-      loan.termYears,
-      startDate,
-      loan.ioMonths ?? 0,
-      loan.specificIoMonths
-        ? loan.specificIoMonths.split(",").map(Number).filter((n) => !isNaN(n))
-        : [],
-      Number(loan.balloonPayment ?? 0),
-      frequency,
-      loan.paymentOverride != null ? Number(loan.paymentOverride) : null,
-      loan.graceMonths ?? 0,
-      loan.graceInterestTreatment === "none" ? "none" : "capitalized",
-    );
-    const interestByFY = (rows: AmortizationRow[]) => {
-      const m = new Map<number, number>();
-      for (const r of rows) {
-        const fy = getFiscalYear(r.date, fyEndMonth, fyEndDay);
-        m.set(fy, (m.get(fy) ?? 0) + r.interest);
-      }
-      return m;
-    };
-    const fvInt = interestByFY(booked.schedule);
-    const ctInt = interestByFY(contractual.schedule);
-    const day1 = financed - booked.fairValue;
-    let priorExtra = 0;
-    for (const [fy, amt] of fvInt) {
-      if (fy < reportFY) priorExtra += amt - (ctInt.get(fy) ?? 0);
+  /* 5 — Distinct day-one, recurring annual, and cumulative support */
+  if (!isCapital && usesFairValue(loan)) {
+    const accounting = loan.fairValueAccountingEntries ?? buildFairValueAccountingEntries({
+      loan: { ...loan, startDate: loan.startDate! },
+      reportingFiscalYearEnd: meta.fiscalYearEnd,
+      decisionHistory: loan.fvDecisionHistory,
+    });
+    if (accounting.dayOne) {
+      sections.push({
+        title: "Day-one Fair Value Journal Entry",
+        head: ["Date / purpose", "Account", "Debit", "Credit"],
+        rows: accounting.dayOne.lines.map((line, index) => [
+          index === 0 ? `${accounting.dayOne!.date} — ${accounting.dayOne!.label}` : "",
+          line.account,
+          line.debit ? money(line.debit) : "",
+          line.credit ? money(line.credit) : "",
+        ]),
+        notes: ["Recognition-date measurement uses timing-aware, event-adjusted contractual cash flows. For prime-linked instruments, only the frozen approved recognition-date assumptions are used; realized resets are excluded."],
+      });
     }
-    const currentExtra = (fvInt.get(reportFY) ?? 0) - (ctInt.get(reportFY) ?? 0);
-    const cumulative = priorExtra + currentExtra;
     sections.push({
-      title: `Fair Value Adjustment — As At ${fyeLabel}`,
-      head: ["Item", "Amount"],
-      rows: [
-        ["Day-one discount (principal less fair value)", money(day1)],
-        ["Discount accreted in prior years (opening retained earnings)", money(priorExtra)],
-        ["Discount accreted this year (additional interest expense)", money(currentExtra)],
-        ["Cumulative discount accreted", money(cumulative)],
-        ["Unamortized discount at year end", money(day1 - cumulative)],
-      ],
-      notes: [
-        "If the client records the loan at contractual amounts, the adjusting entry reduces the loan by the unamortized discount, credits opening retained earnings for the net prior-year effect, and adjusts current-year interest expense as shown.",
-      ],
+      title: "Annual Effective-interest / Accretion Journal Entries",
+      head: ["Date / purpose", "Account", "Debit", "Credit"],
+      rows: accounting.annualEntries.flatMap((entry) => entry.lines.map((line, index) => [
+        index === 0 ? `${entry.date} — ${entry.label}` : "",
+        line.account,
+        line.debit ? money(line.debit) : "",
+        line.credit ? money(line.credit) : "",
+      ])),
+      notes: ["Each entry contains only that fiscal year's effective-interest activity less stated contractual interest. Opening retained earnings is not part of the recurring entry."],
+    });
+    sections.push({
+      title: `Cumulative Fair Value Reconciliation — As At ${fyeLabel} (Support Only)`,
+      head: ["Fiscal year", "Day one", "Prior years", "Current year", "Remaining discount"],
+      rows: accounting.cumulativeSupport.map((item) => [
+        String((item.evidence.fiscalYear as number | undefined) ?? item.date),
+        money(item.dayOneDifference),
+        money(item.priorYearsAccretion),
+        money(item.currentYearAccretion),
+        money(item.remainingDiscount),
+      ]),
+      notes: ["Supporting cumulative catch-up only; do not post it in addition to the distinct day-one and annual entries."],
     });
   }
 
@@ -425,6 +635,7 @@ function buildOperatingLeaseWorkpaper(
     rows: [
       ["Straight-line monthly expense", money(summary.monthlyStraightLineExpense)],
       ["Straight-line rent expense for the year", money(slExpenseFY)],
+      ["Cash rent for the year", money(summary.yearlyCash.find((y) => y.fiscalYear === reportFY)?.amount ?? 0)],
       ["Deferred rent (liability) at year end", money(summary.deferredRentAtYearEnd)],
       ["Total inducements", money(summary.totalInducements)],
       ["Inducement liability — current", money(summary.inducementLiabilityCurrent)],
@@ -651,8 +862,21 @@ function buildLeadSheet(input: FileWorkpaperInput, workpapers: Workpaper[]): Lea
   const violatedNames: string[] = [];
 
   const masterById = new Map((input.masters ?? []).map((m) => [m.id, m]));
+  const loanById = new Map(input.loans.map((loan) => [loan.id, loan]));
+  const linkedPredecessors = new Set(
+    input.loans
+      .filter((loan) => loan.modificationAssessment?.status === "confirmed")
+      .map((loan) => loan.predecessorAgreementId)
+      .filter((id): id is string => !!id),
+  );
   for (const loan of orderByMaster(input.loans, input.masters ?? [])) {
-    const summary = buildLoanSummary(loan, reportYearEnd, input.fiscalYearEnd);
+    if (linkedPredecessors.has(loan.id)) continue;
+    const summary = buildLoanSummary({
+      ...loan,
+      predecessorAgreement: loan.predecessorAgreementId
+        ? loanById.get(loan.predecessorAgreementId) as BookedScheduleInput | undefined
+        : loan.predecessorAgreement,
+    }, reportYearEnd, input.fiscalYearEnd);
     if (!summary) continue;
     if ("monthlyStraightLineExpense" in summary) {
       const sl = summary.yearlyStraightLine.find((y) => y.fiscalYear === reportFY)?.amount ?? 0;
@@ -735,10 +959,23 @@ const OP_LEAD_HEAD = ["Name", "Lessor", "Monthly", "SL rent exp.", "Deferred ren
 export function buildFileWorkpapers(input: FileWorkpaperInput): Workpaper[] {
   const meta: WorkpaperMeta = { clientName: input.clientName, fiscalYearEnd: input.fiscalYearEnd };
   const masterById = new Map((input.masters ?? []).map((m) => [m.id, m]));
+  const loanById = new Map(input.loans.map((loan) => [loan.id, loan]));
+  const linkedPredecessors = new Set(
+    input.loans
+      .filter((loan) => loan.modificationAssessment?.status === "confirmed")
+      .map((loan) => loan.predecessorAgreementId)
+      .filter((id): id is string => !!id),
+  );
   return orderByMaster(input.loans, input.masters ?? [])
+    .filter((loan) => !linkedPredecessors.has(loan.id))
     .map((loan) =>
       buildLoanWorkpaper(
-        loan,
+        {
+          ...loan,
+          predecessorAgreement: loan.predecessorAgreementId
+            ? loanById.get(loan.predecessorAgreementId) as BookedScheduleInput | undefined
+            : loan.predecessorAgreement,
+        },
         meta,
         loan.masterAgreementId ? (masterById.get(loan.masterAgreementId) ?? null) : null,
       ),

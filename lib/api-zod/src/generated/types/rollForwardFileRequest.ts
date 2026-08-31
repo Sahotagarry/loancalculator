@@ -8,4 +8,19 @@
 
 export interface RollForwardFileRequest {
   newFiscalYearEnd: Date;
+  /**
+     * @minLength 1
+     * @maxLength 500
+     */
+  name?: string;
+  /**
+     * @minimum 0
+     * @maximum 9999999999.99
+     */
+  trivialThreshold?: number | null;
+  /**
+     * @minimum 0
+     * @maximum 9999999999.99
+     */
+  materiality?: number | null;
 }

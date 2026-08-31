@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useRoute } from "wouter";
 import { Link } from "wouter";
-import { useGetClient, useListFiles, useCreateFile, useDeleteFile, useUpdateClient, useUpdateFile, useRollForwardFile } from "@workspace/api-client-react";
+import { useGetClient, getListClientsQueryKey, useListFiles, useCreateFile, useDeleteFile, useUpdateClient, useUpdateFile, useRollForwardFile } from "@workspace/api-client-react";
 import { queryClient } from "@/lib/queryClient";
 import {
   Card,
@@ -37,9 +37,11 @@ import { ArrowLeft, ArrowRight, Folder, Plus, Trash2, FileText, Calendar, Pencil
 import { toast } from "@/hooks/use-toast";
 import { getErrorMessage } from "@/lib/errors";
 import { PageHeader } from "@/components/page-header";
+import { useAuth } from "@/hooks/use-auth";
 import { format, addYears, parseISO } from "date-fns";
 
 export default function ClientDetail() {
+  const { canWrite, canDelete } = useAuth();
   const [_, params] = useRoute("/client/:id");
   const clientId = params?.id ?? "";
 
@@ -86,7 +88,7 @@ export default function ClientDetail() {
     mutation: {
       onSuccess: () => {
         queryClient.invalidateQueries({ queryKey: [`/api/clients/${clientId}`] });
-        queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+        queryClient.invalidateQueries({ queryKey: getListClientsQueryKey() });
         setEditClientOpen(false);
       },
       onError: (err) => {
@@ -147,25 +149,27 @@ export default function ClientDetail() {
         }
         title={client?.name ?? "Client"}
         actions={
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="outline"
-                size="sm"
-                className="gap-2"
-                onClick={() => {
-                  if (!client) return;
-                  setEditName(client.name);
-                  setEditCode(client.code ?? "");
-                  setEditClientOpen(true);
-                }}
-              >
-                <Pencil className="h-4 w-4" />
-                Edit Client
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Edit client name and code</TooltipContent>
-          </Tooltip>
+          canWrite && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+            <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-2"
+                  onClick={() => {
+                    if (!client) return;
+                    setEditName(client.name);
+                    setEditCode(client.code ?? "");
+                    setEditClientOpen(true);
+                  }}
+                >
+                  <Pencil className="h-4 w-4" />
+                  Edit Client
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Edit client name and code</TooltipContent>
+            </Tooltip>
+          )
         }
       />
       <div className="max-w-6xl mx-auto p-4 md:p-8 space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
@@ -182,15 +186,17 @@ export default function ClientDetail() {
                 )}
               </div>
             </div>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button onClick={() => setCreateOpen(true)} className="gap-2 shadow-sm hover:shadow-md transition-shadow">
-                  <Plus className="h-4 w-4" />
-                  Add Year-End File
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Create a new year-end file for a client's fiscal year end</TooltipContent>
-            </Tooltip>
+            {canWrite && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button onClick={() => setCreateOpen(true)} className="gap-2 shadow-sm hover:shadow-md transition-shadow">
+                    <Plus className="h-4 w-4" />
+                    Add Year-End File
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Create a new year-end file for a client's fiscal year end</TooltipContent>
+              </Tooltip>
+            )}
           </div>
 
           {files && files.length === 0 && (
@@ -205,10 +211,12 @@ export default function ClientDetail() {
                     Create a year-end file for a client's fiscal year end (e.g. December 31, 2024) to start adding loans.
                   </p>
                 </div>
-                <Button onClick={() => setCreateOpen(true)}>
-                  <Plus className="h-4 w-4 mr-2" />
-                  Add Year-End File
-                </Button>
+                {canWrite && (
+                  <Button onClick={() => setCreateOpen(true)}>
+                    <Plus className="h-4 w-4 mr-2" />
+                    Add Year-End File
+                  </Button>
+                )}
               </CardContent>
             </Card>
           )}
@@ -231,66 +239,72 @@ export default function ClientDetail() {
                       </div>
                     </div>
                     <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8 text-muted-foreground hover:text-foreground"
-                            onClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              setEditFileId(file.id);
-                              setEditFileName(file.name);
-                              setEditFileYearEnd(file.fiscalYearEnd.split("T")[0]);
-                              setEditFileTrivial(file.trivialThreshold ?? undefined);
-                              setEditFileMateriality(file.materiality ?? undefined);
-                              setEditFileOpen(true);
-                            }}
-                          >
-                            <Pencil className="h-4 w-4" />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>Edit year-end file name or date</TooltipContent>
-                      </Tooltip>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8 text-muted-foreground hover:text-primary"
-                            onClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              setRollForwardFileId(file.id);
-                              const nextYear = addYears(parseISO(file.fiscalYearEnd), 1);
-                              setRollForwardYearEnd(format(nextYear, "yyyy-MM-dd"));
-                              setRollForwardOpen(true);
-                            }}
-                          >
-                            <CalendarPlus className="h-4 w-4" />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>Roll forward to next fiscal year</TooltipContent>
-                      </Tooltip>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                            onClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              setDeleteTarget(file.id);
-                              setDeleteOpen(true);
-                            }}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>Delete year-end file and all loans</TooltipContent>
-                      </Tooltip>
+                      {canWrite && (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setEditFileId(file.id);
+                                setEditFileName(file.name);
+                                setEditFileYearEnd(file.fiscalYearEnd.split("T")[0]);
+                                setEditFileTrivial(file.trivialThreshold ?? undefined);
+                                setEditFileMateriality(file.materiality ?? undefined);
+                                setEditFileOpen(true);
+                              }}
+                            >
+                              <Pencil className="h-4 w-4" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>Edit year-end file name or date</TooltipContent>
+                        </Tooltip>
+                      )}
+                      {canWrite && (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8 text-muted-foreground hover:text-primary"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setRollForwardFileId(file.id);
+                                const nextYear = addYears(parseISO(file.fiscalYearEnd), 1);
+                                setRollForwardYearEnd(format(nextYear, "yyyy-MM-dd"));
+                                setRollForwardOpen(true);
+                              }}
+                            >
+                              <CalendarPlus className="h-4 w-4" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>Roll forward to next fiscal year</TooltipContent>
+                        </Tooltip>
+                      )}
+                      {canDelete && (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setDeleteTarget(file.id);
+                                setDeleteOpen(true);
+                              }}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>Delete year-end file and all loans</TooltipContent>
+                        </Tooltip>
+                      )}
                     </div>
                   </div>
                 </CardHeader>

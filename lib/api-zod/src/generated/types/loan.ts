@@ -5,8 +5,19 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { AgreementModificationAssessment } from './agreementModificationAssessment';
+import type { LoanActiveRateEventsItem } from './loanActiveRateEventsItem';
+import type { LoanEvent } from './loanEvent';
 import type { LoanFvDecision } from './loanFvDecision';
 import type { LoanGraceInterestTreatment } from './loanGraceInterestTreatment';
+import type { LoanGraceTermMode } from './loanGraceTermMode';
+import type { LoanInitialFvRateAssumption } from './loanInitialFvRateAssumption';
+import type { LoanPaymentTiming } from './loanPaymentTiming';
+import type { LoanRateBenchmark } from './loanRateBenchmark';
+import type { LoanRateEffectiveConvention } from './loanRateEffectiveConvention';
+import type { LoanRatePaymentTreatment } from './loanRatePaymentTreatment';
+import type { LoanRateResetFrequency } from './loanRateResetFrequency';
+import type { LoanRateType } from './loanRateType';
 import type { RentStep } from './rentStep';
 
 export interface Loan {
@@ -19,11 +30,37 @@ export interface Loan {
   principal: string;
   downPayment?: string;
   interestRate: string;
+  rateType?: LoanRateType;
+  /** Current BoC prime is boc_v80691311; legacy boc_v122495 is returned only as retired, unresolved evidence. */
+  rateBenchmark?: LoanRateBenchmark;
+  contractualPrimeName?: string | null;
+  benchmarkEquivalentToContractualPrime?: boolean | null;
+  rateSpread?: string | null;
+  rateResetFrequency?: LoanRateResetFrequency;
+  rateEffectiveConvention?: LoanRateEffectiveConvention;
+  ratePaymentTreatment?: LoanRatePaymentTreatment;
+  rateRefreshCheckpointDate?: Date | null;
+  initialFvRateAssumption?: LoanInitialFvRateAssumption;
   amortizationYears: number;
   termYears: number;
   startDate: Date;
   fiscalYearEnd: Date;
   paymentFrequency: string;
+  /** Whether scheduled payments are due at the end or beginning of each payment period. */
+  paymentTiming: LoanPaymentTiming;
+  /** Whether grace months are included in the stated term or extend it. */
+  graceTermMode: LoanGraceTermMode;
+  firstPaymentDate?: Date | null;
+  /**
+     * @minimum 1
+     * @maximum 31
+     */
+  semiMonthlyFirstDueDay?: number | null;
+  /**
+     * @minimum 1
+     * @maximum 31
+     */
+  semiMonthlySecondDueDay?: number | null;
   graceMonths?: number;
   graceInterestTreatment?: LoanGraceInterestTreatment;
   ioMonths: number;
@@ -62,12 +99,26 @@ export interface Loan {
   inducementReceivedInCash: boolean;
   covenantViolation: boolean;
   rolledFromId?: string;
+  /** Explicit user-selected predecessor agreement; never inferred from annual roll-forward lineage. */
+  predecessorAgreementId?: string | null;
+  modificationEffectiveDate?: Date | null;
+  modificationAssessment?: AgreementModificationAssessment | null;
   masterAgreementId?: string | null;
   fvRate?: string;
   fvDecision?: LoanFvDecision;
   fvDecisionNote?: string;
   dismissedFindings?: string[] | null;
   sourceDocumentName?: string | null;
+  currentRevisionId?: string | null;
+  currentRevisionHash?: string | null;
+  calculationVersion?: string | null;
+  activeEventSetId?: string | null;
+  activeEventSetVersion: number;
+  activeEventSetHash?: string | null;
+  /** Events in the active immutable event set, in canonical effective-date, ordering, and sequence order. */
+  activeEvents: LoanEvent[];
+  /** Active immutable sourced or overridden rate-reset segments. */
+  activeRateEvents?: LoanActiveRateEventsItem[];
   createdAt: Date;
   updatedAt: Date;
 }

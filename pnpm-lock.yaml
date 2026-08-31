@@ -692,16 +692,25 @@ importers:
 
   scripts:
     dependencies:
+      '@azure/storage-blob':
+        specifier: ^12.33.0
+        version: 12.33.0
       '@replit/connectors-sdk':
         specifier: ^0.4.2
         version: 0.4.2
       docx:
         specifier: ^9.7.1
         version: 9.7.1
+      pg:
+        specifier: ^8.20.0
+        version: 8.20.0
     devDependencies:
       '@types/node':
         specifier: 'catalog:'
         version: 25.6.2
+      '@types/pg':
+        specifier: ^8.20.0
+        version: 8.20.0
       tsx:
         specifier: 'catalog:'
         version: 4.21.0

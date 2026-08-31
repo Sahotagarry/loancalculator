@@ -6,7 +6,4 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export interface UnlockSettingsResult {
-  token: string;
-  expiresAt: string;
-}
+export type LoanInitialFvRateAssumption = { [key: string]: unknown } | null;

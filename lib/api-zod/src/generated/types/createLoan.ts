@@ -5,11 +5,27 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { AgreementModificationAssessment } from './agreementModificationAssessment';
 import type { CreateLoanFvDecision } from './createLoanFvDecision';
 import type { CreateLoanGraceInterestTreatment } from './createLoanGraceInterestTreatment';
+import type { CreateLoanGraceTermMode } from './createLoanGraceTermMode';
+import type { CreateLoanInitialFvRateAssumption } from './createLoanInitialFvRateAssumption';
+import type { CreateLoanPaymentTiming } from './createLoanPaymentTiming';
+import type { CreateLoanRateBenchmark } from './createLoanRateBenchmark';
+import type { CreateLoanRateEffectiveConvention } from './createLoanRateEffectiveConvention';
+import type { CreateLoanRatePaymentTreatment } from './createLoanRatePaymentTreatment';
+import type { CreateLoanRateResetFrequency } from './createLoanRateResetFrequency';
+import type { CreateLoanRateType } from './createLoanRateType';
+import type { LoanEventInput } from './loanEventInput';
 import type { RentStep } from './rentStep';
 
 export interface CreateLoan {
+  /** Optional complete initial principal-event timeline, saved atomically with the first contractual revision. */
+  initialEvents?: LoanEventInput[];
+  /** @minLength 1 */
+  initialEventSetReason?: string;
+  /** @minLength 1 */
+  initialEventSetSource?: string;
   name: string;
   description?: string;
   counterparty?: string | null;
@@ -17,11 +33,34 @@ export interface CreateLoan {
   principal: number;
   downPayment?: number | null;
   interestRate: number;
+  rateType?: CreateLoanRateType;
+  /** Prime-linked contracts must explicitly adopt the current BoC prime benchmark. */
+  rateBenchmark?: CreateLoanRateBenchmark;
+  contractualPrimeName?: string | null;
+  benchmarkEquivalentToContractualPrime?: boolean | null;
+  rateSpread?: number | null;
+  rateResetFrequency?: CreateLoanRateResetFrequency;
+  rateEffectiveConvention?: CreateLoanRateEffectiveConvention;
+  ratePaymentTreatment?: CreateLoanRatePaymentTreatment;
+  initialFvRateAssumption?: CreateLoanInitialFvRateAssumption;
   amortizationYears: number;
   termYears: number;
   startDate: Date;
   fiscalYearEnd: Date;
   paymentFrequency?: string;
+  paymentTiming?: CreateLoanPaymentTiming;
+  graceTermMode?: CreateLoanGraceTermMode;
+  firstPaymentDate?: Date | null;
+  /**
+     * @minimum 1
+     * @maximum 31
+     */
+  semiMonthlyFirstDueDay?: number | null;
+  /**
+     * @minimum 1
+     * @maximum 31
+     */
+  semiMonthlySecondDueDay?: number | null;
   graceMonths?: number;
   graceInterestTreatment?: CreateLoanGraceInterestTreatment;
   ioMonths?: number;
@@ -59,10 +98,28 @@ export interface CreateLoan {
   camMonthly?: number | null;
   inducementReceivedInCash?: boolean;
   covenantViolation?: boolean;
+  /**
+     * Direct FV inputs are rejected; use the FV confirmation endpoint after creating the loan.
+     * @deprecated
+     */
   fvRate?: number;
+  /**
+     * Direct FV inputs are rejected; use the FV confirmation endpoint after creating the loan.
+     * @deprecated
+     */
   fvDecision?: CreateLoanFvDecision;
+  /**
+     * Direct FV inputs are rejected; use the FV confirmation endpoint after creating the loan.
+     * @deprecated
+     */
   fvDecisionNote?: string;
-  sourceDocumentBlob?: string | null;
+  sourceDocumentId?: string | null;
   sourceDocumentName?: string | null;
   masterAgreementId?: string | null;
+  /** Explicitly links this agreement to a prior agreement. Send null with the other modification fields null to remove a link. */
+  predecessorAgreementId?: string | null;
+  modificationEffectiveDate?: Date | null;
+  modificationAssessment?: AgreementModificationAssessment | null;
+  /** Audit reason recorded on the initial contract revision. */
+  changeReason?: string;
 }

@@ -116,6 +116,7 @@ export const ListFilesResponseItem = zod.object({
   "fiscalYearEnd": zod.coerce.date(),
   "trivialThreshold": zod.number().optional(),
   "materiality": zod.number().optional(),
+  "rolledFromId": zod.string().nullish(),
   "dismissedFindings": zod.array(zod.string()).nullish(),
   "createdAt": zod.coerce.date(),
   "updatedAt": zod.coerce.date()
@@ -152,6 +153,7 @@ export const GetFileResponse = zod.object({
   "fiscalYearEnd": zod.coerce.date(),
   "trivialThreshold": zod.number().optional(),
   "materiality": zod.number().optional(),
+  "rolledFromId": zod.string().nullish(),
   "dismissedFindings": zod.array(zod.string()).nullish(),
   "createdAt": zod.coerce.date(),
   "updatedAt": zod.coerce.date()
@@ -180,6 +182,7 @@ export const UpdateFileResponse = zod.object({
   "fiscalYearEnd": zod.coerce.date(),
   "trivialThreshold": zod.number().optional(),
   "materiality": zod.number().optional(),
+  "rolledFromId": zod.string().nullish(),
   "dismissedFindings": zod.array(zod.string()).nullish(),
   "createdAt": zod.coerce.date(),
   "updatedAt": zod.coerce.date()
@@ -201,9 +204,48 @@ export const RollForwardFileParams = zod.object({
   "id": zod.coerce.string()
 })
 
+export const rollForwardFileBodyNameMax = 500;
+
+export const rollForwardFileBodyTrivialThresholdMin = 0;
+export const rollForwardFileBodyTrivialThresholdMax = 9999999999.99;
+export const rollForwardFileBodyTrivialThresholdMultipleOf = 0.01;
+
+export const rollForwardFileBodyMaterialityMin = 0;
+export const rollForwardFileBodyMaterialityMax = 9999999999.99;
+export const rollForwardFileBodyMaterialityMultipleOf = 0.01;
+
+
+
 export const RollForwardFileBody = zod.object({
-  "newFiscalYearEnd": zod.coerce.date()
+  "newFiscalYearEnd": zod.coerce.date(),
+  "name": zod.string().min(1).max(rollForwardFileBodyNameMax).optional(),
+  "trivialThreshold": zod.number().min(rollForwardFileBodyTrivialThresholdMin).max(rollForwardFileBodyTrivialThresholdMax).multipleOf(rollForwardFileBodyTrivialThresholdMultipleOf).nullish(),
+  "materiality": zod.number().min(rollForwardFileBodyMaterialityMin).max(rollForwardFileBodyMaterialityMax).multipleOf(rollForwardFileBodyMaterialityMultipleOf).nullish()
 })
+
+export const rollForwardFileResponseTwoRolledLoanCountMin = 0;
+
+export const rollForwardFileResponseTwoSkippedLoanCountMin = 0;
+
+
+
+export const RollForwardFileResponse = zod.object({
+  "id": zod.string(),
+  "clientId": zod.string(),
+  "name": zod.string(),
+  "fiscalYearEnd": zod.coerce.date(),
+  "trivialThreshold": zod.number().optional(),
+  "materiality": zod.number().optional(),
+  "rolledFromId": zod.string().nullish(),
+  "dismissedFindings": zod.array(zod.string()).nullish(),
+  "createdAt": zod.coerce.date(),
+  "updatedAt": zod.coerce.date()
+}).and(zod.object({
+  "rolledLoanCount": zod.number().min(rollForwardFileResponseTwoRolledLoanCountMin),
+  "skippedLoanCount": zod.number().min(rollForwardFileResponseTwoSkippedLoanCountMin),
+  "evidenceVersion": zod.string(),
+  "idempotent": zod.boolean()
+}))
 
 
 /**
@@ -212,6 +254,55 @@ export const RollForwardFileBody = zod.object({
 export const ListLoansParams = zod.object({
   "id": zod.coerce.string()
 })
+
+export const listLoansResponseSemiMonthlyFirstDueDayMax = 31;
+
+export const listLoansResponseSemiMonthlySecondDueDayMax = 31;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+export const listLoansResponseModificationAssessmentOneEvidenceQuantitativeTestOneRetainedFeesAndCostsMin = 0;
+
+
+export const listLoansResponseModificationAssessmentOneEvidenceQuantitativeTestOneNewFeesAndCostsMin = 0;
+
+export const listLoansResponseModificationAssessmentOneEvidenceQuantitativeTestOneSettlementConsiderationMin = 0;
+
+
+
+
+
+
+export const listLoansResponseModificationAssessmentOneConclusionLeaseTransitionPredecessorDeferredRentAssetMin = 0;
+
+export const listLoansResponseModificationAssessmentOneConclusionLeaseTransitionPredecessorDeferredRentLiabilityMin = 0;
+
+export const listLoansResponseModificationAssessmentOneConclusionLeaseTransitionPredecessorAssetCostMin = 0;
+
+export const listLoansResponseModificationAssessmentOneConclusionLeaseTransitionPredecessorAccumulatedDepreciationMin = 0;
+
+export const listLoansResponseModificationAssessmentOneConclusionLeaseTransitionSuccessorInitialAmountMin = 0;
+
+
+export const listLoansResponseActiveEventsItemOneAmountExclusiveMin = 0;
+
+
+
+
 
 export const ListLoansResponseItem = zod.object({
   "id": zod.string(),
@@ -223,11 +314,26 @@ export const ListLoansResponseItem = zod.object({
   "principal": zod.string(),
   "downPayment": zod.string().optional(),
   "interestRate": zod.string(),
+  "rateType": zod.enum(['fixed', 'prime_linked']).optional(),
+  "rateBenchmark": zod.enum(['boc_v80691311', 'boc_v122495']).nullish().describe('Current BoC prime is boc_v80691311; legacy boc_v122495 is returned only as retired, unresolved evidence.'),
+  "contractualPrimeName": zod.string().nullish(),
+  "benchmarkEquivalentToContractualPrime": zod.boolean().nullish(),
+  "rateSpread": zod.string().nullish(),
+  "rateResetFrequency": zod.enum(['immediate', 'monthly', 'quarterly', 'annual']).nullish(),
+  "rateEffectiveConvention": zod.enum(['observation_date', 'next_business_day', 'next_payment_date']).nullish(),
+  "ratePaymentTreatment": zod.enum(['keep_payment', 'keep_maturity']).nullish(),
+  "rateRefreshCheckpointDate": zod.coerce.date().nullish(),
+  "initialFvRateAssumption": zod.record(zod.string(), zod.unknown()).nullish(),
   "amortizationYears": zod.number(),
   "termYears": zod.number(),
   "startDate": zod.coerce.date(),
   "fiscalYearEnd": zod.coerce.date(),
   "paymentFrequency": zod.string(),
+  "paymentTiming": zod.enum(['beginning', 'end']).describe('Whether scheduled payments are due at the end or beginning of each payment period.'),
+  "graceTermMode": zod.enum(['included', 'added']).describe('Whether grace months are included in the stated term or extend it.'),
+  "firstPaymentDate": zod.coerce.date().nullish(),
+  "semiMonthlyFirstDueDay": zod.number().min(1).max(listLoansResponseSemiMonthlyFirstDueDayMax).nullish(),
+  "semiMonthlySecondDueDay": zod.number().min(1).max(listLoansResponseSemiMonthlySecondDueDayMax).nullish(),
   "graceMonths": zod.number().optional(),
   "graceInterestTreatment": zod.enum(['capitalized', 'none']).optional(),
   "ioMonths": zod.number(),
@@ -271,12 +377,120 @@ export const ListLoansResponseItem = zod.object({
   "inducementReceivedInCash": zod.boolean(),
   "covenantViolation": zod.boolean(),
   "rolledFromId": zod.string().optional(),
+  "predecessorAgreementId": zod.string().nullish().describe('Explicit user-selected predecessor agreement; never inferred from annual roll-forward lineage.'),
+  "modificationEffectiveDate": zod.coerce.date().nullish(),
+  "modificationAssessment": zod.object({
+  "status": zod.enum(['confirmed']),
+  "assessmentDate": zod.coerce.date(),
+  "confirmedAt": zod.coerce.date(),
+  "confirmedBy": zod.string().min(1),
+  "evidence": zod.object({
+  "changeSummary": zod.string().min(1),
+  "contractualChanges": zod.array(zod.object({
+  "term": zod.string().min(1),
+  "predecessorValue": zod.string().min(1),
+  "successorValue": zod.string().min(1),
+  "significance": zod.string().min(1),
+  "sourceReference": zod.string().min(1)
+})).min(1),
+  "qualitativeFactors": zod.array(zod.string().min(1)),
+  "facts": zod.object({
+  "creditorChanged": zod.boolean(),
+  "creditorChangedEvidence": zod.string().optional(),
+  "legalDischarge": zod.boolean(),
+  "legalDischargeEvidence": zod.string().optional(),
+  "relatedParty": zod.boolean(),
+  "relatedPartyEvidence": zod.string().optional()
+}),
+  "quantitativeTest": zod.object({
+  "method": zod.string().min(1),
+  "originalEffectiveRate": zod.number(),
+  "carryingAmount": zod.number(),
+  "originalRemainingCashFlows": zod.array(zod.object({
+  "date": zod.coerce.date(),
+  "amount": zod.number(),
+  "description": zod.string().min(1),
+  "sourceReference": zod.string().min(1)
+})).min(1),
+  "modifiedCashFlows": zod.array(zod.object({
+  "date": zod.coerce.date(),
+  "amount": zod.number(),
+  "description": zod.string().min(1),
+  "sourceReference": zod.string().min(1)
+})).min(1),
+  "sameDayPaymentTreatment": zod.enum(['include', 'exclude']),
+  "creditorFees": zod.number(),
+  "otherTransactionCosts": zod.number(),
+  "accruedInterest": zod.number(),
+  "accruedInterestTreatment": zod.enum(['included_in_carrying_amount', 'include_in_cash_flows', 'add_to_carrying_amount', 'exclude']),
+  "predecessorAmount": zod.number().optional(),
+  "successorAmount": zod.number().optional(),
+  "presentValueOfOriginalRemainingCashFlows": zod.number().describe('Canonical server-computed denominator: present value of remaining original cash flows at the original effective rate.'),
+  "presentValueOfModifiedCashFlows": zod.number().describe('Canonical server-computed present value of modified cash flows, including applicable creditor fees and accrued interest treatment.'),
+  "differenceAmount": zod.number(),
+  "differencePercent": zod.number(),
+  "retainedFeesAndCosts": zod.number().min(listLoansResponseModificationAssessmentOneEvidenceQuantitativeTestOneRetainedFeesAndCostsMin).describe('Separately evidenced prior unamortized fees and costs; never includes current transaction costs.'),
+  "retainedFeesAndCostsSourceReference": zod.string().min(1),
+  "newFeesAndCosts": zod.number().min(listLoansResponseModificationAssessmentOneEvidenceQuantitativeTestOneNewFeesAndCostsMin).describe('Resulting-basis input equal to creditorFees plus otherTransactionCosts.'),
+  "settlementConsideration": zod.number().min(listLoansResponseModificationAssessmentOneEvidenceQuantitativeTestOneSettlementConsiderationMin).optional().describe('Explicit settlement consideration. Required and greater than zero when the accountant concludes extinguishment; never inferred from present value.'),
+  "recommendation": zod.enum(['derecognize_original', 'account_as_modification'])
+}).nullish()
+}),
+  "conclusion": zod.object({
+  "agreementChangeType": zod.enum(['renewal', 'modification']),
+  "accountingTreatment": zod.enum(['continuation', 'extinguishment', 'new_lease']),
+  "rationale": zod.string().min(1),
+  "leaseTransition": zod.object({
+  "predecessorLeaseType": zod.enum(['operating', 'capital']),
+  "originalLeaseTerminated": zod.boolean(),
+  "replacementLeaseExecuted": zod.boolean(),
+  "terminationEvidenceReference": zod.string().min(1),
+  "entryDate": zod.coerce.date(),
+  "debitAccount": zod.string().min(1),
+  "creditAccount": zod.string().min(1),
+  "amount": zod.number(),
+  "entryEvidenceReference": zod.string().min(1),
+  "predecessorDeferredRentAsset": zod.number().min(listLoansResponseModificationAssessmentOneConclusionLeaseTransitionPredecessorDeferredRentAssetMin).nullable(),
+  "predecessorDeferredRentLiability": zod.number().min(listLoansResponseModificationAssessmentOneConclusionLeaseTransitionPredecessorDeferredRentLiabilityMin).nullable(),
+  "predecessorAssetCost": zod.number().min(listLoansResponseModificationAssessmentOneConclusionLeaseTransitionPredecessorAssetCostMin).nullable(),
+  "predecessorAccumulatedDepreciation": zod.number().min(listLoansResponseModificationAssessmentOneConclusionLeaseTransitionPredecessorAccumulatedDepreciationMin).nullable(),
+  "successorInitialAmount": zod.number().min(listLoansResponseModificationAssessmentOneConclusionLeaseTransitionSuccessorInitialAmountMin)
+}).optional()
+})
+}).nullish(),
   "masterAgreementId": zod.string().nullish(),
   "fvRate": zod.string().optional(),
   "fvDecision": zod.enum(['use_fv', 'trivial', 'immaterial']).optional(),
   "fvDecisionNote": zod.string().optional(),
   "dismissedFindings": zod.array(zod.string()).nullish(),
   "sourceDocumentName": zod.string().nullish(),
+  "currentRevisionId": zod.string().nullish(),
+  "currentRevisionHash": zod.string().nullish(),
+  "calculationVersion": zod.string().nullish(),
+  "activeEventSetId": zod.string().nullish(),
+  "activeEventSetVersion": zod.number(),
+  "activeEventSetHash": zod.string().nullish(),
+  "activeEvents": zod.array(zod.object({
+  "kind": zod.enum(['principal_prepayment']),
+  "effectiveDate": zod.coerce.date(),
+  "ordering": zod.enum(['before_scheduled_payment', 'after_scheduled_payment']),
+  "sequence": zod.number().min(1),
+  "amount": zod.number().gt(listLoansResponseActiveEventsItemOneAmountExclusiveMin),
+  "treatment": zod.enum(['keep_payment', 'keep_maturity']),
+  "classification": zod.enum(['ordinary', 'agreement_change']),
+  "source": zod.string().min(1),
+  "reason": zod.string().min(1),
+  "authoredAt": zod.coerce.date(),
+  "author": zod.string().nullish(),
+  "supersedesEventId": zod.string().nullish(),
+  "originEventId": zod.string().nullish()
+}).and(zod.object({
+  "id": zod.string(),
+  "setId": zod.string(),
+  "loanId": zod.string(),
+  "termRevisionId": zod.string()
+}))).describe('Events in the active immutable event set, in canonical effective-date, ordering, and sequence order.'),
+  "activeRateEvents": zod.array(zod.record(zod.string(), zod.unknown())).optional().describe('Active immutable sourced or overridden rate-reset segments.'),
   "createdAt": zod.coerce.date(),
   "updatedAt": zod.coerce.date()
 })
@@ -290,7 +504,78 @@ export const CreateLoanParams = zod.object({
   "id": zod.coerce.string()
 })
 
+
+export const createLoanBodyInitialEventsItemAmountExclusiveMin = 0;
+
+
+
+
+
+export const createLoanBodyRateTypeDefault = `fixed`;
+export const createLoanBodyPaymentTimingDefault = `end`;
+export const createLoanBodyGraceTermModeDefault = `included`;
+export const createLoanBodySemiMonthlyFirstDueDayMax = 31;
+
+export const createLoanBodySemiMonthlySecondDueDayMax = 31;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+export const createLoanBodyModificationAssessmentOneEvidenceQuantitativeTestOneRetainedFeesAndCostsMin = 0;
+
+
+export const createLoanBodyModificationAssessmentOneEvidenceQuantitativeTestOneNewFeesAndCostsMin = 0;
+
+export const createLoanBodyModificationAssessmentOneEvidenceQuantitativeTestOneSettlementConsiderationMin = 0;
+
+
+
+
+
+
+export const createLoanBodyModificationAssessmentOneConclusionLeaseTransitionPredecessorDeferredRentAssetMin = 0;
+
+export const createLoanBodyModificationAssessmentOneConclusionLeaseTransitionPredecessorDeferredRentLiabilityMin = 0;
+
+export const createLoanBodyModificationAssessmentOneConclusionLeaseTransitionPredecessorAssetCostMin = 0;
+
+export const createLoanBodyModificationAssessmentOneConclusionLeaseTransitionPredecessorAccumulatedDepreciationMin = 0;
+
+export const createLoanBodyModificationAssessmentOneConclusionLeaseTransitionSuccessorInitialAmountMin = 0;
+
+
+
 export const CreateLoanBody = zod.object({
+  "initialEvents": zod.array(zod.object({
+  "kind": zod.enum(['principal_prepayment']),
+  "effectiveDate": zod.coerce.date(),
+  "ordering": zod.enum(['before_scheduled_payment', 'after_scheduled_payment']),
+  "sequence": zod.number().min(1),
+  "amount": zod.number().gt(createLoanBodyInitialEventsItemAmountExclusiveMin),
+  "treatment": zod.enum(['keep_payment', 'keep_maturity']),
+  "classification": zod.enum(['ordinary', 'agreement_change']),
+  "source": zod.string().min(1),
+  "reason": zod.string().min(1),
+  "authoredAt": zod.coerce.date(),
+  "author": zod.string().nullish(),
+  "supersedesEventId": zod.string().nullish(),
+  "originEventId": zod.string().nullish()
+})).optional().describe('Optional complete initial principal-event timeline, saved atomically with the first contractual revision.'),
+  "initialEventSetReason": zod.string().min(1).optional(),
+  "initialEventSetSource": zod.string().min(1).optional(),
   "name": zod.string(),
   "description": zod.string().optional(),
   "counterparty": zod.string().nullish(),
@@ -298,11 +583,25 @@ export const CreateLoanBody = zod.object({
   "principal": zod.number(),
   "downPayment": zod.number().nullish(),
   "interestRate": zod.number(),
+  "rateType": zod.enum(['fixed', 'prime_linked']).default(createLoanBodyRateTypeDefault),
+  "rateBenchmark": zod.enum(['boc_v80691311']).nullish().describe('Prime-linked contracts must explicitly adopt the current BoC prime benchmark.'),
+  "contractualPrimeName": zod.string().nullish(),
+  "benchmarkEquivalentToContractualPrime": zod.boolean().nullish(),
+  "rateSpread": zod.number().nullish(),
+  "rateResetFrequency": zod.enum(['immediate', 'monthly', 'quarterly', 'annual']).nullish(),
+  "rateEffectiveConvention": zod.enum(['observation_date', 'next_business_day', 'next_payment_date']).nullish(),
+  "ratePaymentTreatment": zod.enum(['keep_payment', 'keep_maturity']).nullish(),
+  "initialFvRateAssumption": zod.record(zod.string(), zod.unknown()).nullish(),
   "amortizationYears": zod.number(),
   "termYears": zod.number(),
   "startDate": zod.coerce.date(),
   "fiscalYearEnd": zod.coerce.date(),
   "paymentFrequency": zod.string().optional(),
+  "paymentTiming": zod.enum(['beginning', 'end']).default(createLoanBodyPaymentTimingDefault),
+  "graceTermMode": zod.enum(['included', 'added']).default(createLoanBodyGraceTermModeDefault),
+  "firstPaymentDate": zod.coerce.date().nullish(),
+  "semiMonthlyFirstDueDay": zod.number().min(1).max(createLoanBodySemiMonthlyFirstDueDayMax).nullish(),
+  "semiMonthlySecondDueDay": zod.number().min(1).max(createLoanBodySemiMonthlySecondDueDayMax).nullish(),
   "graceMonths": zod.number().optional(),
   "graceInterestTreatment": zod.enum(['capitalized', 'none']).optional(),
   "ioMonths": zod.number().optional(),
@@ -345,12 +644,94 @@ export const CreateLoanBody = zod.object({
   "camMonthly": zod.number().nullish(),
   "inducementReceivedInCash": zod.boolean().optional(),
   "covenantViolation": zod.boolean().optional(),
-  "fvRate": zod.number().optional(),
-  "fvDecision": zod.enum(['use_fv', 'trivial', 'immaterial']).optional(),
-  "fvDecisionNote": zod.string().optional(),
-  "sourceDocumentBlob": zod.string().nullish(),
+  "fvRate": zod.number().optional().describe('Direct FV inputs are rejected; use the FV confirmation endpoint after creating the loan.'),
+  "fvDecision": zod.enum(['use_fv', 'trivial', 'immaterial']).optional().describe('Direct FV inputs are rejected; use the FV confirmation endpoint after creating the loan.'),
+  "fvDecisionNote": zod.string().optional().describe('Direct FV inputs are rejected; use the FV confirmation endpoint after creating the loan.'),
+  "sourceDocumentId": zod.string().nullish(),
   "sourceDocumentName": zod.string().nullish(),
-  "masterAgreementId": zod.string().nullish()
+  "masterAgreementId": zod.string().nullish(),
+  "predecessorAgreementId": zod.string().nullish().describe('Explicitly links this agreement to a prior agreement. Send null with the other modification fields null to remove a link.'),
+  "modificationEffectiveDate": zod.coerce.date().nullish(),
+  "modificationAssessment": zod.object({
+  "status": zod.enum(['confirmed']),
+  "assessmentDate": zod.coerce.date(),
+  "confirmedAt": zod.coerce.date(),
+  "confirmedBy": zod.string().min(1),
+  "evidence": zod.object({
+  "changeSummary": zod.string().min(1),
+  "contractualChanges": zod.array(zod.object({
+  "term": zod.string().min(1),
+  "predecessorValue": zod.string().min(1),
+  "successorValue": zod.string().min(1),
+  "significance": zod.string().min(1),
+  "sourceReference": zod.string().min(1)
+})).min(1),
+  "qualitativeFactors": zod.array(zod.string().min(1)),
+  "facts": zod.object({
+  "creditorChanged": zod.boolean(),
+  "creditorChangedEvidence": zod.string().optional(),
+  "legalDischarge": zod.boolean(),
+  "legalDischargeEvidence": zod.string().optional(),
+  "relatedParty": zod.boolean(),
+  "relatedPartyEvidence": zod.string().optional()
+}),
+  "quantitativeTest": zod.object({
+  "method": zod.string().min(1),
+  "originalEffectiveRate": zod.number(),
+  "carryingAmount": zod.number(),
+  "originalRemainingCashFlows": zod.array(zod.object({
+  "date": zod.coerce.date(),
+  "amount": zod.number(),
+  "description": zod.string().min(1),
+  "sourceReference": zod.string().min(1)
+})).min(1),
+  "modifiedCashFlows": zod.array(zod.object({
+  "date": zod.coerce.date(),
+  "amount": zod.number(),
+  "description": zod.string().min(1),
+  "sourceReference": zod.string().min(1)
+})).min(1),
+  "sameDayPaymentTreatment": zod.enum(['include', 'exclude']),
+  "creditorFees": zod.number(),
+  "otherTransactionCosts": zod.number(),
+  "accruedInterest": zod.number(),
+  "accruedInterestTreatment": zod.enum(['included_in_carrying_amount', 'include_in_cash_flows', 'add_to_carrying_amount', 'exclude']),
+  "predecessorAmount": zod.number().optional(),
+  "successorAmount": zod.number().optional(),
+  "presentValueOfOriginalRemainingCashFlows": zod.number().describe('Canonical server-computed denominator: present value of remaining original cash flows at the original effective rate.'),
+  "presentValueOfModifiedCashFlows": zod.number().describe('Canonical server-computed present value of modified cash flows, including applicable creditor fees and accrued interest treatment.'),
+  "differenceAmount": zod.number(),
+  "differencePercent": zod.number(),
+  "retainedFeesAndCosts": zod.number().min(createLoanBodyModificationAssessmentOneEvidenceQuantitativeTestOneRetainedFeesAndCostsMin).describe('Separately evidenced prior unamortized fees and costs; never includes current transaction costs.'),
+  "retainedFeesAndCostsSourceReference": zod.string().min(1),
+  "newFeesAndCosts": zod.number().min(createLoanBodyModificationAssessmentOneEvidenceQuantitativeTestOneNewFeesAndCostsMin).describe('Resulting-basis input equal to creditorFees plus otherTransactionCosts.'),
+  "settlementConsideration": zod.number().min(createLoanBodyModificationAssessmentOneEvidenceQuantitativeTestOneSettlementConsiderationMin).optional().describe('Explicit settlement consideration. Required and greater than zero when the accountant concludes extinguishment; never inferred from present value.'),
+  "recommendation": zod.enum(['derecognize_original', 'account_as_modification'])
+}).nullish()
+}),
+  "conclusion": zod.object({
+  "agreementChangeType": zod.enum(['renewal', 'modification']),
+  "accountingTreatment": zod.enum(['continuation', 'extinguishment', 'new_lease']),
+  "rationale": zod.string().min(1),
+  "leaseTransition": zod.object({
+  "predecessorLeaseType": zod.enum(['operating', 'capital']),
+  "originalLeaseTerminated": zod.boolean(),
+  "replacementLeaseExecuted": zod.boolean(),
+  "terminationEvidenceReference": zod.string().min(1),
+  "entryDate": zod.coerce.date(),
+  "debitAccount": zod.string().min(1),
+  "creditAccount": zod.string().min(1),
+  "amount": zod.number(),
+  "entryEvidenceReference": zod.string().min(1),
+  "predecessorDeferredRentAsset": zod.number().min(createLoanBodyModificationAssessmentOneConclusionLeaseTransitionPredecessorDeferredRentAssetMin).nullable(),
+  "predecessorDeferredRentLiability": zod.number().min(createLoanBodyModificationAssessmentOneConclusionLeaseTransitionPredecessorDeferredRentLiabilityMin).nullable(),
+  "predecessorAssetCost": zod.number().min(createLoanBodyModificationAssessmentOneConclusionLeaseTransitionPredecessorAssetCostMin).nullable(),
+  "predecessorAccumulatedDepreciation": zod.number().min(createLoanBodyModificationAssessmentOneConclusionLeaseTransitionPredecessorAccumulatedDepreciationMin).nullable(),
+  "successorInitialAmount": zod.number().min(createLoanBodyModificationAssessmentOneConclusionLeaseTransitionSuccessorInitialAmountMin)
+}).optional()
+})
+}).nullish(),
+  "changeReason": zod.string().optional().describe('Audit reason recorded on the initial contract revision.')
 })
 
 
@@ -392,7 +773,7 @@ export const CreateMasterAgreementBody = zod.object({
   "securityClauses": zod.array(zod.string()).nullish(),
   "securityDescription": zod.string().nullish(),
   "covenantDescription": zod.string().nullish(),
-  "sourceDocumentBlob": zod.string().nullish(),
+  "sourceDocumentId": zod.string().nullish(),
   "sourceDocumentName": zod.string().nullish()
 })
 
@@ -482,6 +863,55 @@ export const GetLoanParams = zod.object({
   "id": zod.coerce.string()
 })
 
+export const getLoanResponseSemiMonthlyFirstDueDayMax = 31;
+
+export const getLoanResponseSemiMonthlySecondDueDayMax = 31;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+export const getLoanResponseModificationAssessmentOneEvidenceQuantitativeTestOneRetainedFeesAndCostsMin = 0;
+
+
+export const getLoanResponseModificationAssessmentOneEvidenceQuantitativeTestOneNewFeesAndCostsMin = 0;
+
+export const getLoanResponseModificationAssessmentOneEvidenceQuantitativeTestOneSettlementConsiderationMin = 0;
+
+
+
+
+
+
+export const getLoanResponseModificationAssessmentOneConclusionLeaseTransitionPredecessorDeferredRentAssetMin = 0;
+
+export const getLoanResponseModificationAssessmentOneConclusionLeaseTransitionPredecessorDeferredRentLiabilityMin = 0;
+
+export const getLoanResponseModificationAssessmentOneConclusionLeaseTransitionPredecessorAssetCostMin = 0;
+
+export const getLoanResponseModificationAssessmentOneConclusionLeaseTransitionPredecessorAccumulatedDepreciationMin = 0;
+
+export const getLoanResponseModificationAssessmentOneConclusionLeaseTransitionSuccessorInitialAmountMin = 0;
+
+
+export const getLoanResponseActiveEventsItemOneAmountExclusiveMin = 0;
+
+
+
+
+
 export const GetLoanResponse = zod.object({
   "id": zod.string(),
   "fileId": zod.string(),
@@ -492,11 +922,26 @@ export const GetLoanResponse = zod.object({
   "principal": zod.string(),
   "downPayment": zod.string().optional(),
   "interestRate": zod.string(),
+  "rateType": zod.enum(['fixed', 'prime_linked']).optional(),
+  "rateBenchmark": zod.enum(['boc_v80691311', 'boc_v122495']).nullish().describe('Current BoC prime is boc_v80691311; legacy boc_v122495 is returned only as retired, unresolved evidence.'),
+  "contractualPrimeName": zod.string().nullish(),
+  "benchmarkEquivalentToContractualPrime": zod.boolean().nullish(),
+  "rateSpread": zod.string().nullish(),
+  "rateResetFrequency": zod.enum(['immediate', 'monthly', 'quarterly', 'annual']).nullish(),
+  "rateEffectiveConvention": zod.enum(['observation_date', 'next_business_day', 'next_payment_date']).nullish(),
+  "ratePaymentTreatment": zod.enum(['keep_payment', 'keep_maturity']).nullish(),
+  "rateRefreshCheckpointDate": zod.coerce.date().nullish(),
+  "initialFvRateAssumption": zod.record(zod.string(), zod.unknown()).nullish(),
   "amortizationYears": zod.number(),
   "termYears": zod.number(),
   "startDate": zod.coerce.date(),
   "fiscalYearEnd": zod.coerce.date(),
   "paymentFrequency": zod.string(),
+  "paymentTiming": zod.enum(['beginning', 'end']).describe('Whether scheduled payments are due at the end or beginning of each payment period.'),
+  "graceTermMode": zod.enum(['included', 'added']).describe('Whether grace months are included in the stated term or extend it.'),
+  "firstPaymentDate": zod.coerce.date().nullish(),
+  "semiMonthlyFirstDueDay": zod.number().min(1).max(getLoanResponseSemiMonthlyFirstDueDayMax).nullish(),
+  "semiMonthlySecondDueDay": zod.number().min(1).max(getLoanResponseSemiMonthlySecondDueDayMax).nullish(),
   "graceMonths": zod.number().optional(),
   "graceInterestTreatment": zod.enum(['capitalized', 'none']).optional(),
   "ioMonths": zod.number(),
@@ -540,12 +985,120 @@ export const GetLoanResponse = zod.object({
   "inducementReceivedInCash": zod.boolean(),
   "covenantViolation": zod.boolean(),
   "rolledFromId": zod.string().optional(),
+  "predecessorAgreementId": zod.string().nullish().describe('Explicit user-selected predecessor agreement; never inferred from annual roll-forward lineage.'),
+  "modificationEffectiveDate": zod.coerce.date().nullish(),
+  "modificationAssessment": zod.object({
+  "status": zod.enum(['confirmed']),
+  "assessmentDate": zod.coerce.date(),
+  "confirmedAt": zod.coerce.date(),
+  "confirmedBy": zod.string().min(1),
+  "evidence": zod.object({
+  "changeSummary": zod.string().min(1),
+  "contractualChanges": zod.array(zod.object({
+  "term": zod.string().min(1),
+  "predecessorValue": zod.string().min(1),
+  "successorValue": zod.string().min(1),
+  "significance": zod.string().min(1),
+  "sourceReference": zod.string().min(1)
+})).min(1),
+  "qualitativeFactors": zod.array(zod.string().min(1)),
+  "facts": zod.object({
+  "creditorChanged": zod.boolean(),
+  "creditorChangedEvidence": zod.string().optional(),
+  "legalDischarge": zod.boolean(),
+  "legalDischargeEvidence": zod.string().optional(),
+  "relatedParty": zod.boolean(),
+  "relatedPartyEvidence": zod.string().optional()
+}),
+  "quantitativeTest": zod.object({
+  "method": zod.string().min(1),
+  "originalEffectiveRate": zod.number(),
+  "carryingAmount": zod.number(),
+  "originalRemainingCashFlows": zod.array(zod.object({
+  "date": zod.coerce.date(),
+  "amount": zod.number(),
+  "description": zod.string().min(1),
+  "sourceReference": zod.string().min(1)
+})).min(1),
+  "modifiedCashFlows": zod.array(zod.object({
+  "date": zod.coerce.date(),
+  "amount": zod.number(),
+  "description": zod.string().min(1),
+  "sourceReference": zod.string().min(1)
+})).min(1),
+  "sameDayPaymentTreatment": zod.enum(['include', 'exclude']),
+  "creditorFees": zod.number(),
+  "otherTransactionCosts": zod.number(),
+  "accruedInterest": zod.number(),
+  "accruedInterestTreatment": zod.enum(['included_in_carrying_amount', 'include_in_cash_flows', 'add_to_carrying_amount', 'exclude']),
+  "predecessorAmount": zod.number().optional(),
+  "successorAmount": zod.number().optional(),
+  "presentValueOfOriginalRemainingCashFlows": zod.number().describe('Canonical server-computed denominator: present value of remaining original cash flows at the original effective rate.'),
+  "presentValueOfModifiedCashFlows": zod.number().describe('Canonical server-computed present value of modified cash flows, including applicable creditor fees and accrued interest treatment.'),
+  "differenceAmount": zod.number(),
+  "differencePercent": zod.number(),
+  "retainedFeesAndCosts": zod.number().min(getLoanResponseModificationAssessmentOneEvidenceQuantitativeTestOneRetainedFeesAndCostsMin).describe('Separately evidenced prior unamortized fees and costs; never includes current transaction costs.'),
+  "retainedFeesAndCostsSourceReference": zod.string().min(1),
+  "newFeesAndCosts": zod.number().min(getLoanResponseModificationAssessmentOneEvidenceQuantitativeTestOneNewFeesAndCostsMin).describe('Resulting-basis input equal to creditorFees plus otherTransactionCosts.'),
+  "settlementConsideration": zod.number().min(getLoanResponseModificationAssessmentOneEvidenceQuantitativeTestOneSettlementConsiderationMin).optional().describe('Explicit settlement consideration. Required and greater than zero when the accountant concludes extinguishment; never inferred from present value.'),
+  "recommendation": zod.enum(['derecognize_original', 'account_as_modification'])
+}).nullish()
+}),
+  "conclusion": zod.object({
+  "agreementChangeType": zod.enum(['renewal', 'modification']),
+  "accountingTreatment": zod.enum(['continuation', 'extinguishment', 'new_lease']),
+  "rationale": zod.string().min(1),
+  "leaseTransition": zod.object({
+  "predecessorLeaseType": zod.enum(['operating', 'capital']),
+  "originalLeaseTerminated": zod.boolean(),
+  "replacementLeaseExecuted": zod.boolean(),
+  "terminationEvidenceReference": zod.string().min(1),
+  "entryDate": zod.coerce.date(),
+  "debitAccount": zod.string().min(1),
+  "creditAccount": zod.string().min(1),
+  "amount": zod.number(),
+  "entryEvidenceReference": zod.string().min(1),
+  "predecessorDeferredRentAsset": zod.number().min(getLoanResponseModificationAssessmentOneConclusionLeaseTransitionPredecessorDeferredRentAssetMin).nullable(),
+  "predecessorDeferredRentLiability": zod.number().min(getLoanResponseModificationAssessmentOneConclusionLeaseTransitionPredecessorDeferredRentLiabilityMin).nullable(),
+  "predecessorAssetCost": zod.number().min(getLoanResponseModificationAssessmentOneConclusionLeaseTransitionPredecessorAssetCostMin).nullable(),
+  "predecessorAccumulatedDepreciation": zod.number().min(getLoanResponseModificationAssessmentOneConclusionLeaseTransitionPredecessorAccumulatedDepreciationMin).nullable(),
+  "successorInitialAmount": zod.number().min(getLoanResponseModificationAssessmentOneConclusionLeaseTransitionSuccessorInitialAmountMin)
+}).optional()
+})
+}).nullish(),
   "masterAgreementId": zod.string().nullish(),
   "fvRate": zod.string().optional(),
   "fvDecision": zod.enum(['use_fv', 'trivial', 'immaterial']).optional(),
   "fvDecisionNote": zod.string().optional(),
   "dismissedFindings": zod.array(zod.string()).nullish(),
   "sourceDocumentName": zod.string().nullish(),
+  "currentRevisionId": zod.string().nullish(),
+  "currentRevisionHash": zod.string().nullish(),
+  "calculationVersion": zod.string().nullish(),
+  "activeEventSetId": zod.string().nullish(),
+  "activeEventSetVersion": zod.number(),
+  "activeEventSetHash": zod.string().nullish(),
+  "activeEvents": zod.array(zod.object({
+  "kind": zod.enum(['principal_prepayment']),
+  "effectiveDate": zod.coerce.date(),
+  "ordering": zod.enum(['before_scheduled_payment', 'after_scheduled_payment']),
+  "sequence": zod.number().min(1),
+  "amount": zod.number().gt(getLoanResponseActiveEventsItemOneAmountExclusiveMin),
+  "treatment": zod.enum(['keep_payment', 'keep_maturity']),
+  "classification": zod.enum(['ordinary', 'agreement_change']),
+  "source": zod.string().min(1),
+  "reason": zod.string().min(1),
+  "authoredAt": zod.coerce.date(),
+  "author": zod.string().nullish(),
+  "supersedesEventId": zod.string().nullish(),
+  "originEventId": zod.string().nullish()
+}).and(zod.object({
+  "id": zod.string(),
+  "setId": zod.string(),
+  "loanId": zod.string(),
+  "termRevisionId": zod.string()
+}))).describe('Events in the active immutable event set, in canonical effective-date, ordering, and sequence order.'),
+  "activeRateEvents": zod.array(zod.record(zod.string(), zod.unknown())).optional().describe('Active immutable sourced or overridden rate-reset segments.'),
   "createdAt": zod.coerce.date(),
   "updatedAt": zod.coerce.date()
 })
@@ -558,6 +1111,50 @@ export const UpdateLoanParams = zod.object({
   "id": zod.coerce.string()
 })
 
+export const updateLoanBodySemiMonthlyFirstDueDayMax = 31;
+
+export const updateLoanBodySemiMonthlySecondDueDayMax = 31;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+export const updateLoanBodyModificationAssessmentOneEvidenceQuantitativeTestOneRetainedFeesAndCostsMin = 0;
+
+
+export const updateLoanBodyModificationAssessmentOneEvidenceQuantitativeTestOneNewFeesAndCostsMin = 0;
+
+export const updateLoanBodyModificationAssessmentOneEvidenceQuantitativeTestOneSettlementConsiderationMin = 0;
+
+
+
+
+
+
+export const updateLoanBodyModificationAssessmentOneConclusionLeaseTransitionPredecessorDeferredRentAssetMin = 0;
+
+export const updateLoanBodyModificationAssessmentOneConclusionLeaseTransitionPredecessorDeferredRentLiabilityMin = 0;
+
+export const updateLoanBodyModificationAssessmentOneConclusionLeaseTransitionPredecessorAssetCostMin = 0;
+
+export const updateLoanBodyModificationAssessmentOneConclusionLeaseTransitionPredecessorAccumulatedDepreciationMin = 0;
+
+export const updateLoanBodyModificationAssessmentOneConclusionLeaseTransitionSuccessorInitialAmountMin = 0;
+
+
+
 export const UpdateLoanBody = zod.object({
   "name": zod.string().optional(),
   "description": zod.string().optional(),
@@ -566,10 +1163,24 @@ export const UpdateLoanBody = zod.object({
   "principal": zod.number().optional(),
   "downPayment": zod.number().nullish(),
   "interestRate": zod.number().optional(),
+  "rateType": zod.enum(['fixed', 'prime_linked']).optional(),
+  "rateBenchmark": zod.enum(['boc_v80691311']).nullish().describe('Set boc_v80691311 to explicitly adopt the current BoC prime benchmark; retired identifiers cannot be written.'),
+  "contractualPrimeName": zod.string().nullish(),
+  "benchmarkEquivalentToContractualPrime": zod.boolean().nullish(),
+  "rateSpread": zod.number().nullish(),
+  "rateResetFrequency": zod.enum(['immediate', 'monthly', 'quarterly', 'annual']).nullish(),
+  "rateEffectiveConvention": zod.enum(['observation_date', 'next_business_day', 'next_payment_date']).nullish(),
+  "ratePaymentTreatment": zod.enum(['keep_payment', 'keep_maturity']).nullish(),
+  "initialFvRateAssumption": zod.record(zod.string(), zod.unknown()).nullish(),
   "amortizationYears": zod.number().optional(),
   "termYears": zod.number().optional(),
   "startDate": zod.coerce.date().optional(),
   "paymentFrequency": zod.string().optional(),
+  "paymentTiming": zod.enum(['beginning', 'end']).optional(),
+  "graceTermMode": zod.enum(['included', 'added']).optional(),
+  "firstPaymentDate": zod.coerce.date().nullish(),
+  "semiMonthlyFirstDueDay": zod.number().min(1).max(updateLoanBodySemiMonthlyFirstDueDayMax).nullish(),
+  "semiMonthlySecondDueDay": zod.number().min(1).max(updateLoanBodySemiMonthlySecondDueDayMax).nullish(),
   "graceMonths": zod.number().optional(),
   "graceInterestTreatment": zod.enum(['capitalized', 'none']).optional(),
   "ioMonths": zod.number().optional(),
@@ -612,12 +1223,140 @@ export const UpdateLoanBody = zod.object({
   "camMonthly": zod.number().nullish(),
   "inducementReceivedInCash": zod.boolean().optional(),
   "covenantViolation": zod.boolean().optional(),
-  "fvRate": zod.number().optional(),
-  "fvDecision": zod.enum(['use_fv', 'trivial', 'immaterial']).optional(),
-  "fvDecisionNote": zod.string().optional(),
   "dismissedFindings": zod.array(zod.string()).nullish(),
-  "masterAgreementId": zod.string().nullish()
+  "masterAgreementId": zod.string().nullish(),
+  "predecessorAgreementId": zod.string().nullish().describe('Explicitly links this agreement to a prior agreement. Send null with the other modification fields null to remove a link.'),
+  "modificationEffectiveDate": zod.coerce.date().nullish(),
+  "modificationAssessment": zod.object({
+  "status": zod.enum(['confirmed']),
+  "assessmentDate": zod.coerce.date(),
+  "confirmedAt": zod.coerce.date(),
+  "confirmedBy": zod.string().min(1),
+  "evidence": zod.object({
+  "changeSummary": zod.string().min(1),
+  "contractualChanges": zod.array(zod.object({
+  "term": zod.string().min(1),
+  "predecessorValue": zod.string().min(1),
+  "successorValue": zod.string().min(1),
+  "significance": zod.string().min(1),
+  "sourceReference": zod.string().min(1)
+})).min(1),
+  "qualitativeFactors": zod.array(zod.string().min(1)),
+  "facts": zod.object({
+  "creditorChanged": zod.boolean(),
+  "creditorChangedEvidence": zod.string().optional(),
+  "legalDischarge": zod.boolean(),
+  "legalDischargeEvidence": zod.string().optional(),
+  "relatedParty": zod.boolean(),
+  "relatedPartyEvidence": zod.string().optional()
+}),
+  "quantitativeTest": zod.object({
+  "method": zod.string().min(1),
+  "originalEffectiveRate": zod.number(),
+  "carryingAmount": zod.number(),
+  "originalRemainingCashFlows": zod.array(zod.object({
+  "date": zod.coerce.date(),
+  "amount": zod.number(),
+  "description": zod.string().min(1),
+  "sourceReference": zod.string().min(1)
+})).min(1),
+  "modifiedCashFlows": zod.array(zod.object({
+  "date": zod.coerce.date(),
+  "amount": zod.number(),
+  "description": zod.string().min(1),
+  "sourceReference": zod.string().min(1)
+})).min(1),
+  "sameDayPaymentTreatment": zod.enum(['include', 'exclude']),
+  "creditorFees": zod.number(),
+  "otherTransactionCosts": zod.number(),
+  "accruedInterest": zod.number(),
+  "accruedInterestTreatment": zod.enum(['included_in_carrying_amount', 'include_in_cash_flows', 'add_to_carrying_amount', 'exclude']),
+  "predecessorAmount": zod.number().optional(),
+  "successorAmount": zod.number().optional(),
+  "presentValueOfOriginalRemainingCashFlows": zod.number().describe('Canonical server-computed denominator: present value of remaining original cash flows at the original effective rate.'),
+  "presentValueOfModifiedCashFlows": zod.number().describe('Canonical server-computed present value of modified cash flows, including applicable creditor fees and accrued interest treatment.'),
+  "differenceAmount": zod.number(),
+  "differencePercent": zod.number(),
+  "retainedFeesAndCosts": zod.number().min(updateLoanBodyModificationAssessmentOneEvidenceQuantitativeTestOneRetainedFeesAndCostsMin).describe('Separately evidenced prior unamortized fees and costs; never includes current transaction costs.'),
+  "retainedFeesAndCostsSourceReference": zod.string().min(1),
+  "newFeesAndCosts": zod.number().min(updateLoanBodyModificationAssessmentOneEvidenceQuantitativeTestOneNewFeesAndCostsMin).describe('Resulting-basis input equal to creditorFees plus otherTransactionCosts.'),
+  "settlementConsideration": zod.number().min(updateLoanBodyModificationAssessmentOneEvidenceQuantitativeTestOneSettlementConsiderationMin).optional().describe('Explicit settlement consideration. Required and greater than zero when the accountant concludes extinguishment; never inferred from present value.'),
+  "recommendation": zod.enum(['derecognize_original', 'account_as_modification'])
+}).nullish()
+}),
+  "conclusion": zod.object({
+  "agreementChangeType": zod.enum(['renewal', 'modification']),
+  "accountingTreatment": zod.enum(['continuation', 'extinguishment', 'new_lease']),
+  "rationale": zod.string().min(1),
+  "leaseTransition": zod.object({
+  "predecessorLeaseType": zod.enum(['operating', 'capital']),
+  "originalLeaseTerminated": zod.boolean(),
+  "replacementLeaseExecuted": zod.boolean(),
+  "terminationEvidenceReference": zod.string().min(1),
+  "entryDate": zod.coerce.date(),
+  "debitAccount": zod.string().min(1),
+  "creditAccount": zod.string().min(1),
+  "amount": zod.number(),
+  "entryEvidenceReference": zod.string().min(1),
+  "predecessorDeferredRentAsset": zod.number().min(updateLoanBodyModificationAssessmentOneConclusionLeaseTransitionPredecessorDeferredRentAssetMin).nullable(),
+  "predecessorDeferredRentLiability": zod.number().min(updateLoanBodyModificationAssessmentOneConclusionLeaseTransitionPredecessorDeferredRentLiabilityMin).nullable(),
+  "predecessorAssetCost": zod.number().min(updateLoanBodyModificationAssessmentOneConclusionLeaseTransitionPredecessorAssetCostMin).nullable(),
+  "predecessorAccumulatedDepreciation": zod.number().min(updateLoanBodyModificationAssessmentOneConclusionLeaseTransitionPredecessorAccumulatedDepreciationMin).nullable(),
+  "successorInitialAmount": zod.number().min(updateLoanBodyModificationAssessmentOneConclusionLeaseTransitionSuccessorInitialAmountMin)
+}).optional()
 })
+}).nullish(),
+  "changeReason": zod.string().optional().describe('Audit reason recorded when schedule-driving terms change.')
+})
+
+export const updateLoanResponseSemiMonthlyFirstDueDayMax = 31;
+
+export const updateLoanResponseSemiMonthlySecondDueDayMax = 31;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+export const updateLoanResponseModificationAssessmentOneEvidenceQuantitativeTestOneRetainedFeesAndCostsMin = 0;
+
+
+export const updateLoanResponseModificationAssessmentOneEvidenceQuantitativeTestOneNewFeesAndCostsMin = 0;
+
+export const updateLoanResponseModificationAssessmentOneEvidenceQuantitativeTestOneSettlementConsiderationMin = 0;
+
+
+
+
+
+
+export const updateLoanResponseModificationAssessmentOneConclusionLeaseTransitionPredecessorDeferredRentAssetMin = 0;
+
+export const updateLoanResponseModificationAssessmentOneConclusionLeaseTransitionPredecessorDeferredRentLiabilityMin = 0;
+
+export const updateLoanResponseModificationAssessmentOneConclusionLeaseTransitionPredecessorAssetCostMin = 0;
+
+export const updateLoanResponseModificationAssessmentOneConclusionLeaseTransitionPredecessorAccumulatedDepreciationMin = 0;
+
+export const updateLoanResponseModificationAssessmentOneConclusionLeaseTransitionSuccessorInitialAmountMin = 0;
+
+
+export const updateLoanResponseActiveEventsItemOneAmountExclusiveMin = 0;
+
+
+
+
 
 export const UpdateLoanResponse = zod.object({
   "id": zod.string(),
@@ -629,11 +1368,26 @@ export const UpdateLoanResponse = zod.object({
   "principal": zod.string(),
   "downPayment": zod.string().optional(),
   "interestRate": zod.string(),
+  "rateType": zod.enum(['fixed', 'prime_linked']).optional(),
+  "rateBenchmark": zod.enum(['boc_v80691311', 'boc_v122495']).nullish().describe('Current BoC prime is boc_v80691311; legacy boc_v122495 is returned only as retired, unresolved evidence.'),
+  "contractualPrimeName": zod.string().nullish(),
+  "benchmarkEquivalentToContractualPrime": zod.boolean().nullish(),
+  "rateSpread": zod.string().nullish(),
+  "rateResetFrequency": zod.enum(['immediate', 'monthly', 'quarterly', 'annual']).nullish(),
+  "rateEffectiveConvention": zod.enum(['observation_date', 'next_business_day', 'next_payment_date']).nullish(),
+  "ratePaymentTreatment": zod.enum(['keep_payment', 'keep_maturity']).nullish(),
+  "rateRefreshCheckpointDate": zod.coerce.date().nullish(),
+  "initialFvRateAssumption": zod.record(zod.string(), zod.unknown()).nullish(),
   "amortizationYears": zod.number(),
   "termYears": zod.number(),
   "startDate": zod.coerce.date(),
   "fiscalYearEnd": zod.coerce.date(),
   "paymentFrequency": zod.string(),
+  "paymentTiming": zod.enum(['beginning', 'end']).describe('Whether scheduled payments are due at the end or beginning of each payment period.'),
+  "graceTermMode": zod.enum(['included', 'added']).describe('Whether grace months are included in the stated term or extend it.'),
+  "firstPaymentDate": zod.coerce.date().nullish(),
+  "semiMonthlyFirstDueDay": zod.number().min(1).max(updateLoanResponseSemiMonthlyFirstDueDayMax).nullish(),
+  "semiMonthlySecondDueDay": zod.number().min(1).max(updateLoanResponseSemiMonthlySecondDueDayMax).nullish(),
   "graceMonths": zod.number().optional(),
   "graceInterestTreatment": zod.enum(['capitalized', 'none']).optional(),
   "ioMonths": zod.number(),
@@ -677,12 +1431,120 @@ export const UpdateLoanResponse = zod.object({
   "inducementReceivedInCash": zod.boolean(),
   "covenantViolation": zod.boolean(),
   "rolledFromId": zod.string().optional(),
+  "predecessorAgreementId": zod.string().nullish().describe('Explicit user-selected predecessor agreement; never inferred from annual roll-forward lineage.'),
+  "modificationEffectiveDate": zod.coerce.date().nullish(),
+  "modificationAssessment": zod.object({
+  "status": zod.enum(['confirmed']),
+  "assessmentDate": zod.coerce.date(),
+  "confirmedAt": zod.coerce.date(),
+  "confirmedBy": zod.string().min(1),
+  "evidence": zod.object({
+  "changeSummary": zod.string().min(1),
+  "contractualChanges": zod.array(zod.object({
+  "term": zod.string().min(1),
+  "predecessorValue": zod.string().min(1),
+  "successorValue": zod.string().min(1),
+  "significance": zod.string().min(1),
+  "sourceReference": zod.string().min(1)
+})).min(1),
+  "qualitativeFactors": zod.array(zod.string().min(1)),
+  "facts": zod.object({
+  "creditorChanged": zod.boolean(),
+  "creditorChangedEvidence": zod.string().optional(),
+  "legalDischarge": zod.boolean(),
+  "legalDischargeEvidence": zod.string().optional(),
+  "relatedParty": zod.boolean(),
+  "relatedPartyEvidence": zod.string().optional()
+}),
+  "quantitativeTest": zod.object({
+  "method": zod.string().min(1),
+  "originalEffectiveRate": zod.number(),
+  "carryingAmount": zod.number(),
+  "originalRemainingCashFlows": zod.array(zod.object({
+  "date": zod.coerce.date(),
+  "amount": zod.number(),
+  "description": zod.string().min(1),
+  "sourceReference": zod.string().min(1)
+})).min(1),
+  "modifiedCashFlows": zod.array(zod.object({
+  "date": zod.coerce.date(),
+  "amount": zod.number(),
+  "description": zod.string().min(1),
+  "sourceReference": zod.string().min(1)
+})).min(1),
+  "sameDayPaymentTreatment": zod.enum(['include', 'exclude']),
+  "creditorFees": zod.number(),
+  "otherTransactionCosts": zod.number(),
+  "accruedInterest": zod.number(),
+  "accruedInterestTreatment": zod.enum(['included_in_carrying_amount', 'include_in_cash_flows', 'add_to_carrying_amount', 'exclude']),
+  "predecessorAmount": zod.number().optional(),
+  "successorAmount": zod.number().optional(),
+  "presentValueOfOriginalRemainingCashFlows": zod.number().describe('Canonical server-computed denominator: present value of remaining original cash flows at the original effective rate.'),
+  "presentValueOfModifiedCashFlows": zod.number().describe('Canonical server-computed present value of modified cash flows, including applicable creditor fees and accrued interest treatment.'),
+  "differenceAmount": zod.number(),
+  "differencePercent": zod.number(),
+  "retainedFeesAndCosts": zod.number().min(updateLoanResponseModificationAssessmentOneEvidenceQuantitativeTestOneRetainedFeesAndCostsMin).describe('Separately evidenced prior unamortized fees and costs; never includes current transaction costs.'),
+  "retainedFeesAndCostsSourceReference": zod.string().min(1),
+  "newFeesAndCosts": zod.number().min(updateLoanResponseModificationAssessmentOneEvidenceQuantitativeTestOneNewFeesAndCostsMin).describe('Resulting-basis input equal to creditorFees plus otherTransactionCosts.'),
+  "settlementConsideration": zod.number().min(updateLoanResponseModificationAssessmentOneEvidenceQuantitativeTestOneSettlementConsiderationMin).optional().describe('Explicit settlement consideration. Required and greater than zero when the accountant concludes extinguishment; never inferred from present value.'),
+  "recommendation": zod.enum(['derecognize_original', 'account_as_modification'])
+}).nullish()
+}),
+  "conclusion": zod.object({
+  "agreementChangeType": zod.enum(['renewal', 'modification']),
+  "accountingTreatment": zod.enum(['continuation', 'extinguishment', 'new_lease']),
+  "rationale": zod.string().min(1),
+  "leaseTransition": zod.object({
+  "predecessorLeaseType": zod.enum(['operating', 'capital']),
+  "originalLeaseTerminated": zod.boolean(),
+  "replacementLeaseExecuted": zod.boolean(),
+  "terminationEvidenceReference": zod.string().min(1),
+  "entryDate": zod.coerce.date(),
+  "debitAccount": zod.string().min(1),
+  "creditAccount": zod.string().min(1),
+  "amount": zod.number(),
+  "entryEvidenceReference": zod.string().min(1),
+  "predecessorDeferredRentAsset": zod.number().min(updateLoanResponseModificationAssessmentOneConclusionLeaseTransitionPredecessorDeferredRentAssetMin).nullable(),
+  "predecessorDeferredRentLiability": zod.number().min(updateLoanResponseModificationAssessmentOneConclusionLeaseTransitionPredecessorDeferredRentLiabilityMin).nullable(),
+  "predecessorAssetCost": zod.number().min(updateLoanResponseModificationAssessmentOneConclusionLeaseTransitionPredecessorAssetCostMin).nullable(),
+  "predecessorAccumulatedDepreciation": zod.number().min(updateLoanResponseModificationAssessmentOneConclusionLeaseTransitionPredecessorAccumulatedDepreciationMin).nullable(),
+  "successorInitialAmount": zod.number().min(updateLoanResponseModificationAssessmentOneConclusionLeaseTransitionSuccessorInitialAmountMin)
+}).optional()
+})
+}).nullish(),
   "masterAgreementId": zod.string().nullish(),
   "fvRate": zod.string().optional(),
   "fvDecision": zod.enum(['use_fv', 'trivial', 'immaterial']).optional(),
   "fvDecisionNote": zod.string().optional(),
   "dismissedFindings": zod.array(zod.string()).nullish(),
   "sourceDocumentName": zod.string().nullish(),
+  "currentRevisionId": zod.string().nullish(),
+  "currentRevisionHash": zod.string().nullish(),
+  "calculationVersion": zod.string().nullish(),
+  "activeEventSetId": zod.string().nullish(),
+  "activeEventSetVersion": zod.number(),
+  "activeEventSetHash": zod.string().nullish(),
+  "activeEvents": zod.array(zod.object({
+  "kind": zod.enum(['principal_prepayment']),
+  "effectiveDate": zod.coerce.date(),
+  "ordering": zod.enum(['before_scheduled_payment', 'after_scheduled_payment']),
+  "sequence": zod.number().min(1),
+  "amount": zod.number().gt(updateLoanResponseActiveEventsItemOneAmountExclusiveMin),
+  "treatment": zod.enum(['keep_payment', 'keep_maturity']),
+  "classification": zod.enum(['ordinary', 'agreement_change']),
+  "source": zod.string().min(1),
+  "reason": zod.string().min(1),
+  "authoredAt": zod.coerce.date(),
+  "author": zod.string().nullish(),
+  "supersedesEventId": zod.string().nullish(),
+  "originEventId": zod.string().nullish()
+}).and(zod.object({
+  "id": zod.string(),
+  "setId": zod.string(),
+  "loanId": zod.string(),
+  "termRevisionId": zod.string()
+}))).describe('Events in the active immutable event set, in canonical effective-date, ordering, and sequence order.'),
+  "activeRateEvents": zod.array(zod.record(zod.string(), zod.unknown())).optional().describe('Active immutable sourced or overridden rate-reset segments.'),
   "createdAt": zod.coerce.date(),
   "updatedAt": zod.coerce.date()
 })
@@ -693,6 +1555,299 @@ export const UpdateLoanResponse = zod.object({
  */
 export const DeleteLoanParams = zod.object({
   "id": zod.coerce.string()
+})
+
+
+/**
+ * @summary Get the active event set and immutable history
+ */
+export const ListLoanEventSetsParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+
+export const listLoanEventSetsResponseActiveOneEventsItemOneAmountExclusiveMin = 0;
+
+
+
+
+export const listLoanEventSetsResponseHistoryItemEventsItemOneAmountExclusiveMin = 0;
+
+
+
+
+
+export const ListLoanEventSetsResponse = zod.object({
+  "active": zod.object({
+  "id": zod.string(),
+  "loanId": zod.string(),
+  "termRevisionId": zod.string(),
+  "version": zod.number(),
+  "fingerprint": zod.string(),
+  "supersedesSetId": zod.string().nullish(),
+  "reason": zod.string(),
+  "source": zod.string(),
+  "author": zod.string().nullish(),
+  "createdAt": zod.coerce.date(),
+  "events": zod.array(zod.object({
+  "kind": zod.enum(['principal_prepayment']),
+  "effectiveDate": zod.coerce.date(),
+  "ordering": zod.enum(['before_scheduled_payment', 'after_scheduled_payment']),
+  "sequence": zod.number().min(1),
+  "amount": zod.number().gt(listLoanEventSetsResponseActiveOneEventsItemOneAmountExclusiveMin),
+  "treatment": zod.enum(['keep_payment', 'keep_maturity']),
+  "classification": zod.enum(['ordinary', 'agreement_change']),
+  "source": zod.string().min(1),
+  "reason": zod.string().min(1),
+  "authoredAt": zod.coerce.date(),
+  "author": zod.string().nullish(),
+  "supersedesEventId": zod.string().nullish(),
+  "originEventId": zod.string().nullish()
+}).and(zod.object({
+  "id": zod.string(),
+  "setId": zod.string(),
+  "loanId": zod.string(),
+  "termRevisionId": zod.string()
+})))
+}).nullable(),
+  "history": zod.array(zod.object({
+  "id": zod.string(),
+  "loanId": zod.string(),
+  "termRevisionId": zod.string(),
+  "version": zod.number(),
+  "fingerprint": zod.string(),
+  "supersedesSetId": zod.string().nullish(),
+  "reason": zod.string(),
+  "source": zod.string(),
+  "author": zod.string().nullish(),
+  "createdAt": zod.coerce.date(),
+  "events": zod.array(zod.object({
+  "kind": zod.enum(['principal_prepayment']),
+  "effectiveDate": zod.coerce.date(),
+  "ordering": zod.enum(['before_scheduled_payment', 'after_scheduled_payment']),
+  "sequence": zod.number().min(1),
+  "amount": zod.number().gt(listLoanEventSetsResponseHistoryItemEventsItemOneAmountExclusiveMin),
+  "treatment": zod.enum(['keep_payment', 'keep_maturity']),
+  "classification": zod.enum(['ordinary', 'agreement_change']),
+  "source": zod.string().min(1),
+  "reason": zod.string().min(1),
+  "authoredAt": zod.coerce.date(),
+  "author": zod.string().nullish(),
+  "supersedesEventId": zod.string().nullish(),
+  "originEventId": zod.string().nullish()
+}).and(zod.object({
+  "id": zod.string(),
+  "setId": zod.string(),
+  "loanId": zod.string(),
+  "termRevisionId": zod.string()
+})))
+}))
+})
+
+
+/**
+ * @summary Append and activate a complete successor event set
+ */
+export const CreateLoanEventSetParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+export const createLoanEventSetBodyExpectedVersionMin = 0;
+
+
+
+
+export const createLoanEventSetBodyEventsItemAmountExclusiveMin = 0;
+
+
+
+
+
+export const CreateLoanEventSetBody = zod.object({
+  "expectedVersion": zod.number().min(createLoanEventSetBodyExpectedVersionMin),
+  "termRevisionId": zod.string(),
+  "reason": zod.string().min(1),
+  "source": zod.string().min(1),
+  "author": zod.string().nullish(),
+  "events": zod.array(zod.object({
+  "kind": zod.enum(['principal_prepayment']),
+  "effectiveDate": zod.coerce.date(),
+  "ordering": zod.enum(['before_scheduled_payment', 'after_scheduled_payment']),
+  "sequence": zod.number().min(1),
+  "amount": zod.number().gt(createLoanEventSetBodyEventsItemAmountExclusiveMin),
+  "treatment": zod.enum(['keep_payment', 'keep_maturity']),
+  "classification": zod.enum(['ordinary', 'agreement_change']),
+  "source": zod.string().min(1),
+  "reason": zod.string().min(1),
+  "authoredAt": zod.coerce.date(),
+  "author": zod.string().nullish(),
+  "supersedesEventId": zod.string().nullish(),
+  "originEventId": zod.string().nullish()
+}))
+})
+
+
+/**
+ * @summary Get the current persisted FV decision, derived review status, and immutable history
+ */
+export const GetFvDecisionHistoryParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+export const GetFvDecisionHistoryResponse = zod.object({
+  "status": zod.enum(['current', 'stale', 'incomplete']),
+  "reviewRequired": zod.boolean(),
+  "staleReasons": zod.array(zod.enum(['contract_terms_changed', 'event_or_rate_history_changed', 'reporting_context_changed', 'modification_assessment_changed', 'compatibility_projection_mismatch', 'inherited_historical_evidence'])),
+  "missingRequirements": zod.array(zod.string()),
+  "current": zod.union([zod.object({
+  "id": zod.string(),
+  "loanId": zod.string(),
+  "sourceConfirmationId": zod.string().nullish().describe('Immutable confirmation from which this historical evidence was inherited.'),
+  "inheritedFromLoanId": zod.string().nullish().describe('Source loan that owned the inherited evidence.'),
+  "sourceFileId": zod.string().nullish().describe('Source reporting file for the inherited evidence.'),
+  "version": zod.number(),
+  "treatment": zod.enum(['use_fv', 'trivial', 'immaterial']),
+  "marketEffectiveRate": zod.string().nullish(),
+  "rationaleNote": zod.string().nullish(),
+  "confirmedAt": zod.coerce.date(),
+  "confirmedBy": zod.string(),
+  "canonicalFingerprint": zod.string(),
+  "contractFingerprint": zod.string(),
+  "eventSetFingerprint": zod.string().nullish(),
+  "reportingContextFingerprint": zod.string(),
+  "modificationFingerprint": zod.string().nullish(),
+  "evidenceVersion": zod.string(),
+  "calculationVersion": zod.string(),
+  "evidence": zod.record(zod.string(), zod.unknown())
+}),zod.null()]).optional(),
+  "history": zod.array(zod.object({
+  "id": zod.string(),
+  "loanId": zod.string(),
+  "sourceConfirmationId": zod.string().nullish().describe('Immutable confirmation from which this historical evidence was inherited.'),
+  "inheritedFromLoanId": zod.string().nullish().describe('Source loan that owned the inherited evidence.'),
+  "sourceFileId": zod.string().nullish().describe('Source reporting file for the inherited evidence.'),
+  "version": zod.number(),
+  "treatment": zod.enum(['use_fv', 'trivial', 'immaterial']),
+  "marketEffectiveRate": zod.string().nullish(),
+  "rationaleNote": zod.string().nullish(),
+  "confirmedAt": zod.coerce.date(),
+  "confirmedBy": zod.string(),
+  "canonicalFingerprint": zod.string(),
+  "contractFingerprint": zod.string(),
+  "eventSetFingerprint": zod.string().nullish(),
+  "reportingContextFingerprint": zod.string(),
+  "modificationFingerprint": zod.string().nullish(),
+  "evidenceVersion": zod.string(),
+  "calculationVersion": zod.string(),
+  "evidence": zod.record(zod.string(), zod.unknown())
+}))
+})
+
+
+/**
+ * @summary Append and persist an explicit FV decision confirmation
+ */
+export const ConfirmFvDecisionParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+export const confirmFvDecisionBodyExpectedVersionMin = 0;
+
+
+
+
+export const ConfirmFvDecisionBody = zod.object({
+  "expectedVersion": zod.number().min(confirmFvDecisionBodyExpectedVersionMin),
+  "treatment": zod.enum(['use_fv', 'trivial', 'immaterial']),
+  "marketEffectiveRate": zod.number().nullish(),
+  "rationaleNote": zod.string().nullish(),
+  "confirmedBy": zod.string().min(1)
+})
+
+
+/**
+ * @summary Validate and fingerprint a proposed complete event set
+ */
+export const PreviewLoanEventSetParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+export const previewLoanEventSetBodyExpectedVersionMin = 0;
+
+
+
+
+export const previewLoanEventSetBodyEventsItemAmountExclusiveMin = 0;
+
+
+
+
+
+export const PreviewLoanEventSetBody = zod.object({
+  "expectedVersion": zod.number().min(previewLoanEventSetBodyExpectedVersionMin),
+  "termRevisionId": zod.string(),
+  "reason": zod.string().min(1),
+  "source": zod.string().min(1),
+  "author": zod.string().nullish(),
+  "events": zod.array(zod.object({
+  "kind": zod.enum(['principal_prepayment']),
+  "effectiveDate": zod.coerce.date(),
+  "ordering": zod.enum(['before_scheduled_payment', 'after_scheduled_payment']),
+  "sequence": zod.number().min(1),
+  "amount": zod.number().gt(previewLoanEventSetBodyEventsItemAmountExclusiveMin),
+  "treatment": zod.enum(['keep_payment', 'keep_maturity']),
+  "classification": zod.enum(['ordinary', 'agreement_change']),
+  "source": zod.string().min(1),
+  "reason": zod.string().min(1),
+  "authoredAt": zod.coerce.date(),
+  "author": zod.string().nullish(),
+  "supersedesEventId": zod.string().nullish(),
+  "originEventId": zod.string().nullish()
+}))
+})
+
+
+export const previewLoanEventSetResponseOrderedEventsItemAmountExclusiveMin = 0;
+
+
+
+
+
+export const PreviewLoanEventSetResponse = zod.object({
+  "valid": zod.boolean(),
+  "nextVersion": zod.number(),
+  "fingerprint": zod.string(),
+  "termRevisionId": zod.string(),
+  "orderedEvents": zod.array(zod.object({
+  "kind": zod.enum(['principal_prepayment']),
+  "effectiveDate": zod.coerce.date(),
+  "ordering": zod.enum(['before_scheduled_payment', 'after_scheduled_payment']),
+  "sequence": zod.number().min(1),
+  "amount": zod.number().gt(previewLoanEventSetResponseOrderedEventsItemAmountExclusiveMin),
+  "treatment": zod.enum(['keep_payment', 'keep_maturity']),
+  "classification": zod.enum(['ordinary', 'agreement_change']),
+  "source": zod.string().min(1),
+  "reason": zod.string().min(1),
+  "authoredAt": zod.coerce.date(),
+  "author": zod.string().nullish(),
+  "supersedesEventId": zod.string().nullish(),
+  "originEventId": zod.string().nullish()
+})),
+  "evidence": zod.record(zod.string(), zod.unknown()),
+  "before": zod.object({
+  "nextRegularPayment": zod.number(),
+  "payoffDate": zod.coerce.date().nullable(),
+  "contractualMaturity": zod.coerce.date().nullable(),
+  "totalInterest": zod.number(),
+  "endingBalance": zod.number()
+}),
+  "after": zod.object({
+  "nextRegularPayment": zod.number(),
+  "payoffDate": zod.coerce.date().nullable(),
+  "contractualMaturity": zod.coerce.date().nullable(),
+  "totalInterest": zod.number(),
+  "endingBalance": zod.number()
+})
 })
 
 
@@ -712,6 +1867,85 @@ export const GetPrimeRateResponse = zod.object({
 
 
 /**
+ * @summary Get immutable contractual rate timeline and findings
+ */
+export const GetLoanRateTimelineParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+export const GetLoanRateTimelineResponse = zod.record(zod.string(), zod.unknown())
+
+
+/**
+ * @summary Override the contractual benchmark rate from an effective date
+ */
+export const OverrideLoanRateParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+export const overrideLoanRateBodyBenchmarkRateMin = 0;
+export const overrideLoanRateBodyBenchmarkRateMax = 100;
+
+
+
+
+
+
+export const OverrideLoanRateBody = zod.object({
+  "effectiveDate": zod.coerce.date(),
+  "benchmarkRate": zod.number().min(overrideLoanRateBodyBenchmarkRateMin).max(overrideLoanRateBodyBenchmarkRateMax),
+  "reason": zod.string().min(1),
+  "author": zod.string().min(1),
+  "sourceUrl": zod.string().min(1)
+})
+
+
+/**
+ * @summary Restore sourced benchmark evidence without erasing override history
+ */
+export const RestoreLoanSourcedRateParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+
+
+
+export const RestoreLoanSourcedRateBody = zod.object({
+  "effectiveDate": zod.coerce.date(),
+  "author": zod.string().min(1)
+})
+
+
+/**
+ * @summary Authenticated server-only due-reset refresh
+ */
+export const RefreshDueRateResetsHeader = zod.object({
+  "x-rate-refresh-secret": zod.string()
+})
+
+export const RefreshDueRateResetsBody = zod.object({
+  "date": zod.coerce.date().optional()
+})
+
+export const RefreshDueRateResetsResponse = zod.object({
+  "id": zod.string(),
+  "startedAt": zod.coerce.date(),
+  "completedAt": zod.coerce.date().nullish(),
+  "status": zod.enum(['running', 'succeeded', 'partial', 'failed']),
+  "attempted": zod.number(),
+  "applied": zod.number(),
+  "unresolved": zod.number(),
+  "evidence": zod.record(zod.string(), zod.unknown()).nullish()
+})
+
+
+/**
+ * @summary Get refresh run and unresolved reconciliation status
+ */
+export const GetRateResetStatusResponse = zod.record(zod.string(), zod.unknown())
+
+
+/**
  * @summary Roll forward a loan to next fiscal year
  */
 export const RollForwardLoanParams = zod.object({
@@ -721,22 +1955,6 @@ export const RollForwardLoanParams = zod.object({
 export const RollForwardLoanBody = zod.object({
   "fileId": zod.string(),
   "newFiscalYearEnd": zod.coerce.date()
-})
-
-
-/**
- * @summary Exchange the admin password for a short-lived settings token
- */
-
-
-
-export const UnlockSettingsBody = zod.object({
-  "password": zod.string().min(1)
-})
-
-export const UnlockSettingsResponse = zod.object({
-  "token": zod.string(),
-  "expiresAt": zod.string()
 })
 
 
@@ -786,12 +2004,28 @@ export const ImportDocumentBody = zod.object({
   "file": zod.instanceof(File)
 })
 
+export const importDocumentResponseLoanOneSemiMonthlyFirstDueDayMax = 31;
+
+export const importDocumentResponseLoanOneSemiMonthlySecondDueDayMax = 31;
+
+export const importDocumentResponseFacilitiesItemSemiMonthlyFirstDueDayMax = 31;
+
+export const importDocumentResponseFacilitiesItemSemiMonthlySecondDueDayMax = 31;
+
+
+
 export const ImportDocumentResponse = zod.object({
   "classification": zod.enum(['loan', 'lease', 'master_agreement', 'other']),
   "confidence": zod.number(),
   "reasoning": zod.string(),
-  "documentBlob": zod.string().nullish(),
+  "documentId": zod.string().nullish(),
   "documentName": zod.string().nullish(),
+  "unresolvedRateFindings": zod.array(zod.object({
+  "loanName": zod.string().nullish(),
+  "observationDate": zod.coerce.date(),
+  "reason": zod.string(),
+  "action": zod.string()
+})).optional(),
   "loan": zod.object({
   "name": zod.string().nullish(),
   "lender": zod.string().nullish(),
@@ -804,12 +2038,28 @@ export const ImportDocumentResponse = zod.object({
   "termYears": zod.number().nullish(),
   "startDate": zod.string().nullish(),
   "paymentFrequency": zod.enum(['monthly', 'semi-monthly', 'bi-weekly', 'weekly']).nullish(),
+  "paymentTiming": zod.enum(['beginning', 'end']).nullish(),
+  "graceTermMode": zod.enum(['included', 'added']).nullish(),
+  "firstPaymentDate": zod.coerce.date().nullish(),
+  "semiMonthlyFirstDueDay": zod.number().min(1).max(importDocumentResponseLoanOneSemiMonthlyFirstDueDayMax).nullish(),
+  "semiMonthlySecondDueDay": zod.number().min(1).max(importDocumentResponseLoanOneSemiMonthlySecondDueDayMax).nullish(),
   "paymentAmount": zod.number().nullish(),
   "interestOnlyMonths": zod.number().nullish(),
   "graceMonths": zod.number().nullish(),
   "graceInterestTreatment": zod.enum(['capitalized', 'none']).nullish(),
   "balloonPayment": zod.number().nullish(),
-  "securityDescription": zod.string().nullish()
+  "securityDescription": zod.string().nullish(),
+  "suggestedEvents": zod.array(zod.object({
+  "kind": zod.enum(['principal_prepayment']),
+  "effectiveDate": zod.coerce.date(),
+  "ordering": zod.enum(['before_scheduled_payment', 'after_scheduled_payment']),
+  "amount": zod.number(),
+  "treatment": zod.enum(['keep_payment', 'keep_maturity']).nullish(),
+  "classification": zod.enum(['ordinary', 'agreement_change']).nullish(),
+  "source": zod.string(),
+  "reason": zod.string(),
+  "requiresConfirmation": zod.boolean()
+})).nullish()
 }).nullish(),
   "lease": zod.object({
   "name": zod.string().nullish(),
@@ -867,12 +2117,28 @@ export const ImportDocumentResponse = zod.object({
   "termYears": zod.number().nullish(),
   "startDate": zod.string().nullish(),
   "paymentFrequency": zod.enum(['monthly', 'semi-monthly', 'bi-weekly', 'weekly']).nullish(),
+  "paymentTiming": zod.enum(['beginning', 'end']).nullish(),
+  "graceTermMode": zod.enum(['included', 'added']).nullish(),
+  "firstPaymentDate": zod.coerce.date().nullish(),
+  "semiMonthlyFirstDueDay": zod.number().min(1).max(importDocumentResponseFacilitiesItemSemiMonthlyFirstDueDayMax).nullish(),
+  "semiMonthlySecondDueDay": zod.number().min(1).max(importDocumentResponseFacilitiesItemSemiMonthlySecondDueDayMax).nullish(),
   "paymentAmount": zod.number().nullish(),
   "interestOnlyMonths": zod.number().nullish(),
   "graceMonths": zod.number().nullish(),
   "graceInterestTreatment": zod.enum(['capitalized', 'none']).nullish(),
   "balloonPayment": zod.number().nullish(),
-  "securityDescription": zod.string().nullish()
+  "securityDescription": zod.string().nullish(),
+  "suggestedEvents": zod.array(zod.object({
+  "kind": zod.enum(['principal_prepayment']),
+  "effectiveDate": zod.coerce.date(),
+  "ordering": zod.enum(['before_scheduled_payment', 'after_scheduled_payment']),
+  "amount": zod.number(),
+  "treatment": zod.enum(['keep_payment', 'keep_maturity']).nullish(),
+  "classification": zod.enum(['ordinary', 'agreement_change']).nullish(),
+  "source": zod.string(),
+  "reason": zod.string(),
+  "requiresConfirmation": zod.boolean()
+})).nullish()
 })).nullish()
 })
 
@@ -920,6 +2186,123 @@ export const RestoreTrashItemParams = zod.object({
 export const PurgeTrashItemParams = zod.object({
   "type": zod.enum(['client', 'file', 'loan']),
   "id": zod.coerce.string()
+})
+
+
+export const GetAuthMeResponse = zod.object({
+  "tenantId": zod.string(),
+  "objectId": zod.string(),
+  "firmId": zod.string(),
+  "displayName": zod.string().nullish(),
+  "email": zod.string().nullish(),
+  "role": zod.enum(['admin', 'manager', 'accountant', 'read_only'])
+})
+
+
+export const ListAdminUsersResponseItem = zod.object({
+  "tenantId": zod.string().optional(),
+  "objectId": zod.string(),
+  "firmId": zod.string().optional(),
+  "displayName": zod.string().nullish(),
+  "email": zod.string().nullish(),
+  "role": zod.enum(['admin', 'manager', 'accountant', 'read_only']),
+  "isActive": zod.boolean()
+})
+export const ListAdminUsersResponse = zod.array(ListAdminUsersResponseItem)
+
+
+export const CreateAdminUserBody = zod.object({
+  "objectId": zod.string().uuid(),
+  "displayName": zod.string().nullish(),
+  "email": zod.string().nullish(),
+  "role": zod.enum(['admin', 'manager', 'accountant', 'read_only']),
+  "isActive": zod.boolean().optional()
+})
+
+
+export const UpdateAdminUserParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+export const UpdateAdminUserBody = zod.object({
+  "displayName": zod.string().nullish(),
+  "email": zod.string().nullish(),
+  "role": zod.enum(['admin', 'manager', 'accountant', 'read_only']).optional(),
+  "isActive": zod.boolean().optional()
+})
+
+export const UpdateAdminUserResponse = zod.object({
+  "tenantId": zod.string().optional(),
+  "objectId": zod.string(),
+  "firmId": zod.string().optional(),
+  "displayName": zod.string().nullish(),
+  "email": zod.string().nullish(),
+  "role": zod.enum(['admin', 'manager', 'accountant', 'read_only']),
+  "isActive": zod.boolean()
+})
+
+
+export const listLegacyClientsResponseLatestFiscalYearEndRegExp = new RegExp('^\\d{4}-\\d{2}-\\d{2}$');
+
+
+export const ListLegacyClientsResponseItem = zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "code": zod.string(),
+  "createdAt": zod.coerce.date(),
+  "updatedAt": zod.coerce.date(),
+  "fileCount": zod.number().optional().describe('Number of year-end files for this client (list endpoint only)'),
+  "loanCount": zod.number().optional().describe('Number of loans\/leases across all files (list endpoint only)'),
+  "latestFiscalYearEnd": zod.string().regex(listLegacyClientsResponseLatestFiscalYearEndRegExp).nullish().describe('Most recent fiscal year end among the client\'s files (list endpoint only)')
+})
+export const ListLegacyClientsResponse = zod.array(ListLegacyClientsResponseItem)
+
+
+export const AdoptLegacyClientParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+export const AdoptLegacyClientBody = zod.object({
+  "memberObjectIds": zod.array(zod.string())
+})
+
+export const adoptLegacyClientResponseLatestFiscalYearEndRegExp = new RegExp('^\\d{4}-\\d{2}-\\d{2}$');
+
+
+export const AdoptLegacyClientResponse = zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "code": zod.string(),
+  "createdAt": zod.coerce.date(),
+  "updatedAt": zod.coerce.date(),
+  "fileCount": zod.number().optional().describe('Number of year-end files for this client (list endpoint only)'),
+  "loanCount": zod.number().optional().describe('Number of loans\/leases across all files (list endpoint only)'),
+  "latestFiscalYearEnd": zod.string().regex(adoptLegacyClientResponseLatestFiscalYearEndRegExp).nullish().describe('Most recent fiscal year end among the client\'s files (list endpoint only)')
+})
+
+
+export const GetClientMembersParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+export const GetClientMembersResponseItem = zod.object({
+  "tenantId": zod.string().optional(),
+  "objectId": zod.string(),
+  "firmId": zod.string().optional(),
+  "displayName": zod.string().nullish(),
+  "email": zod.string().nullish(),
+  "role": zod.enum(['admin', 'manager', 'accountant', 'read_only']),
+  "isActive": zod.boolean()
+})
+export const GetClientMembersResponse = zod.array(GetClientMembersResponseItem)
+
+
+export const ReplaceClientMembersParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+export const ReplaceClientMembersBody = zod.object({
+  "memberObjectIds": zod.array(zod.string())
 })
 
 

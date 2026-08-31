@@ -15,6 +15,7 @@ import { getErrorMessage } from "@/lib/errors";
 import { Checkbox } from "@/components/ui/checkbox";
 import { FileUp, FileText, Loader2, Landmark, Receipt, HelpCircle, Settings, AlertTriangle, Layers } from "lucide-react";
 import { formatCurrency } from "@/lib/format";
+import { canPersistImportedEvents, type ConfirmedImportEvent } from "@/lib/import-events";
 
 type FieldRow = { label: string; value: string | null; optional?: boolean };
 
@@ -44,6 +45,11 @@ function buildFieldRows(result: DocumentImportResult): FieldRow[] {
       { label: "Term", value: fmtNum(f?.termYears, " years") },
       { label: "Start date", value: fmtText(f?.startDate) },
       { label: "Payment frequency", value: fmtText(f?.paymentFrequency ?? null) },
+      { label: "Payment timing", value: fmtText(f?.paymentTiming ?? null) },
+      { label: "Grace term treatment", value: fmtText(f?.graceTermMode ?? null) },
+      { label: "First payment date", value: fmtText(f?.firstPaymentDate) , optional: true },
+      { label: "Semi-monthly first due day", value: fmtNum(f?.semiMonthlyFirstDueDay), optional: f?.paymentFrequency !== "semi-monthly" },
+      { label: "Semi-monthly second due day", value: fmtNum(f?.semiMonthlySecondDueDay), optional: f?.paymentFrequency !== "semi-monthly" },
       { label: "Payment amount", value: fmtMoney(f?.paymentAmount) },
       { label: "Interest-only period", value: fmtNum(f?.interestOnlyMonths, " months"), optional: true },
       { label: "Payment grace period", value: fmtNum(f?.graceMonths, " months"), optional: true },
@@ -112,7 +118,7 @@ interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   fileId: string;
-  onUseLoan: (result: DocumentImportResult) => void;
+  onUseLoan: (result: DocumentImportResult, events: ConfirmedImportEvent[]) => void;
   onUseLease: (result: DocumentImportResult) => void;
   onUseMasterAgreement: (result: DocumentImportResult, facilityIndexes: number[]) => void;
 }
@@ -124,6 +130,9 @@ export default function ImportDocumentDialog({ open, onOpenChange, fileId, onUse
   const [result, setResult] = useState<DocumentImportResult | null>(null);
   const [settingsHint, setSettingsHint] = useState(false);
   const [selectedFacilities, setSelectedFacilities] = useState<Set<number>>(new Set());
+  const [timingConfirmed, setTimingConfirmed] = useState(false);
+  const [eventsConfirmed, setEventsConfirmed] = useState(false);
+  const [eventChoices, setEventChoices] = useState<ConfirmedImportEvent[]>([]);
 
   const importDoc = useImportDocument({
     mutation: {
@@ -131,6 +140,7 @@ export default function ImportDocumentDialog({ open, onOpenChange, fileId, onUse
         setResult(data);
         // Default to importing every facility found in a master agreement.
         setSelectedFacilities(new Set((data.facilities ?? []).map((_, i) => i)));
+        setEventChoices((data.loan?.suggestedEvents ?? []).filter((e): e is ConfirmedImportEvent => !!e.treatment && !!e.classification).map((e) => ({ ...e })));
       },
       onError: (err) => {
         const message = getErrorMessage(err);
@@ -145,6 +155,9 @@ export default function ImportDocumentDialog({ open, onOpenChange, fileId, onUse
     setResult(null);
     setSettingsHint(false);
     setSelectedFacilities(new Set());
+    setTimingConfirmed(false);
+    setEventsConfirmed(false);
+    setEventChoices([]);
     if (inputRef.current) inputRef.current.value = "";
   };
 
@@ -154,6 +167,16 @@ export default function ImportDocumentDialog({ open, onOpenChange, fileId, onUse
   };
 
   const confidencePct = result ? Math.round(result.confidence * 100) : 0;
+  const timingUncertain =
+    result?.classification === "loan" &&
+    (!result.loan?.paymentTiming ||
+      !result.loan?.graceTermMode ||
+      (result.loan?.paymentFrequency === "semi-monthly" &&
+        (result.loan.semiMonthlyFirstDueDay == null || result.loan.semiMonthlySecondDueDay == null)));
+  const suggestedEvents = result?.classification === "loan" ? result.loan?.suggestedEvents ?? [] : [];
+  const eventsComplete = eventChoices.length === suggestedEvents.length && eventsConfirmed && eventChoices.every((event) => !!event.treatment && !!event.classification);
+  const eventsReady = eventsComplete;
+  const unresolvedRateFindings = result?.unresolvedRateFindings ?? [];
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
@@ -331,6 +354,40 @@ export default function ImportDocumentDialog({ open, onOpenChange, fileId, onUse
                 </div>
               );
             })()}
+            {timingUncertain && (
+              <label className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+                <Checkbox checked={timingConfirmed} onCheckedChange={(checked) => setTimingConfirmed(checked === true)} />
+                <span>I confirm that payment timing, grace-term treatment, and any semi-monthly due days were not stated clearly. I will verify and complete these terms before saving.</span>
+              </label>
+            )}
+            {unresolvedRateFindings.length > 0 && (
+              <div className="space-y-2 rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-950">
+                <p className="flex items-center gap-2 font-semibold"><AlertTriangle className="h-4 w-4" /> Required rate evidence</p>
+                {unresolvedRateFindings.map((finding, index) => (
+                  <p key={`${finding.observationDate}-${index}`}>
+                    {finding.loanName ? `${finding.loanName}: ` : ""}{finding.reason} <span className="font-medium">{finding.action}</span>
+                  </p>
+                ))}
+                <p>Do not use a zero or public fallback rate. Enter an evidenced positive opening contractual rate and complete the prime terms before saving.</p>
+              </div>
+            )}
+            {suggestedEvents.length > 0 && (
+              <div className="space-y-2 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                <p className="text-sm font-medium text-amber-950">Suggested mid-term principal payments</p>
+                {suggestedEvents.map((event, index) => (
+                  <div key={index} className="text-xs text-amber-900 grid grid-cols-1 sm:grid-cols-3 gap-1">
+                    <span>{event.effectiveDate} · {formatCurrency(event.amount)} · {event.ordering === "before_scheduled_payment" ? "before" : "after"} payment</span>
+                    <select value={eventChoices[index]?.treatment ?? ""} onChange={(e) => setEventChoices(prev => suggestedEvents.map((item, i) => ({ ...item, treatment: i === index ? e.target.value as ConfirmedImportEvent["treatment"] : prev[i]?.treatment, classification: prev[i]?.classification ?? item.classification } as ConfirmedImportEvent)))}><option value="">Treatment required</option><option value="keep_payment">Keep payment</option><option value="keep_maturity">Keep maturity</option></select>
+                    <select value={eventChoices[index]?.classification ?? ""} onChange={(e) => setEventChoices(prev => suggestedEvents.map((item, i) => ({ ...item, treatment: prev[i]?.treatment ?? item.treatment, classification: i === index ? e.target.value as ConfirmedImportEvent["classification"] : prev[i]?.classification } as ConfirmedImportEvent)))}><option value="">Classification required</option><option value="ordinary">Ordinary</option><option value="agreement_change">Agreement change</option></select>
+                  </div>
+                ))}
+                <label className="flex items-start gap-2 text-xs text-amber-950">
+                  <Checkbox checked={eventsConfirmed} onCheckedChange={(checked) => setEventsConfirmed(checked === true)} />
+                  <span>I reviewed these suggestions. I understand they are not saved automatically and I must explicitly confirm their treatment and classification when creating the loan.</span>
+                </label>
+                {eventChoices.some((event) => event.classification === "agreement_change") && <p className="text-xs font-medium text-amber-950">An agreement change will not be saved as an ordinary prepayment. Continue to create the loan, then complete the renewal/modification assessment.</p>}
+              </div>
+            )}
             {result.classification === "master_agreement" && (
               <div className="space-y-2">
                 <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
@@ -421,8 +478,9 @@ export default function ImportDocumentDialog({ open, onOpenChange, fileId, onUse
           {result?.classification === "loan" && (
             <Button
               className="gap-2"
+              disabled={(timingUncertain && !timingConfirmed) || (suggestedEvents.length > 0 && !eventsReady)}
               onClick={() => {
-                onUseLoan(result);
+                onUseLoan(result, canPersistImportedEvents(eventChoices, true) ? eventChoices : []);
                 handleOpenChange(false);
               }}
             >

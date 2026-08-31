@@ -6,6 +6,10 @@
  * OpenAPI spec version: 0.1.0
  */
 
+/**
+ * Direct FV inputs are rejected; use the FV confirmation endpoint after creating the loan.
+ * @deprecated
+ */
 export type CreateLoanFvDecision = typeof CreateLoanFvDecision[keyof typeof CreateLoanFvDecision];
 
 

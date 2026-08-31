@@ -1,7 +1,9 @@
+import { useAuth } from "@/hooks/use-auth";
 import { Fragment, useState } from "react";
-import { useRoute } from "wouter";
+import { useQueries } from "@tanstack/react-query";
+import { useRoute, useLocation } from "wouter";
 import { Link } from "wouter";
-import { useGetFile, useGetClient, useGetLoan, useListFiles, useListLoans, useCreateLoan, useDeleteLoan, useUpdateLoan, useUpdateFile, useRollForwardFile, useListMasterAgreements, useCreateMasterAgreement, useUpdateMasterAgreement, useDeleteMasterAgreement, getGetLoanQueryKey, getListFilesQueryKey, getListLoansQueryKey, getListMasterAgreementsQueryKey, type MasterAgreement } from "@workspace/api-client-react";
+import { useGetFile, getGetFileQueryKey, useGetClient, useGetLoan, useListFiles, useListLoans, useCreateLoan, useDeleteLoan, useUpdateLoan, useUpdateFile, useRollForwardFile, useListMasterAgreements, useCreateMasterAgreement, useUpdateMasterAgreement, useDeleteMasterAgreement, getGetLoanQueryKey, getGetLoanQueryOptions, getGetFvDecisionHistoryQueryOptions, getListFilesQueryKey, getListLoansQueryKey, getListMasterAgreementsQueryKey, type MasterAgreement } from "@workspace/api-client-react";
 import { queryClient } from "@/lib/queryClient";
 import {
   Card,
@@ -42,7 +44,7 @@ import {
 } from "@/components/ui/tooltip";
 import ConfirmDialog from "@/components/confirm-dialog";
 import { CounterpartyCombobox } from "@/components/counterparty-combobox";
-import { LoanFormFields, validateLoanForm, type LoanFormState, type LoanFormMode } from "@/components/loan-form-fields";
+import { LoanFormFields, validateLoanForm, deriveFirstPaymentDate, type LoanFormState, type LoanFormMode } from "@/components/loan-form-fields";
 import { ArrowLeft, ArrowRight, Plus, Trash2, Calculator, FileSpreadsheet, Calendar, Pencil, CheckCircle2, XCircle, ShieldCheck, AlertTriangle, FileText, Landmark, Receipt, Wallet, CalendarPlus, LayoutGrid, Table as TableIcon, ChevronDown, Search, Layers } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { PageHeader } from "@/components/page-header";
@@ -67,11 +69,17 @@ import {
   type CapitalLeaseSummary,
   type OperatingLeaseSummary,
   isOperatingLeaseLoan,
+  hydrateLinkedAgreementPredecessors,
 } from "@/lib/aspe-utils";
 import CapitalLeaseAssessment, { calculatePVFromAnswers, formatAssetType, parseAssetType, type AssessmentResult, type StraightLineAnswers, type AssessmentAnswers, type ImportedEstimates } from "@/components/capital-lease-assessment";
 import ImportDocumentDialog from "@/components/import-document-dialog";
-import type { DocumentImportResult } from "@workspace/api-client-react";
+import type { DocumentImportResult, DocumentImportResultUnresolvedRateFindingsItem } from "@workspace/api-client-react";
 import { FileUp } from "lucide-react";
+import { importedEventsToInputs, type ConfirmedImportEvent } from "@/lib/import-events";
+import ModificationAssessment, { type ModificationAssessmentValue } from "@/components/modification-assessment";
+import { usePredecessorGraph } from "@/hooks/use-predecessor-graph";
+import { buildDisclosureModel, type DisclosureModel, DisclosureEvidenceError } from "@/lib/disclosure-model";
+import { downloadPresentationDisclosureDocx, downloadPresentationDisclosurePdf } from "@/lib/disclosure-export";
 
 function groupByCounterparty<T extends { counterparty: string | null }>(
   items: T[],
@@ -113,10 +121,25 @@ function makeBlankLoanForm(): LoanFormState {
     principal: 0,
     downPayment: 0,
     interestRate: 0,
+    rateType: "fixed",
+    rateBenchmark: null,
+    contractualPrimeName: null,
+    benchmarkEquivalentToContractualPrime: false,
+    rateSpread: null,
+    rateResetFrequency: null,
+    rateEffectiveConvention: null,
+    ratePaymentTreatment: null,
+    initialFvRateAssumption: null,
     amortizationYears: 0,
     termYears: 0,
     startDate: "",
     paymentFrequency: "monthly",
+    paymentTiming: "end",
+    graceTermMode: "included",
+    firstPaymentDate: "",
+    firstPaymentDateDerived: true,
+    semiMonthlyFirstDueDay: undefined,
+    semiMonthlySecondDueDay: undefined,
     ioMonths: 0,
     graceMonths: 0,
     graceInterestTreatment: "capitalized",
@@ -159,6 +182,8 @@ function makeBlankLoanForm(): LoanFormState {
 }
 
 export default function FileDetail() {
+  const { canWrite, canDelete } = useAuth();
+  const [, setLocation] = useLocation();
   const [_, params] = useRoute("/client/:id/file/:fileId");
   const clientId = params?.id ?? "";
   const fileId = params?.fileId ?? "";
@@ -166,6 +191,7 @@ export default function FileDetail() {
   const [createOpen, setCreateOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [editingLoanId, setEditingLoanId] = useState<string | null>(null);
+  const [importFindings, setImportFindings] = useState<DocumentImportResultUnresolvedRateFindingsItem[]>([]);
   const [loanTab, setLoanTab] = useState("loans");
   const [editFileName, setEditFileName] = useState("");
   const [editFileYearEnd, setEditFileYearEnd] = useState("");
@@ -181,17 +207,27 @@ export default function FileDetail() {
   const [operatingCounterparty, setOperatingCounterparty] = useState<string | null>(null);
   const [rollForwardOpen, setRollForwardOpen] = useState(false);
   const [newYearEnd, setNewYearEnd] = useState("");
+  const [rfName, setRfName] = useState("");
+  const [rfTrivialThreshold, setRfTrivialThreshold] = useState("");
+  const [rfMateriality, setRfMateriality] = useState("");
   const [importOpen, setImportOpen] = useState(false);
-  const [pendingSourceDoc, setPendingSourceDoc] = useState<{ blob: string; name: string } | null>(null);
+  const [pendingSourceDoc, setPendingSourceDoc] = useState<{ id: string; name: string } | null>(null);
   const [importedAnswers, setImportedAnswers] = useState<AssessmentAnswers | undefined>(undefined);
   const [importedStraightLine, setImportedStraightLine] = useState<StraightLineAnswers | undefined>(undefined);
   const [importedNotes, setImportedNotes] = useState<Record<string, string> | null>(null);
   const [importedPercentageRent, setImportedPercentageRent] = useState<string | null>(null);
   const [importedEstimates, setImportedEstimates] = useState<ImportedEstimates | null>(null);
+  const [confirmedImportedEvents, setConfirmedImportedEvents] = useState<ConfirmedImportEvent[]>([]);
 
   const [form, setForm] = useState<LoanFormState>(() => makeBlankLoanForm());
   // Master agreement the loan being created/edited belongs to (null = standalone).
   const [formMasterId, setFormMasterId] = useState<string | null>(null);
+  const [modification, setModification] = useState<ModificationAssessmentValue>({
+    predecessorAgreementId: null,
+    modificationEffectiveDate: null,
+    modificationAssessment: null,
+    valid: true,
+  });
 
   // Master agreement create/edit dialog state.
   const [masterDialogOpen, setMasterDialogOpen] = useState(false);
@@ -221,6 +257,36 @@ export default function FileDetail() {
   const { data: client } = useGetClient(clientId);
   const { data: loans } = useListLoans(fileId);
   const { data: masters } = useListMasterAgreements(fileId);
+  const fvDecisionHistoryQueries = useQueries({
+    queries: (loans ?? []).map((loan) => getGetFvDecisionHistoryQueryOptions(loan.id)),
+  });
+  const fvDecisionHistoryByLoanId = useMemo(() => {
+    const map = new Map<string, any>();
+    (loans ?? []).forEach((loan, index) => {
+      if (fvDecisionHistoryQueries[index].data) {
+        map.set(loan.id, fvDecisionHistoryQueries[index].data);
+      }
+    });
+    return map;
+  }, [loans, fvDecisionHistoryQueries]);
+
+  const {
+    predecessors: linkedPredecessors,
+    isReady: reportingTransitionsReady,
+    error: reportingTransitionsError,
+  } = usePredecessorGraph(loans, clientId);
+  const reportingLoans = useMemo(() => {
+    const hydrated = hydrateLinkedAgreementPredecessors(loans ?? [], linkedPredecessors);
+    return hydrated.map(loan => ({
+      ...loan,
+      fvDecisionHistory: fvDecisionHistoryByLoanId.get(loan.id)
+    }));
+  }, [loans, linkedPredecessors, fvDecisionHistoryByLoanId]);
+  const reportingLoanById = useMemo(
+    () => new Map(reportingLoans.map((agreement) => [agreement.id, agreement])),
+    [reportingLoans],
+  );
+  const withPredecessor = (agreement: any) => reportingLoanById.get(agreement.id) ?? agreement;
 
   const formMode: LoanFormMode = (() => {
     if (!editingLoanId) return "loan";
@@ -234,6 +300,12 @@ export default function FileDetail() {
   const openEditLoan = (loan: any) => {
     setEditingLoanId(loan.id);
     setFormMasterId(loan.masterAgreementId ?? null);
+    setModification({
+      predecessorAgreementId: loan.predecessorAgreementId ?? null,
+      modificationEffectiveDate: loan.modificationEffectiveDate ?? null,
+      modificationAssessment: loan.modificationAssessment ?? null,
+      valid: !loan.predecessorAgreementId || !!loan.modificationAssessment,
+    });
     setForm({
       name: loan.name,
       description: loan.description ?? "",
@@ -242,10 +314,25 @@ export default function FileDetail() {
       principal: Number(loan.principal),
       downPayment: Number(loan.downPayment ?? 0),
       interestRate: Number(loan.interestRate),
+      rateType: loan.rateType ?? "fixed",
+      rateBenchmark: loan.rateBenchmark ?? null,
+      contractualPrimeName: loan.contractualPrimeName ?? null,
+      benchmarkEquivalentToContractualPrime: loan.benchmarkEquivalentToContractualPrime === true,
+      rateSpread: loan.rateSpread != null ? Number(loan.rateSpread) : null,
+      rateResetFrequency: loan.rateResetFrequency ?? null,
+      rateEffectiveConvention: loan.rateEffectiveConvention ?? null,
+      ratePaymentTreatment: loan.ratePaymentTreatment ?? null,
+      initialFvRateAssumption: loan.initialFvRateAssumption ?? null,
       amortizationYears: loan.amortizationYears,
       termYears: loan.termYears,
       startDate: loan.startDate.split("T")[0],
       paymentFrequency: loan.paymentFrequency as any,
+      paymentTiming: loan.paymentTiming ?? "end",
+      graceTermMode: loan.graceTermMode ?? "included",
+      firstPaymentDate: loan.firstPaymentDate ? loan.firstPaymentDate.split("T")[0] : "",
+      firstPaymentDateDerived: false,
+      semiMonthlyFirstDueDay: loan.semiMonthlyFirstDueDay ?? undefined,
+      semiMonthlySecondDueDay: loan.semiMonthlySecondDueDay ?? undefined,
       ioMonths: loan.ioMonths,
       graceMonths: loan.graceMonths ?? 0,
       graceInterestTreatment: (loan.graceInterestTreatment as "capitalized" | "none") ?? "capitalized",
@@ -290,11 +377,13 @@ export default function FileDetail() {
 
   const [importedLeaseMeta, setImportedLeaseMeta] = useState<{ name: string; lessor: string | null; startDate: string } | null>(null);
 
-  const handleImportedLoan = (result: DocumentImportResult) => {
+  const handleImportedLoan = (result: DocumentImportResult, events: ConfirmedImportEvent[] = []) => {
     const f = result.loan;
     setPendingSourceDoc(
-      result.documentBlob ? { blob: result.documentBlob, name: result.documentName ?? "document.pdf" } : null,
+      result.documentId ? { id: result.documentId, name: result.documentName ?? "document.pdf" } : null,
     );
+    setConfirmedImportedEvents(events);
+    setImportFindings(result.unresolvedRateFindings || []);
     const validFreqs = ["monthly", "semi-monthly", "bi-weekly", "weekly"] as const;
     const freq = validFreqs.find((v) => v === f?.paymentFrequency) ?? "monthly";
     setForm({
@@ -304,11 +393,29 @@ export default function FileDetail() {
       counterparty: f?.lender ?? null,
       principal: f?.principal ?? 0,
       downPayment: f?.downPayment ?? 0,
-      interestRate: f?.interestRate ?? 0,
+      interestRate: f?.interestRate ?? "",
+      // Do not flatten "prime + spread" into the imported current rate.  The
+      // rate form intentionally leaves missing contractual reset evidence for
+      // the reviewer to complete before the atomic create request is sent.
+      rateType: f?.primeSpread != null ? "prime_linked" : "fixed",
+      rateBenchmark: f?.primeSpread != null ? "boc_v80691311" : null,
+      contractualPrimeName: null,
+      benchmarkEquivalentToContractualPrime: false,
+      rateSpread: f?.primeSpread ?? null,
+      rateResetFrequency: null,
+      rateEffectiveConvention: null,
+      ratePaymentTreatment: null,
+      initialFvRateAssumption: null,
       amortizationYears: f?.amortizationYears ?? f?.termYears ?? 0,
       termYears: f?.termYears ?? f?.amortizationYears ?? 0,
       startDate: f?.startDate ?? "",
       paymentFrequency: freq,
+      paymentTiming: f?.paymentTiming ?? "end",
+      graceTermMode: f?.graceTermMode ?? "included",
+      firstPaymentDate: f?.firstPaymentDate ?? deriveFirstPaymentDate(f?.startDate ?? "", f?.paymentTiming ?? "end", f?.graceMonths ?? 0, freq, f?.semiMonthlyFirstDueDay ?? undefined, f?.semiMonthlySecondDueDay ?? undefined),
+      firstPaymentDateDerived: !f?.firstPaymentDate,
+      semiMonthlyFirstDueDay: f?.semiMonthlyFirstDueDay ?? undefined,
+      semiMonthlySecondDueDay: f?.semiMonthlySecondDueDay ?? undefined,
       ioMonths: f?.interestOnlyMonths ?? 0,
       graceMonths: f?.graceMonths ?? 0,
       graceInterestTreatment: (f?.graceInterestTreatment as "capitalized" | "none") ?? "capitalized",
@@ -317,13 +424,14 @@ export default function FileDetail() {
     });
     setEditingLoanId(null);
     setFormMasterId(null);
+    setModification({ predecessorAgreementId: null, modificationEffectiveDate: null, modificationAssessment: null, valid: true });
     setCreateOpen(true);
   };
 
   const handleImportedLease = (result: DocumentImportResult) => {
     const f = result.lease;
     setPendingSourceDoc(
-      result.documentBlob ? { blob: result.documentBlob, name: result.documentName ?? "document.pdf" } : null,
+      result.documentId ? { id: result.documentId, name: result.documentName ?? "document.pdf" } : null,
     );
     const termMonths = f?.termMonths ?? 0;
     const economicLife = f?.economicLifeYears ?? 0;
@@ -389,6 +497,9 @@ export default function FileDetail() {
 
   const getStatusBadges = (loan: any): { label: string; cls: string; tooltip: string }[] => {
     const badges: { label: string; cls: string; tooltip: string }[] = [];
+    if (loan.predecessorAgreementId && !loan.modificationAssessment) {
+      badges.push({ label: "Assessment required", cls: "text-amber-800 bg-amber-100", tooltip: "This agreement is linked to a predecessor but its renewal/modification assessment is unresolved. Edit it to complete the evidence and accountant conclusion." });
+    }
     if (!file?.fiscalYearEnd || !loan.startDate) return badges;
     const fye = parseISO(file.fiscalYearEnd);
     const windowEnd = addYears(fye, 1);
@@ -455,6 +566,7 @@ export default function FileDetail() {
         setCreateOpen(false);
         setForm(makeBlankLoanForm());
         setPendingSourceDoc(null);
+        setConfirmedImportedEvents([]);
       },
       onError: (err) => {
         toast({ title: "Couldn't save loan", description: getErrorMessage(err), variant: "destructive" });
@@ -483,8 +595,17 @@ export default function FileDetail() {
         setCreateOpen(false);
         setEditingLoanId(null);
       },
-      onError: (err) => {
-        toast({ title: "Couldn't save changes", description: getErrorMessage(err), variant: "destructive" });
+      onError: (err: any) => {
+        if (err?.response?.status === 409 && err?.response?.data?.error?.includes("modification")) {
+          toast({
+            title: "Modification assessment required",
+            description: "Existing prime-linked loans with applied history cannot directly change spread, reset basis, frequency, convention, treatment, or equivalence. To make these changes, you must initiate a modification assessment (Task 30). Ordinary overrides/restores remain available in the rate timeline.",
+            variant: "destructive",
+            duration: 10000,
+          });
+        } else {
+          toast({ title: "Couldn't save changes", description: getErrorMessage(err), variant: "destructive" });
+        }
       },
     },
   });
@@ -605,7 +726,7 @@ export default function FileDetail() {
           facilityLimit: m?.facilityLimit ?? null,
           securityDescription: m?.securityDescription ?? null,
           covenantDescription: m?.covenantDescription ?? null,
-          sourceDocumentBlob: result.documentBlob ?? null,
+          sourceDocumentId: result.documentId ?? null,
           sourceDocumentName: result.documentName ?? null,
         },
       },
@@ -634,11 +755,27 @@ export default function FileDetail() {
                   principal: f.principal ?? 0,
                   downPayment: f.downPayment ?? 0,
                   interestRate: f.interestRate ?? 0,
+                   rateType: f.primeSpread != null ? "prime_linked" : "fixed",
+                   rateBenchmark: f.primeSpread != null ? "boc_v80691311" : null,
+                   // Extraction cannot infer a lender-prime/reset convention:
+                   // leave these unresolved rather than creating a fixed loan.
+                   contractualPrimeName: null,
+                   benchmarkEquivalentToContractualPrime: false,
+                   rateSpread: f.primeSpread ?? null,
+                   rateResetFrequency: null,
+                   rateEffectiveConvention: null,
+                   ratePaymentTreatment: null,
+                   initialFvRateAssumption: null,
                   amortizationYears: f.amortizationYears ?? f.termYears ?? 0,
                   termYears: f.termYears ?? f.amortizationYears ?? 0,
                   startDate: f.startDate ?? file?.fiscalYearEnd ?? "",
                   fiscalYearEnd: file?.fiscalYearEnd ?? "",
                   paymentFrequency: freq,
+                  paymentTiming: f.paymentTiming ?? "end",
+                  graceTermMode: f.graceTermMode ?? "included",
+                  firstPaymentDate: f.firstPaymentDate ?? (deriveFirstPaymentDate(f.startDate ?? file?.fiscalYearEnd ?? "", f.paymentTiming ?? "end", f.graceMonths ?? 0, freq, f.semiMonthlyFirstDueDay ?? undefined, f.semiMonthlySecondDueDay ?? undefined) || null),
+                  semiMonthlyFirstDueDay: f.semiMonthlyFirstDueDay ?? null,
+                  semiMonthlySecondDueDay: f.semiMonthlySecondDueDay ?? null,
                   ioMonths: f.interestOnlyMonths ?? 0,
                   graceMonths: f.graceMonths ?? 0,
                   graceInterestTreatment: (f.graceInterestTreatment as "capitalized" | "none") ?? "capitalized",
@@ -670,10 +807,15 @@ export default function FileDetail() {
 
   const rollForward = useRollForwardFile({
     mutation: {
-      onSuccess: () => {
+      onSuccess: (data) => {
         queryClient.invalidateQueries({ queryKey: [`/api/clients/${clientId}/files`] });
         setRollForwardOpen(false);
-        setNewYearEnd("");
+        if (data.idempotent) {
+          toast({ title: "File already rolled forward", description: "Navigated to the existing rolled-forward file for this year-end." });
+        } else {
+          toast({ title: "File rolled forward", description: `Rolled forward ${data.rolledLoanCount} items (${data.skippedLoanCount} fully paid items skipped).` });
+        }
+        setLocation(`/client/${clientId}/file/${data.id}`);
       },
       onError: (err) => {
         toast({ title: "Couldn't roll forward file", description: getErrorMessage(err), variant: "destructive" });
@@ -682,45 +824,121 @@ export default function FileDetail() {
   });
 
   const summary = useMemo(() => {
-    if (!loans || !file?.fiscalYearEnd) return null;
-    return buildFileSummary(loans, file.fiscalYearEnd);
-  }, [loans, file]);
+    if (!loans || !file?.fiscalYearEnd || !reportingTransitionsReady) return null;
+    return buildFileSummary(reportingLoans as any, file.fiscalYearEnd);
+  }, [loans, reportingLoans, reportingTransitionsReady, file]);
 
   // Prior-year comparatives: only for files created via roll-forward.
-  // Follow the actual roll-forward lineage: a rolled-forward loan points at
-  // its source loan (rolledFromId), and that source loan's file is the prior
-  // year-end file — never guess by fiscal-year date.
-  const rolledFromLoanId = useMemo(
-    () => (loans ?? []).find((l) => l.rolledFromId != null)?.rolledFromId ?? null,
-    [loans],
-  );
-  const { data: sourceLoan } = useGetLoan(rolledFromLoanId ?? "", {
-    query: { queryKey: getGetLoanQueryKey(rolledFromLoanId ?? ""), enabled: !!rolledFromLoanId, retry: false },
+  // Resolve prior file authoritatively from the current file's rolledFromId.
+  const priorFileId = file?.rolledFromId ?? null;
+  const { data: priorFile, isError: priorFileError } = useGetFile(priorFileId ?? "", {
+    query: { queryKey: getGetFileQueryKey(priorFileId ?? ""), enabled: !!priorFileId, retry: false },
   });
-  const { data: clientFiles } = useListFiles(clientId ?? "", {
-    query: { queryKey: getListFilesQueryKey(clientId ?? ""), enabled: !!clientId && !!sourceLoan },
-  });
-  const priorFile = useMemo(() => {
-    if (!sourceLoan?.fileId || !clientFiles) return null;
-    return clientFiles.find((f) => f.id === sourceLoan.fileId && f.id !== fileId) ?? null;
-  }, [sourceLoan, clientFiles, fileId]);
-  const { data: priorLoans } = useListLoans(priorFile?.id ?? "", {
+  const { data: priorLoans, isError: priorLoansError } = useListLoans(priorFile?.id ?? "", {
     query: { queryKey: getListLoansQueryKey(priorFile?.id ?? ""), enabled: !!priorFile },
   });
+
+  const priorInitialLoans = priorFile ? priorLoans : (priorFileId ? (priorFileError ? [] : undefined) : []);
+  const {
+    predecessors: priorLinkedPredecessors,
+    isReady: priorReportingTransitionsReady,
+    error: priorPredecessorsGraphError,
+  } = usePredecessorGraph(priorInitialLoans, clientId);
+
+  const priorFvDecisionHistoryQueries = useQueries({
+    queries: (priorLoans ?? []).map((loan) => getGetFvDecisionHistoryQueryOptions(loan.id)),
+  });
+
+  const priorFvDecisionHistoryByLoanId = useMemo(() => {
+    const map = new Map<string, any>();
+    (priorLoans ?? []).forEach((loan, index) => {
+      if (priorFvDecisionHistoryQueries[index].data) {
+        map.set(loan.id, priorFvDecisionHistoryQueries[index].data);
+      }
+    });
+    return map;
+  }, [priorLoans, priorFvDecisionHistoryQueries]);
+
+  const hydratedPriorLoans = useMemo(() => {
+    const hydrated = hydrateLinkedAgreementPredecessors(priorLoans ?? [], priorLinkedPredecessors);
+    return hydrated.map(loan => ({
+      ...loan,
+      fvDecisionHistory: priorFvDecisionHistoryByLoanId.get(loan.id)
+    }));
+  }, [priorLoans, priorLinkedPredecessors, priorFvDecisionHistoryByLoanId]);
+
   const priorSummary = useMemo(() => {
-    if (!priorFile?.fiscalYearEnd || !priorLoans) return null;
-    return buildFileSummary(priorLoans, priorFile.fiscalYearEnd);
-  }, [priorFile, priorLoans]);
+    if (!priorFile?.fiscalYearEnd || !priorLoans || !priorReportingTransitionsReady) return null;
+    return buildFileSummary(hydratedPriorLoans as any, priorFile.fiscalYearEnd);
+  }, [priorFile, priorLoans, priorReportingTransitionsReady, hydratedPriorLoans]);
+
+
+  const disclosureModel = useMemo<DisclosureModel | DisclosureEvidenceError | null>(() => {
+    if (!file?.fiscalYearEnd || !client?.name || !summary) return null;
+    if (reportingTransitionsError) return new DisclosureEvidenceError(reportingTransitionsError.message);
+    if (!reportingTransitionsReady) return new DisclosureEvidenceError("Required external predecessor evidence is unresolved.");
+    if (priorFileId) {
+      if (priorFileError) return new DisclosureEvidenceError(`Prior year-end file (${priorFileId}) is missing, deleted, or inaccessible. Comparative figures cannot be safely summarized.`);
+      if (priorLoansError) return new DisclosureEvidenceError("Failed to fetch comparative prior-year loans.");
+      if (priorPredecessorsGraphError) return new DisclosureEvidenceError(priorPredecessorsGraphError.message);
+      if (!priorReportingTransitionsReady) return new DisclosureEvidenceError("Required prior-year comparative predecessor evidence is unresolved.");
+    }
+
+    const actualRolledFromIds = Array.from(new Set(reportingLoans.map((l) => l.rolledFromId).filter((id): id is string => !!id)));
+    const comparative = priorFile?.fiscalYearEnd && priorSummary ? {
+      summary: priorSummary,
+      fiscalYearEnd: priorFile.fiscalYearEnd,
+      sourceFileId: priorFile.id,
+      rolledFromLoanIds: actualRolledFromIds,
+    } : null;
+
+    try {
+      return buildDisclosureModel({
+        clientName: client.name,
+        fileName: file.name,
+        fiscalYearEnd: file.fiscalYearEnd,
+        rolledFromFileId: file.rolledFromId,
+        agreements: reportingLoans as any,
+        summary,
+        masters: masters ?? [],
+        comparative,
+        reportingTransitionsReady,
+      });
+    } catch (e) {
+      if (e instanceof DisclosureEvidenceError) return e;
+      return null;
+    }
+  }, [
+    file,
+    client,
+    summary,
+    masters,
+    priorFile,
+    priorFileId,
+    priorFileError,
+    priorLoansError,
+    priorPredecessorsGraphError,
+    priorReportingTransitionsReady,
+    priorSummary,
+    reportingLoans,
+    reportingTransitionsError,
+    reportingTransitionsReady,
+  ]);
 
   const diagnostics = useMemo(() => {
     if (!loans || !file?.fiscalYearEnd) return null;
+    const loansWithHistory = loans.map(loan => ({
+      ...loan,
+      fvDecisionHistory: fvDecisionHistoryByLoanId.get(loan.id)
+    }));
     return runFileDiagnostics(
-      { fiscalYearEnd: file.fiscalYearEnd, trivialThreshold: file.trivialThreshold, materiality: file.materiality, dismissedFindings: file.dismissedFindings },
-      loans,
+      { id: file.id, clientId: file.clientId, fiscalYearEnd: file.fiscalYearEnd, trivialThreshold: file.trivialThreshold, materiality: file.materiality, dismissedFindings: file.dismissedFindings },
+      loansWithHistory,
     );
-  }, [loans, file]);
+  }, [loans, file, fvDecisionHistoryByLoanId]);
 
   const setFileDismissed = (findingId: string, dismiss: boolean) => {
+    if (!canWrite) return;
     if (!file) return;
     const current = file.dismissedFindings ?? [];
     const next = dismiss ? Array.from(new Set([...current, findingId])) : current.filter((id) => id !== findingId);
@@ -728,6 +946,7 @@ export default function FileDetail() {
   };
 
   const setLoanDismissed = (loanId: string, findingId: string, dismiss: boolean) => {
+    if (!canWrite) return;
     const loan = loans?.find((l) => l.id === loanId);
     if (!loan) return;
     const current = loan.dismissedFindings ?? [];
@@ -789,9 +1008,9 @@ export default function FileDetail() {
               <Tooltip>
                 <TooltipTrigger asChild>
                   <DropdownMenuTrigger asChild>
-                    <Button variant="outline" size="sm" className="gap-2" disabled={!loans || loans.length === 0}>
+                    <Button variant="outline" size="sm" className="gap-2" disabled={!loans || loans.length === 0 || !reportingTransitionsReady}>
                       <TableIcon className="h-4 w-4" />
-                      Summary Schedule
+                      Consolidated Lead Sheet
                       <ChevronDown className="h-3.5 w-3.5" />
                     </Button>
                   </DropdownMenuTrigger>
@@ -805,7 +1024,7 @@ export default function FileDetail() {
                     exportFileLeadSheetXlsx({
                       clientName: client?.name ?? "Client",
                       fiscalYearEnd: file.fiscalYearEnd,
-                      loans,
+                      loans: reportingLoans,
                       masters,
                     });
                   }}
@@ -819,7 +1038,7 @@ export default function FileDetail() {
                     exportFileLeadSheetPdf({
                       clientName: client?.name ?? "Client",
                       fiscalYearEnd: file.fiscalYearEnd,
-                      loans,
+                      loans: reportingLoans,
                       masters,
                     });
                   }}
@@ -833,14 +1052,14 @@ export default function FileDetail() {
               <Tooltip>
                 <TooltipTrigger asChild>
                   <DropdownMenuTrigger asChild>
-                    <Button variant="outline" size="sm" className="gap-2" disabled={!loans || loans.length === 0}>
+                    <Button variant="outline" size="sm" className="gap-2" disabled={!loans || loans.length === 0 || !reportingTransitionsReady}>
                       <FileSpreadsheet className="h-4 w-4" />
-                      Workpapers
+                      Supporting Workpapers
                       <ChevronDown className="h-3.5 w-3.5" />
                     </Button>
                   </DropdownMenuTrigger>
                 </TooltipTrigger>
-                <TooltipContent>Export engagement workpapers (lead sheet + all loans/leases)</TooltipContent>
+                <TooltipContent>Export supporting loan-level workpapers (lead sheet + all loans/leases)</TooltipContent>
               </Tooltip>
               <DropdownMenuContent align="end">
                 <DropdownMenuItem
@@ -849,7 +1068,7 @@ export default function FileDetail() {
                     exportFileWorkpapersXlsx({
                       clientName: client?.name ?? "Client",
                       fiscalYearEnd: file.fiscalYearEnd,
-                      loans,
+                       loans: reportingLoans,
                       masters,
                     });
                   }}
@@ -863,7 +1082,7 @@ export default function FileDetail() {
                     exportFileWorkpapersPdf({
                       clientName: client?.name ?? "Client",
                       fiscalYearEnd: file.fiscalYearEnd,
-                      loans,
+                       loans: reportingLoans,
                       masters,
                     });
                   }}
@@ -873,6 +1092,44 @@ export default function FileDetail() {
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-2"
+                  disabled={!disclosureModel || disclosureModel instanceof DisclosureEvidenceError}
+                  onClick={async () => {
+                    if (disclosureModel && !(disclosureModel instanceof DisclosureEvidenceError)) {
+                      await downloadPresentationDisclosureDocx(disclosureModel);
+                    }
+                  }}
+                >
+                  <FileText className="h-4 w-4" />
+                  Word Disclosure
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Export the consolidated presentation and note disclosure as Word</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-2"
+                  disabled={!disclosureModel || disclosureModel instanceof DisclosureEvidenceError}
+                  onClick={() => {
+                    if (disclosureModel && !(disclosureModel instanceof DisclosureEvidenceError)) {
+                      downloadPresentationDisclosurePdf(disclosureModel);
+                    }
+                  }}
+                >
+                  <FileText className="h-4 w-4" />
+                  PDF Disclosure
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Export the consolidated presentation and note disclosure as PDF</TooltipContent>
+            </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -998,7 +1255,8 @@ export default function FileDetail() {
             </div>
           )}
 
-          <Tabs value={loanTab} onValueChange={setLoanTab}>
+          <Tabs value={loanTab} onValueChange={setLoanTab} className="min-w-0 max-w-full overflow-hidden">
+            <div className="w-full min-w-0 max-w-full overflow-x-auto pb-1">
             <TabsList className="gap-1 p-1 bg-muted/60">
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -1032,6 +1290,7 @@ export default function FileDetail() {
                 <TooltipContent>Diagnostic checklist of missing or incomplete information</TooltipContent>
               </Tooltip>
             </TabsList>
+            </div>
 
             <TabsContent value="review" className="space-y-6">
               {diagnostics && file && (
@@ -1094,8 +1353,8 @@ export default function FileDetail() {
                       <FindingsList
                         findings={diagnostics.fileFindings}
                         dismissed={diagnostics.fileDismissed}
-                        onDismiss={(id) => setFileDismissed(id, true)}
-                        onRestore={(id) => setFileDismissed(id, false)}
+                        onDismiss={canWrite ? (id) => setFileDismissed(id, true) : undefined}
+                        onRestore={canWrite ? (id) => setFileDismissed(id, false) : undefined}
                       />
                     </CardContent>
                   </Card>
@@ -1137,8 +1396,8 @@ export default function FileDetail() {
                           <FindingsList
                             findings={ld.findings}
                             dismissed={ld.dismissed}
-                            onDismiss={(id) => setLoanDismissed(ld.loanId, id, true)}
-                            onRestore={(id) => setLoanDismissed(ld.loanId, id, false)}
+                            onDismiss={canWrite ? (id) => setLoanDismissed(ld.loanId, id, true) : undefined}
+                            onRestore={canWrite ? (id) => setLoanDismissed(ld.loanId, id, false) : undefined}
                           />
                         </CardContent>
                       </Card>
@@ -1214,8 +1473,10 @@ export default function FileDetail() {
                         onClick={() => {
                           setEditingLoanId(null);
                           setForm(makeBlankLoanForm());
+                          setModification({ predecessorAgreementId: null, modificationEffectiveDate: null, modificationAssessment: null, valid: true });
                           setFormMasterId(null);
                           setPendingSourceDoc(null);
+                          setConfirmedImportedEvents([]);
                           setCreateOpen(true);
                         }}
                       >
@@ -1264,6 +1525,9 @@ export default function FileDetail() {
                           if (file?.fiscalYearEnd) {
                             const nextYear = addYears(parseISO(file.fiscalYearEnd), 1);
                             setNewYearEnd(format(nextYear, "yyyy-MM-dd"));
+                            setRfName(`${client?.name ?? "Client"} — ${format(nextYear, "yyyy")}`);
+                            setRfTrivialThreshold(file.trivialThreshold?.toString() ?? "");
+                            setRfMateriality(file.materiality?.toString() ?? "");
                           }
                           setRollForwardOpen(true);
                         }}
@@ -1288,11 +1552,13 @@ export default function FileDetail() {
                         Add a loan to this year-end file.
                       </p>
                     </div>
+                    {canWrite && (
                     <div className="flex gap-2 justify-center">
                       <Button
                         onClick={() => {
                           setEditingLoanId(null);
                           setForm(makeBlankLoanForm());
+                          setModification({ predecessorAgreementId: null, modificationEffectiveDate: null, modificationAssessment: null, valid: true });
                           setFormMasterId(null);
                           setPendingSourceDoc(null);
                           setCreateOpen(true);
@@ -1322,6 +1588,7 @@ export default function FileDetail() {
                         Add Lease
                       </Button>
                     </div>
+                    )}
                   </CardContent>
                 </Card>
               )}
@@ -1418,7 +1685,7 @@ export default function FileDetail() {
                 const outstandingOf = (loan: any): number => {
                   const isOperating = isOperatingLeaseLoan(loan);
                   if (isOperating) return 0;
-                  const result = calculateBookedSchedule(loan);
+                  const result = calculateBookedSchedule(withPredecessor(loan) as any);
                   const reportYearEnd = parseISO(loan.fiscalYearEnd ?? file?.fiscalYearEnd ?? format(new Date(), "yyyy-MM-dd"));
                   return result.schedule.filter((row) => !isAfter(row.date, reportYearEnd)).slice(-1)[0]?.balance ?? (Number(loan.principal) - Number(loan.downPayment ?? 0));
                 };
@@ -1547,7 +1814,7 @@ export default function FileDetail() {
                         // Loan or capital lease — compute the booked schedule. When
                         // fair value is adopted the contractual payment is held fixed.
                         const effectiveRate = effectiveLoanRate(loan);
-                        const result = calculateBookedSchedule(loan);
+                        const result = calculateBookedSchedule(withPredecessor(loan) as any);
                         const reportYearEnd = parseISO(loan.fiscalYearEnd ?? file?.fiscalYearEnd ?? format(new Date(), "yyyy-MM-dd"));
                         const currentPeriodEnd = new Date(reportYearEnd);
                         currentPeriodEnd.setFullYear(currentPeriodEnd.getFullYear() + 1);
@@ -1595,7 +1862,7 @@ export default function FileDetail() {
 
                 const getDebtMetrics = (loan: any) => {
                   const effectiveRate = effectiveLoanRate(loan);
-                  const result = calculateBookedSchedule(loan);
+                  const result = calculateBookedSchedule(withPredecessor(loan) as any);
                   const reportYearEnd = parseISO(loan.fiscalYearEnd ?? file?.fiscalYearEnd ?? format(new Date(), "yyyy-MM-dd"));
                   const currentPeriodEnd = new Date(reportYearEnd);
                   currentPeriodEnd.setFullYear(currentPeriodEnd.getFullYear() + 1);
@@ -1873,11 +2140,11 @@ export default function FileDetail() {
                 // Pre-compute individual schedules
                 const loanSchedules = regularLoans.map((item) => ({
                   name: item.name,
-                  schedule: calculateBookedSchedule(item).schedule,
+                  schedule: calculateBookedSchedule(withPredecessor(item) as any).schedule,
                 }));
                 const leaseSchedules = capitalLeases.map((item) => ({
                   name: item.name,
-                  schedule: calculateBookedSchedule(item).schedule,
+                  schedule: calculateBookedSchedule(withPredecessor(item) as any).schedule,
                 }));
 
                 const maxLoanPeriods = Math.max(0, ...loanSchedules.map((s) => s.schedule.length));
@@ -1930,7 +2197,7 @@ export default function FileDetail() {
                 // Per-loan summary metrics for the "By Loan" view.
                 const getSummaryMetrics = (loan: any) => {
                   const effectiveRate = effectiveLoanRate(loan);
-                  const result = calculateBookedSchedule(loan);
+                  const result = calculateBookedSchedule(withPredecessor(loan) as any);
                   const reportYearEnd = parseISO(loan.fiscalYearEnd ?? file?.fiscalYearEnd ?? format(new Date(), "yyyy-MM-dd"));
                   const priorYearEnd = new Date(reportYearEnd);
                   priorYearEnd.setFullYear(priorYearEnd.getFullYear() - 1);
@@ -2171,635 +2438,309 @@ export default function FileDetail() {
               })()}
             </TabsContent>
 
-            <TabsContent value="presentation" className="space-y-6">
-              {summary && (
-                <>
-                  {/* STATEMENT HEADER */}
-                  <div className="rounded-xl border border-border/60 bg-card px-8 py-7 shadow-sm text-center">
-                    <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">{client?.name ?? "Company"}</p>
-                    <h1 className="mt-1.5 font-display text-2xl font-semibold">Financial Statement Extracts</h1>
-                    <p className="mt-1 text-sm text-muted-foreground">
-                      For the year ended {file?.fiscalYearEnd ? format(parseISO(file.fiscalYearEnd), "MMMM d, yyyy") : ""}
-                    </p>
-                    <p className="mx-auto mt-3 max-w-xl text-xs italic text-muted-foreground">
-                      Relevant extracts prepared for debt and lease disclosures. All figures are expressed in Canadian dollars unless otherwise noted.
+                        <TabsContent value="presentation" className="space-y-6">
+              {disclosureModel instanceof DisclosureEvidenceError ? (
+                <div className="rounded-xl border border-amber-200 bg-amber-50 dark:bg-amber-950/40 p-6 flex flex-col items-center justify-center text-center space-y-3">
+                  <div className="h-12 w-12 rounded-full bg-amber-100 dark:bg-amber-900/50 flex items-center justify-center">
+                    <AlertTriangle className="h-6 w-6 text-amber-700 dark:text-amber-300" />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-semibold text-amber-800 dark:text-amber-200">Presentation & Disclosure Unavailable</h3>
+                    <p className="mt-1 text-sm text-amber-700 dark:text-amber-300 max-w-md mx-auto">
+                      {disclosureModel.message}
                     </p>
                   </div>
+                </div>
+              ) : disclosureModel && (
+                <>
+                  <div className="flex items-center justify-between flex-wrap gap-4">
+                    <div>
+                      <h2 className="text-xl font-bold tracking-tight">Presentation & Disclosure</h2>
+                      <p className="text-sm text-muted-foreground mt-0.5 max-w-2xl">
+                        {disclosureModel.scopeStatement}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="gap-2 h-9"
+                        onClick={async () => {
+                          if (disclosureModel && !(disclosureModel instanceof DisclosureEvidenceError)) {
+                            await downloadPresentationDisclosureDocx(disclosureModel);
+                          }
+                        }}
+                      >
+                        <FileText className="h-4 w-4" /> Word Disclosure
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="gap-2 h-9"
+                        onClick={() => {
+                          if (disclosureModel && !(disclosureModel instanceof DisclosureEvidenceError)) {
+                            downloadPresentationDisclosurePdf(disclosureModel);
+                          }
+                        }}
+                      >
+                        <FileText className="h-4 w-4" /> PDF Report
+                      </Button>
+                    </div>
+                  </div>
 
-                  {/* COMPARATIVE FIGURES (roll-forward files only) */}
-                  {priorSummary && priorFile?.fiscalYearEnd && (() => {
+                  <div className="text-xs text-muted-foreground bg-muted/30 rounded-lg p-3 border border-border/50 font-mono tracking-tight flex flex-col gap-1 overflow-x-auto whitespace-nowrap">
+                    <div><span className="font-semibold text-foreground">Model:</span> {disclosureModel.modelVersion} <span className="opacity-50">|</span> <span className="font-semibold text-foreground">Fingerprint:</span> {disclosureModel.modelFingerprint}</div>
+                    <div><span className="font-semibold text-foreground">Calculation Versions:</span> {disclosureModel.evidence.calculationVersions.join(", ") || "not supplied"}</div>
+                    <div><span className="font-semibold text-foreground">Revisions:</span> {disclosureModel.evidence.revisionFingerprints.join(", ") || "not supplied"}</div>
+                    <div><span className="font-semibold text-foreground">Event Sets:</span> {disclosureModel.evidence.eventSetFingerprints.join(", ") || "none"}</div>
+                    <div><span className="font-semibold text-foreground">Rate Sets:</span> {disclosureModel.evidence.rateSetIds.join(", ") || "none"}</div>
+                    <div><span className="font-semibold text-foreground">Inputs:</span> {disclosureModel.evidence.inputFingerprints.join(", ") || "none"}</div>
+                  </div>
+
+                  {(() => {
+                    const comparative = disclosureModel.comparativeFiscalYearEnd != null;
                     const fmtFy = (d: string) => format(parseISO(d), "MMM d, yyyy");
-                    const rows: { label: string; current: number; prior: number; section?: string }[] = [
-                      { section: "Balance Sheet", label: "Current portion of long-term debt", current: summary.loanCurrent, prior: priorSummary.loanCurrent },
-                      { label: "Long-term debt", current: summary.loanLongTerm, prior: priorSummary.loanLongTerm },
-                      { label: "Current portion of obligations under capital lease", current: summary.leaseCurrent, prior: priorSummary.leaseCurrent },
-                      { label: "Obligations under capital lease — long-term", current: summary.leaseLongTerm, prior: priorSummary.leaseLongTerm },
-                      { label: "Total debt and lease obligations", current: summary.totalDebt, prior: priorSummary.totalDebt },
-                      { section: "Income Statement", label: "Interest expense", current: summary.totalInterestExpense, prior: priorSummary.totalInterestExpense },
-                      { label: "Rent expense (straight-line)", current: summary.totalStraightLineRentExpense, prior: priorSummary.totalStraightLineRentExpense },
-                    ].filter((r) => r.current !== 0 || r.prior !== 0);
-                    if (rows.length === 0) return null;
+                    const renderAmountRow = (label: string, value: any) => {
+                      if (value.current === 0 && (value.comparative == null || value.comparative === 0)) return null;
+                      return (
+                        <tr key={label} className="border-t border-border/50">
+                          <td className="py-2 pr-4">{label}</td>
+                          <td className="py-2 text-right font-semibold">{formatCurrency(value.current)}</td>
+                          {comparative && (
+                            <td className="py-2 text-right">{value.comparative == null ? "—" : formatCurrency(value.comparative)}</td>
+                          )}
+                        </tr>
+                      );
+                    };
+
+                    const renderMaturityRow = (row: any) => {
+                      if (row.total === 0) return null;
+                      return (
+                        <tr key={row.label} className="border-t border-border/50">
+                          <td className="py-2 pr-4">{row.label}</td>
+                          <td className="py-2 text-right">{formatCurrency(row.loans)}</td>
+                          <td className="py-2 text-right">{formatCurrency(row.capitalLeases)}</td>
+                          <td className="py-2 text-right">{formatCurrency(row.operatingLeases)}</td>
+                          <td className="py-2 text-right font-semibold">{formatCurrency(row.total)}</td>
+                        </tr>
+                      );
+                    };
+
+                    const bsRows = [
+                      renderAmountRow("Loans — current", disclosureModel.balanceSheet.loans.current),
+                      renderAmountRow("Loans — non-current", disclosureModel.balanceSheet.loans.nonCurrent),
+                      renderAmountRow("Loans — total", disclosureModel.balanceSheet.loans.total),
+                      renderAmountRow("Capital leases — current", disclosureModel.balanceSheet.capitalLeases.current),
+                      renderAmountRow("Capital leases — non-current", disclosureModel.balanceSheet.capitalLeases.nonCurrent),
+                      renderAmountRow("Capital leases — total", disclosureModel.balanceSheet.capitalLeases.total),
+                      renderAmountRow("Total debt — current", disclosureModel.balanceSheet.totalDebt.current),
+                      renderAmountRow("Total debt — non-current", disclosureModel.balanceSheet.totalDebt.nonCurrent),
+                      renderAmountRow("Total debt", disclosureModel.balanceSheet.totalDebt.total),
+                      renderAmountRow("Operating lease commitments", disclosureModel.balanceSheet.operatingLeases.commitments),
+                      renderAmountRow("Deferred rent asset", disclosureModel.balanceSheet.operatingLeases.deferredRentAsset),
+                      renderAmountRow("Deferred rent liability", disclosureModel.balanceSheet.operatingLeases.deferredRentLiability),
+                      renderAmountRow("Lease incentive liability — current", disclosureModel.balanceSheet.operatingLeases.incentiveCurrent),
+                      renderAmountRow("Lease incentive liability — non-current", disclosureModel.balanceSheet.operatingLeases.incentiveNonCurrent),
+                    ].filter(Boolean);
+
+                    const opRows = [
+                      renderAmountRow("Interest expense", disclosureModel.operations.interestExpense),
+                      renderAmountRow("Straight-line rent expense", disclosureModel.operations.straightLineRentExpense),
+                      renderAmountRow("Lease inducement amortization", disclosureModel.operations.leaseInducementAmortization),
+                    ].filter(Boolean);
+
+                    const cfRows = [
+                      renderAmountRow("Proceeds from long-term debt", disclosureModel.cashFlows.loanProceeds),
+                      renderAmountRow("Repayment of long-term debt", disclosureModel.cashFlows.loanPrincipalRepayments),
+                      renderAmountRow("Capital lease principal repayments", disclosureModel.cashFlows.capitalLeasePrincipalRepayments),
+                      renderAmountRow("Operating lease payments", disclosureModel.cashFlows.operatingLeasePayments),
+                      renderAmountRow("Lease inducements received in cash", disclosureModel.cashFlows.cashLeaseInducements),
+                    ].filter(Boolean);
+
+                    const ncRows = [
+                      renderAmountRow("Non-cash lease inducements", disclosureModel.nonCashItems.leaseInducements),
+                    ].filter(Boolean);
+
                     return (
-                      <div className="rounded-xl border border-border/60 bg-card p-6 md:p-8 shadow-sm space-y-4 tabular-nums">
-                        <div className="border-b pb-3">
-                          <h2 className="text-lg font-display font-semibold">Comparative Figures</h2>
-                          <p className="mt-1 text-xs text-muted-foreground">
-                            Prior-year figures come from the {fmtFy(priorFile.fiscalYearEnd)} year-end file this file was rolled forward from. ASPE financial statements present the prior year beside the current year.
-                          </p>
-                        </div>
-                        <div className="overflow-x-auto">
-                          <table className="w-full text-sm">
-                            <thead>
-                              <tr className="text-xs text-muted-foreground">
-                                <th className="text-left py-2 font-medium"></th>
-                                <th className="text-right py-2 font-medium whitespace-nowrap">{file?.fiscalYearEnd ? fmtFy(file.fiscalYearEnd) : "Current year"}</th>
-                                <th className="text-right py-2 font-medium whitespace-nowrap">{fmtFy(priorFile.fiscalYearEnd)}</th>
-                                <th className="text-right py-2 font-medium whitespace-nowrap">Change</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {rows.map((r) => (
-                                <Fragment key={r.label}>
-                                  {r.section && (
-                                    <tr>
-                                      <td colSpan={4} className="pt-3 pb-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">{r.section}</td>
-                                    </tr>
-                                  )}
-                                  <tr className="border-t border-border/50">
-                                    <td className="py-2 pr-4">{r.label}</td>
-                                    <td className="py-2 text-right font-semibold">{formatCurrency(r.current)}</td>
-                                    <td className="py-2 text-right">{formatCurrency(r.prior)}</td>
-                                    <td className={`py-2 text-right text-xs ${r.current - r.prior > 0 ? "text-rose-700" : r.current - r.prior < 0 ? "text-emerald-700" : "text-muted-foreground"}`}>
-                                      {r.current - r.prior === 0 ? "—" : `${r.current - r.prior > 0 ? "+" : "−"}${formatCurrency(Math.abs(r.current - r.prior))}`}
-                                    </td>
+                      <div className="space-y-6">
+                        {bsRows.length > 0 && (
+                          <div className="rounded-xl border border-border/60 bg-card p-6 shadow-sm space-y-4 tabular-nums">
+                            <h2 className="text-lg font-display font-semibold border-b pb-3">Balance Sheet Presentation</h2>
+                            <div className="overflow-x-auto text-sm">
+                              <table className="w-full text-left">
+                                <thead>
+                                  <tr>
+                                    <th className="pb-2 font-medium text-muted-foreground w-1/2">Item</th>
+                                    <th className="pb-2 font-medium text-muted-foreground text-right">{fmtFy(disclosureModel.reportingFiscalYearEnd)}</th>
+                                    {comparative && <th className="pb-2 font-medium text-muted-foreground text-right">{disclosureModel.comparativeFiscalYearEnd ? fmtFy(disclosureModel.comparativeFiscalYearEnd) : ""}</th>}
                                   </tr>
-                                </Fragment>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
+                                </thead>
+                                <tbody>{bsRows}</tbody>
+                              </table>
+                            </div>
+                          </div>
+                        )}
+
+                        {opRows.length > 0 && (
+                          <div className="rounded-xl border border-border/60 bg-card p-6 shadow-sm space-y-4 tabular-nums">
+                            <h2 className="text-lg font-display font-semibold border-b pb-3">Statement of Operations</h2>
+                            <div className="overflow-x-auto text-sm">
+                              <table className="w-full text-left">
+                                <thead>
+                                  <tr>
+                                    <th className="pb-2 font-medium text-muted-foreground w-1/2">Item</th>
+                                    <th className="pb-2 font-medium text-muted-foreground text-right">{fmtFy(disclosureModel.reportingFiscalYearEnd)}</th>
+                                    {comparative && <th className="pb-2 font-medium text-muted-foreground text-right">{disclosureModel.comparativeFiscalYearEnd ? fmtFy(disclosureModel.comparativeFiscalYearEnd) : ""}</th>}
+                                  </tr>
+                                </thead>
+                                <tbody>{opRows}</tbody>
+                              </table>
+                            </div>
+                          </div>
+                        )}
+
+                        {cfRows.length > 0 && (
+                          <div className="rounded-xl border border-border/60 bg-card p-6 shadow-sm space-y-4 tabular-nums">
+                            <h2 className="text-lg font-display font-semibold border-b pb-3">Cash Flows — Relevant Items</h2>
+                            <div className="overflow-x-auto text-sm">
+                              <table className="w-full text-left">
+                                <thead>
+                                  <tr>
+                                    <th className="pb-2 font-medium text-muted-foreground w-1/2">Item</th>
+                                    <th className="pb-2 font-medium text-muted-foreground text-right">{fmtFy(disclosureModel.reportingFiscalYearEnd)}</th>
+                                    {comparative && <th className="pb-2 font-medium text-muted-foreground text-right">{disclosureModel.comparativeFiscalYearEnd ? fmtFy(disclosureModel.comparativeFiscalYearEnd) : ""}</th>}
+                                  </tr>
+                                </thead>
+                                <tbody>{cfRows}</tbody>
+                              </table>
+                            </div>
+                            <p className="text-xs text-muted-foreground italic">Interest paid is not presented in this cash-flow disclosure.</p>
+                          </div>
+                        )}
+
+                        {ncRows.length > 0 && (
+                          <div className="rounded-xl border border-border/60 bg-card p-6 shadow-sm space-y-4 tabular-nums">
+                            <h2 className="text-lg font-display font-semibold border-b pb-3">Non-cash Transactions</h2>
+                            <div className="overflow-x-auto text-sm">
+                              <table className="w-full text-left">
+                                <thead>
+                                  <tr>
+                                    <th className="pb-2 font-medium text-muted-foreground w-1/2">Item</th>
+                                    <th className="pb-2 font-medium text-muted-foreground text-right">{fmtFy(disclosureModel.reportingFiscalYearEnd)}</th>
+                                    {comparative && <th className="pb-2 font-medium text-muted-foreground text-right">{disclosureModel.comparativeFiscalYearEnd ? fmtFy(disclosureModel.comparativeFiscalYearEnd) : ""}</th>}
+                                  </tr>
+                                </thead>
+                                <tbody>{ncRows}</tbody>
+                              </table>
+                            </div>
+                          </div>
+                        )}
+
+                        {disclosureModel.maturities.length > 0 && (
+                          <div className="rounded-xl border border-border/60 bg-card p-6 shadow-sm space-y-4 tabular-nums">
+                            <h2 className="text-lg font-display font-semibold border-b pb-3">Contractual Maturities</h2>
+                            <div className="overflow-x-auto text-sm">
+                              <table className="w-full text-left">
+                                <thead>
+                                  <tr>
+                                    <th className="pb-2 font-medium text-muted-foreground">Fiscal year</th>
+                                    <th className="pb-2 font-medium text-muted-foreground text-right">Loans</th>
+                                    <th className="pb-2 font-medium text-muted-foreground text-right">Capital leases</th>
+                                    <th className="pb-2 font-medium text-muted-foreground text-right">Operating leases</th>
+                                    <th className="pb-2 font-medium text-muted-foreground text-right">Total</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {disclosureModel.maturities.map(renderMaturityRow)}
+                                </tbody>
+                              </table>
+                            </div>
+                            <p className="text-xs text-muted-foreground italic">Loan and capital-lease maturities include explicit balloons and contractual residual balances due at maturity.</p>
+                          </div>
+                        )}
+
+                        {disclosureModel.securityAndCovenants.length > 0 && (
+                          <div className="rounded-xl border border-border/60 bg-card p-6 shadow-sm space-y-4">
+                            <h2 className="text-lg font-display font-semibold border-b pb-3">Security & Covenants</h2>
+                            <div className="overflow-x-auto text-sm">
+                              <table className="w-full text-left min-w-[600px]">
+                                <thead>
+                                  <tr>
+                                    <th className="pb-2 font-medium text-muted-foreground w-1/4">Agreement</th>
+                                    <th className="pb-2 font-medium text-muted-foreground w-1/4">Counterparty</th>
+                                    <th className="pb-2 font-medium text-muted-foreground w-1/4">Security</th>
+                                    <th className="pb-2 font-medium text-muted-foreground w-1/4">Covenants / status</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {disclosureModel.securityAndCovenants.map((item) => (
+                                    <tr key={item.agreementId} className="border-t border-border/50">
+                                      <td className="py-2 pr-4">{item.agreementName}</td>
+                                      <td className="py-2 pr-4">{item.counterparty ?? "—"}</td>
+                                      <td className="py-2 pr-4">{item.security.join("; ") || "—"}</td>
+                                      <td className="py-2">
+                                        <div className="flex flex-col gap-1">
+                                          <span>{item.covenant ?? "—"}</span>
+                                          {item.covenantViolation && (
+                                            <span className="text-xs font-semibold text-rose-700 bg-rose-100 dark:bg-rose-900/30 px-1.5 py-0.5 rounded-sm inline-flex w-fit">
+                                              Covenant violation at reporting date
+                                            </span>
+                                          )}
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        )}
+
+                        {disclosureModel.transitions.length > 0 && (
+                          <div className="rounded-xl border border-border/60 bg-card p-6 shadow-sm space-y-4">
+                            <h2 className="text-lg font-display font-semibold border-b pb-3">Agreement Transitions</h2>
+                            <div className="overflow-x-auto text-sm">
+                              <table className="w-full text-left min-w-[600px]">
+                                <thead>
+                                  <tr>
+                                    <th className="pb-2 font-medium text-muted-foreground">Successor</th>
+                                    <th className="pb-2 font-medium text-muted-foreground">Predecessor</th>
+                                    <th className="pb-2 font-medium text-muted-foreground">Effective date</th>
+                                    <th className="pb-2 font-medium text-muted-foreground">Treatment</th>
+                                    <th className="pb-2 font-medium text-muted-foreground">Presentation</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {disclosureModel.transitions.map((item) => (
+                                    <tr key={`${item.successorAgreementId}-${item.predecessorAgreementId}`} className="border-t border-border/50">
+                                      <td className="py-2 pr-4"><code className="text-xs bg-muted px-1 py-0.5 rounded">{item.successorAgreementId.slice(0, 8)}</code></td>
+                                      <td className="py-2 pr-4"><code className="text-xs bg-muted px-1 py-0.5 rounded">{item.predecessorAgreementId.slice(0, 8)}</code></td>
+                                      <td className="py-2 pr-4">{format(parseISO(item.effectiveDate), "MMM d, yyyy")}</td>
+                                      <td className="py-2 pr-4"><span className="capitalize">{item.treatment.replace(/_/g, " ")}</span></td>
+                                      <td className="py-2 text-muted-foreground">Single accounting timeline; predecessor and successor are not double counted</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     );
                   })()}
-
-                  {/* 1. BALANCE SHEET */}
-                  <div className="rounded-xl border border-border/60 bg-card p-6 md:p-8 shadow-sm space-y-4 tabular-nums">
-                    <h2 className="text-lg font-display font-semibold border-b pb-3">Balance Sheet — Relevant Line Items</h2>
-                    <div className="overflow-hidden text-sm">
-                      {/* Current Assets */}
-                      {(summary.deferredRentAsset > 0) && (
-                        <>
-                          <div className="px-1 pt-3 pb-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Current Assets</div>
-                          <div className="flex justify-between px-1 py-2.5 border-t border-border/50">
-                            <span>Deferred rent (asset)</span>
-                            <span className="font-semibold">{formatCurrency(summary.deferredRentAsset)}</span>
-                          </div>
-                        </>
-                      )}
-                      {/* Non-current Assets */}
-                      {/* Current Liabilities */}
-                      <div className="px-1 pt-3 pb-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Current Liabilities</div>
-                      {summary.loanCurrent > 0 && (() => {
-                        const loanCallable = summary.loans.reduce((s, l) => s + l.scheduledBeyondOneYear, 0);
-                        const loanWithin = summary.loans.reduce((s, l) => s + l.scheduledWithinOneYear, 0);
-                        return (
-                          <>
-                            <div className="flex justify-between px-1 py-2.5 border-t border-border/50">
-                              <span>Current portion of long-term debt</span>
-                              <span className="font-semibold">{formatCurrency(summary.loanCurrent)}</span>
-                            </div>
-                            {loanCallable > 0 && (
-                              <>
-                                <div className="flex justify-between px-1 py-1 pl-6 text-xs text-muted-foreground">
-                                  <span>Scheduled repayments due within one year</span>
-                                  <span>{formatCurrency(loanWithin)}</span>
-                                </div>
-                                <div className="flex justify-between px-1 py-1 pl-6 text-xs text-muted-foreground">
-                                  <span>Scheduled repayments due beyond one year, callable on covenant violation</span>
-                                  <span>{formatCurrency(loanCallable)}</span>
-                                </div>
-                              </>
-                            )}
-                          </>
-                        );
-                      })()}
-                      {summary.leaseCurrent > 0 && (() => {
-                        const leaseCallable = summary.capitalLeases.reduce((s, l) => s + l.scheduledBeyondOneYear, 0);
-                        const leaseWithin = summary.capitalLeases.reduce((s, l) => s + l.scheduledWithinOneYear, 0);
-                        return (
-                          <>
-                            <div className="flex justify-between px-1 py-2.5 border-t border-border/50">
-                              <span>Current portion of obligations under capital lease</span>
-                              <span className="font-semibold">{formatCurrency(summary.leaseCurrent)}</span>
-                            </div>
-                            {leaseCallable > 0 && (
-                              <>
-                                <div className="flex justify-between px-1 py-1 pl-6 text-xs text-muted-foreground">
-                                  <span>Scheduled repayments due within one year</span>
-                                  <span>{formatCurrency(leaseWithin)}</span>
-                                </div>
-                                <div className="flex justify-between px-1 py-1 pl-6 text-xs text-muted-foreground">
-                                  <span>Scheduled repayments due beyond one year, callable on covenant violation</span>
-                                  <span>{formatCurrency(leaseCallable)}</span>
-                                </div>
-                              </>
-                            )}
-                          </>
-                        );
-                      })()}
-                      {summary.deferredRentLiability > 0 && (
-                        <div className="flex justify-between px-1 py-2.5 border-t border-border/50">
-                          <span>Deferred rent (liability)</span>
-                          <span className="font-semibold">{formatCurrency(summary.deferredRentLiability)}</span>
-                        </div>
-                      )}
-                      {summary.leaseIncentiveCurrent > 0 && (
-                        <div className="flex justify-between px-1 py-2.5 border-t border-border/50">
-                          <span>Lease incentive liability — current</span>
-                          <span className="font-semibold">{formatCurrency(summary.leaseIncentiveCurrent)}</span>
-                        </div>
-                      )}
-                      {(summary.loanCurrent + summary.leaseCurrent + summary.deferredRentLiability + summary.leaseIncentiveCurrent) > 0 && (
-                        <div className="flex justify-between px-1 py-2 border-t border-foreground/40 font-semibold">
-                          <span>Total current liabilities</span>
-                          <span>{formatCurrency(summary.loanCurrent + summary.leaseCurrent + summary.deferredRentLiability + summary.leaseIncentiveCurrent)}</span>
-                        </div>
-                      )}
-                      {/* Non-current Liabilities */}
-                      <div className="px-1 pt-3 pb-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Non-Current Liabilities</div>
-                      {summary.loanLongTerm > 0 && (
-                        <div className="flex justify-between px-1 py-2.5 border-t border-border/50">
-                          <span>Long-term debt</span>
-                          <span className="font-semibold">{formatCurrency(summary.loanLongTerm)}</span>
-                        </div>
-                      )}
-                      {summary.leaseLongTerm > 0 && (
-                        <div className="flex justify-between px-1 py-2.5 border-t border-border/50">
-                          <span>Obligations under capital leases</span>
-                          <span className="font-semibold">{formatCurrency(summary.leaseLongTerm)}</span>
-                        </div>
-                      )}
-                      {summary.leaseIncentiveNonCurrent > 0 && (
-                        <div className="flex justify-between px-1 py-2.5 border-t border-border/50">
-                          <span>Lease incentive liability — non-current</span>
-                          <span className="font-semibold">{formatCurrency(summary.leaseIncentiveNonCurrent)}</span>
-                        </div>
-                      )}
-                      {(summary.loanLongTerm + summary.leaseLongTerm + summary.leaseIncentiveNonCurrent) > 0 && (
-                        <div className="flex justify-between px-1 py-2 border-t border-foreground/40 font-semibold">
-                          <span>Total non-current liabilities</span>
-                          <span>{formatCurrency(summary.loanLongTerm + summary.leaseLongTerm + summary.leaseIncentiveNonCurrent)}</span>
-                        </div>
-                      )}
-                      {/* Total Debt */}
-                      {(summary.totalDebt > 0 || summary.deferredRentLiability > 0 || summary.leaseIncentiveLiability > 0) && (
-                        <div className="flex justify-between px-1 py-3 mt-1 border-t-2 border-foreground/70 font-bold">
-                          <span>Total Debt & Lease-Related Liabilities</span>
-                          <span>{formatCurrency(summary.totalDebt + summary.deferredRentLiability + summary.leaseIncentiveLiability)}</span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* 2. STATEMENT OF OPERATIONS */}
-                  <div className="rounded-xl border border-border/60 bg-card p-6 md:p-8 shadow-sm space-y-4 tabular-nums">
-                    <h2 className="text-lg font-display font-semibold border-b pb-3">Statement of Operations — Relevant Line Items</h2>
-                    <div className="overflow-hidden text-sm">
-                      {(summary.totalInterestExpense > 0 || summary.totalStraightLineRentExpense > 0) ? (
-                        <>
-                          {summary.totalInterestExpense > 0 && (
-                            <div className="flex justify-between px-1 py-2.5 border-t border-border/50">
-                              <span>Interest expense — loans & capital leases</span>
-                              <span className="font-semibold">{formatCurrency(summary.totalInterestExpense)}</span>
-                            </div>
-                          )}
-                          {summary.totalStraightLineRentExpense > 0 && (
-                            <div className="flex justify-between px-1 py-2.5 border-t border-border/50">
-                              <span>Rent expense — operating leases (straight-line)</span>
-                              <span className="font-semibold">{formatCurrency(summary.totalStraightLineRentExpense)}</span>
-                            </div>
-                          )}
-                          {summary.totalLeaseInducementAmortization > 0 && (
-                            <div className="flex justify-between px-1 py-2.5 border-t border-border/50">
-                              <span>Lease inducement amortization (contra-expense)</span>
-                              <span className="font-semibold">({formatCurrency(summary.totalLeaseInducementAmortization)})</span>
-                            </div>
-                          )}
-                        </>
-                      ) : (
-                        <div className="p-3 text-sm text-muted-foreground">
-                          No P&L impact for the current fiscal year. Interest and rent expenses are computed based on the fiscal year-end date.
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* 3. CASH FLOWS */}
-                  <div className="rounded-xl border border-border/60 bg-card p-6 md:p-8 shadow-sm space-y-4 tabular-nums">
-                    <h2 className="text-lg font-display font-semibold border-b pb-3">Cash Flows — Relevant Items</h2>
-                    <div className="overflow-hidden text-sm">
-                      {(summary.totalLoanProceeds > 0 || summary.totalPrincipalRepaid > 0 || summary.totalOperatingLeaseCash > 0 || summary.cashInducementsReceived > 0) ? (
-                        <>
-                          {summary.totalOperatingLeaseCash > 0 && (
-                            <>
-                              <div className="px-1 pt-3 pb-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Operating Activities</div>
-                              <div className="flex justify-between px-1 py-2.5 border-t border-border/50">
-                                <span>Rent paid — operating leases</span>
-                                <span className="font-semibold">{formatCurrency(summary.totalOperatingLeaseCash)}</span>
-                              </div>
-                            </>
-                          )}
-                          <div className="px-1 pt-3 pb-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Financing Activities</div>
-                          {summary.totalLoanProceeds > 0 && (
-                            <div className="flex justify-between px-1 py-2.5 border-t border-border/50">
-                              <span>Proceeds from long-term debt</span>
-                              <span className="font-semibold">{formatCurrency(summary.totalLoanProceeds)}</span>
-                            </div>
-                          )}
-                          {summary.cashInducementsReceived > 0 && (
-                            <div className="flex justify-between px-1 py-2.5 border-t border-border/50">
-                              <span>Lease inducements received in cash</span>
-                              <span className="font-semibold">{formatCurrency(summary.cashInducementsReceived)}</span>
-                            </div>
-                          )}
-                          {summary.totalLoanPrincipalRepaid > 0 && (
-                            <div className="flex justify-between px-1 py-2.5 border-t border-border/50">
-                              <span>Principal repayment — loans</span>
-                              <span className="font-semibold">({formatCurrency(summary.totalLoanPrincipalRepaid)})</span>
-                            </div>
-                          )}
-                          {summary.totalCapitalLeasePrincipalRepaid > 0 && (
-                            <div className="flex justify-between px-1 py-2.5 border-t border-border/50">
-                              <span>Principal repayment — capital leases</span>
-                              <span className="font-semibold">({formatCurrency(summary.totalCapitalLeasePrincipalRepaid)})</span>
-                            </div>
-                          )}
-                        </>
-                      ) : (
-                        <div className="p-3 text-sm text-muted-foreground">
-                          No cash flow impact for the current fiscal year. Cash flow items are computed based on the fiscal year-end date.
-                        </div>
-                      )}
-                    </div>
-                    {summary.nonCashInducementsReceived > 0 && (
-                      <div className="rounded-lg border border-dashed bg-muted/20 overflow-hidden text-sm">
-                        <div className="px-1 pt-3 pb-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Non-cash transactions</div>
-                        <div className="flex justify-between px-1 py-2.5 border-t border-border/50">
-                          <span>Lease inducements received (non-cash)</span>
-                          <span className="font-semibold">{formatCurrency(summary.nonCashInducementsReceived)}</span>
-                        </div>
-                        <div className="p-2 border-t text-xs text-muted-foreground">
-                          Non-cash lease inducements (e.g. free rent periods or landlord-provided tenant improvements) are excluded from the statement of cash flows and disclosed here as a supplementary non-cash transaction.
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* 4. NOTE DISCLOSURES */}
-                  {/* LONG TERM DEBT */}
-                  {summary.loans.length > 0 && (
-                    <div className="rounded-xl border border-border/60 bg-card p-6 md:p-8 shadow-sm space-y-4 tabular-nums">
-                      <h2 className="text-lg font-display font-semibold border-b pb-3">Long Term Debt</h2>
-                      <table className="w-full text-sm">
-                        <tbody>
-                          {(() => {
-                            // Facilities group under their master agreement's lender;
-                            // remaining standalone loans keep the counterparty grouping.
-                            const masterOf = new Map<string, MasterAgreement>();
-                            for (const l of loans ?? []) {
-                              const m = l.masterAgreementId ? masters?.find((x) => x.id === l.masterAgreementId) : undefined;
-                              if (m) masterOf.set(l.id, m);
-                            }
-                            const masterGroups = (masters ?? [])
-                              .map((m) => ({
-                                master: m,
-                                items: summary.loans.filter((l) => masterOf.get(l.id)?.id === m.id)
-                                  .sort((a, b) => b.balanceAtYearEnd - a.balanceAtYearEnd),
-                              }))
-                              .filter((g) => g.items.length > 0);
-                            const standalone = summary.loans.filter((l) => !masterOf.has(l.id));
-                            return (
-                              <>
-                                {masterGroups.map((g) => (
-                                  <Fragment key={g.master.id}>
-                                    {g.items.map((loan) => (
-                                      <tr key={loan.id} className="border-b last:border-0">
-                                        <td className="py-3 pr-4 align-top w-[70%]">
-                                          <p className="leading-relaxed">{loan.description}</p>
-                                        </td>
-                                        <td className="py-3 text-right align-top whitespace-nowrap font-semibold">
-                                          {formatCurrency(loan.balanceAtYearEnd)}
-                                        </td>
-                                      </tr>
-                                    ))}
-                                    <tr className="border-b bg-muted/30">
-                                      <td className="py-2 pr-4 pl-8 italic text-muted-foreground">
-                                        Subtotal — {g.master.lender} master financing agreement
-                                        {(g.master.securityDescription || g.master.covenantDescription) && (
-                                          <span className="block not-italic text-xs mt-1 leading-relaxed">
-                                            {[g.master.securityDescription, g.master.covenantDescription].filter(Boolean).join(" ")}
-                                          </span>
-                                        )}
-                                      </td>
-                                      <td className="py-2 text-right font-semibold align-top">
-                                        {formatCurrency(g.items.reduce((s, l) => s + l.balanceAtYearEnd, 0))}
-                                      </td>
-                                    </tr>
-                                  </Fragment>
-                                ))}
-                                {groupByCounterparty(standalone, (l) => l.balanceAtYearEnd).map((group) => (
-                                  <Fragment key={group.key}>
-                                    {group.items.map((loan) => (
-                                      <tr key={loan.id} className="border-b last:border-0">
-                                        <td className="py-3 pr-4 align-top w-[70%]">
-                                          <p className="leading-relaxed">{loan.description}</p>
-                                        </td>
-                                        <td className="py-3 text-right align-top whitespace-nowrap font-semibold">
-                                          {formatCurrency(loan.balanceAtYearEnd)}
-                                        </td>
-                                      </tr>
-                                    ))}
-                                    {group.items.length > 1 && (
-                                      <tr className="border-b bg-muted/30">
-                                        <td className="py-2 pr-4 pl-8 italic text-muted-foreground">
-                                          Subtotal — {group.label}
-                                        </td>
-                                        <td className="py-2 text-right font-semibold">
-                                          {formatCurrency(group.items.reduce((s, l) => s + l.balanceAtYearEnd, 0))}
-                                        </td>
-                                      </tr>
-                                    )}
-                                  </Fragment>
-                                ))}
-                              </>
-                            );
-                          })()}
-                          <tr className="border-t-2">
-                            <td className="py-3 pr-4"></td>
-                            <td className="py-3 text-right font-semibold">{formatCurrency(summary.loanTotal)}</td>
-                          </tr>
-                          <tr>
-                            <td className="py-1 pr-4 pl-4 text-muted-foreground">Amounts payable within one year</td>
-                            <td className="py-1 text-right text-muted-foreground">({formatCurrency(summary.loanCurrent)})</td>
-                          </tr>
-                          <tr className="border-t-2">
-                            <td className="py-3 pr-4"></td>
-                            <td className="py-3 text-right font-bold">{formatCurrency(summary.loanLongTerm)}</td>
-                          </tr>
-                        </tbody>
-                      </table>
-
-                      {(() => {
-                        const violated = summary.loans.filter((l) => l.covenantViolation);
-                        if (violated.length === 0) return null;
-                        const callable = violated.reduce((s, l) => s + l.scheduledBeyondOneYear, 0);
-                        return (
-                          <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm space-y-1">
-                            <p className="font-semibold text-red-800">Covenant violation</p>
-                            <p className="text-red-900 leading-relaxed">
-                              As at year end, the Company was in violation of a financial covenant on {violated.length === 1 ? violated[0].name : `${violated.length} credit facilities`}. As a result, the lender is entitled to demand repayment and the entire outstanding balance of the affected debt has been classified as a current liability. Amounts otherwise scheduled for repayment beyond one year of {formatCurrency(callable)} are included in the current portion of long-term debt.
-                            </p>
-                          </div>
-                        );
-                      })()}
-
-                      <div className="space-y-2">
-                        <p className="text-sm text-muted-foreground">Principal repayment terms are approximately:</p>
-                        <table className="w-full text-sm">
-                          <tbody>
-                            {(() => {
-                              // Merge all loan year-by-year principal
-                              const merged = new Map<string, number>();
-                              for (const loan of summary.loans) {
-                                for (const y of loan.yearlyPrincipal) {
-                                  merged.set(y.label, (merged.get(y.label) ?? 0) + y.amount);
-                                }
-                              }
-                              const entries = Array.from(merged.entries()).sort((a, b) => {
-                                if (a[0] === "Thereafter") return 1;
-                                if (b[0] === "Thereafter") return -1;
-                                return Number(a[0]) - Number(b[0]);
-                              });
-                              const total = entries.reduce((s, [, v]) => s + v, 0);
-                              return (
-                                <>
-                                  {entries.map(([label, amount]) => (
-                                    <tr key={label} className="border-b">
-                                      <td className="py-1 pr-4 pl-8">{label}</td>
-                                      <td className="py-1 text-right">{formatCurrency(amount)}</td>
-                                    </tr>
-                                  ))}
-                                  <tr className="border-t-2">
-                                    <td className="py-2 pr-4 pl-8 font-semibold"></td>
-                                    <td className="py-2 text-right font-bold">{formatCurrency(total)}</td>
-                                  </tr>
-                                </>
-                              );
-                            })()}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* OBLIGATIONS UNDER CAPITAL LEASES */}
-                  {summary.capitalLeases.length > 0 && (
-                    <div className="rounded-xl border border-border/60 bg-card p-6 md:p-8 shadow-sm space-y-4 tabular-nums">
-                      <h2 className="text-lg font-display font-semibold border-b pb-3">Obligations Under Capital Leases</h2>
-                      <table className="w-full text-sm">
-                        <tbody>
-                          {groupByCounterparty(summary.capitalLeases, (l) => l.balanceAtYearEnd).map((group) => (
-                            <Fragment key={group.key}>
-                              {group.items.map((lease) => (
-                                <tr key={lease.id} className="border-b last:border-0">
-                                  <td className="py-3 pr-4 align-top w-[70%]">
-                                    <p className="leading-relaxed">{lease.description}</p>
-                                  </td>
-                                  <td className="py-3 text-right align-top whitespace-nowrap font-semibold">
-                                    {formatCurrency(lease.balanceAtYearEnd)}
-                                  </td>
-                                </tr>
-                              ))}
-                              {group.items.length > 1 && (
-                                <tr className="border-b bg-muted/30">
-                                  <td className="py-2 pr-4 pl-8 italic text-muted-foreground">
-                                    Subtotal — {group.label}
-                                  </td>
-                                  <td className="py-2 text-right font-semibold">
-                                    {formatCurrency(group.items.reduce((s, l) => s + l.balanceAtYearEnd, 0))}
-                                  </td>
-                                </tr>
-                              )}
-                            </Fragment>
-                          ))}
-                          <tr className="border-t-2">
-                            <td className="py-3 pr-4"></td>
-                            <td className="py-3 text-right font-semibold">{formatCurrency(summary.leaseTotal)}</td>
-                          </tr>
-                          <tr>
-                            <td className="py-1 pr-4 pl-4 text-muted-foreground">Amounts payable within one year</td>
-                            <td className="py-1 text-right text-muted-foreground">({formatCurrency(summary.leaseCurrent)})</td>
-                          </tr>
-                          <tr className="border-t-2">
-                            <td className="py-3 pr-4"></td>
-                            <td className="py-3 text-right font-bold">{formatCurrency(summary.leaseLongTerm)}</td>
-                          </tr>
-                        </tbody>
-                      </table>
-
-                      {(() => {
-                        const violated = summary.capitalLeases.filter((l) => l.covenantViolation);
-                        if (violated.length === 0) return null;
-                        const callable = violated.reduce((s, l) => s + l.scheduledBeyondOneYear, 0);
-                        return (
-                          <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm space-y-1">
-                            <p className="font-semibold text-red-800">Covenant violation</p>
-                            <p className="text-red-900 leading-relaxed">
-                              As at year end, the Company was in violation of a financial covenant on {violated.length === 1 ? violated[0].name : `${violated.length} lease obligations`}. As a result, the lessor is entitled to demand settlement and the entire outstanding obligation has been classified as a current liability. Amounts otherwise scheduled for repayment beyond one year of {formatCurrency(callable)} are included in the current portion of obligations under capital lease.
-                            </p>
-                          </div>
-                        );
-                      })()}
-
-                      <div className="space-y-2">
-                        <p className="text-sm text-muted-foreground">Future minimum capital lease payments are approximately:</p>
-                        <table className="w-full text-sm">
-                          <tbody>
-                            {(() => {
-                              const merged = new Map<string, number>();
-                              for (const lease of summary.capitalLeases) {
-                                for (const y of lease.yearlyBlended) {
-                                  merged.set(y.label, (merged.get(y.label) ?? 0) + y.amount);
-                                }
-                              }
-                              const entries = Array.from(merged.entries()).sort((a, b) => {
-                                if (a[0] === "Thereafter") return 1;
-                                if (b[0] === "Thereafter") return -1;
-                                return Number(a[0]) - Number(b[0]);
-                              });
-                              const totalMinimum = entries.reduce((s, [, v]) => s + v, 0);
-                              const totalObligations = summary.leaseTotal;
-                              const impliedInterest = totalMinimum - totalObligations;
-                              return (
-                                <>
-                                  {entries.map(([label, amount]) => (
-                                    <tr key={label} className="border-b">
-                                      <td className="py-1 pr-4 pl-8">{label}</td>
-                                      <td className="py-1 text-right">{formatCurrency(amount)}</td>
-                                    </tr>
-                                  ))}
-                                  <tr className="border-t">
-                                    <td className="py-1 pr-4 pl-8">Total minimum payments</td>
-                                    <td className="py-1 text-right">{formatCurrency(totalMinimum)}</td>
-                                  </tr>
-                                  <tr>
-                                    <td className="py-1 pr-4 pl-8 text-muted-foreground">Less interest amount at various rates</td>
-                                    <td className="py-1 text-right text-muted-foreground">({formatCurrency(Math.max(0, impliedInterest))})</td>
-                                  </tr>
-                                  <tr className="border-t-2">
-                                    <td className="py-2 pr-4 pl-8"></td>
-                                    <td className="py-2 text-right font-bold">{formatCurrency(totalObligations)}</td>
-                                  </tr>
-                                </>
-                              );
-                            })()}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* LEASE COMMITMENTS (Operating Leases) */}
-                  {summary.operatingLeases.length > 0 && (
-                    <div className="rounded-xl border border-border/60 bg-card p-6 md:p-8 shadow-sm space-y-4 tabular-nums">
-                      <h2 className="text-lg font-display font-semibold border-b pb-3">Lease Commitments</h2>
-                      <p className="text-sm text-muted-foreground">
-                        The Company has long term leases with respect to its premises and equipment as follows:
-                      </p>
-                      <table className="w-full text-sm">
-                        <tbody>
-                          {groupByCounterparty(summary.operatingLeases, (o) =>
-                            o.yearlyPayments.reduce((s, y) => s + y.amount, 0),
-                          ).map((group) => (
-                            <Fragment key={group.key}>
-                              {group.items.map((op) => (
-                                <tr key={op.id} className="border-b last:border-0">
-                                  <td className="py-3 pr-4 align-top w-[70%]">
-                                    <p className="leading-relaxed">{op.description}</p>
-                                  </td>
-                                  <td className="py-3 text-right align-top whitespace-nowrap font-semibold">
-                                    {formatCurrency(op.yearlyPayments.reduce((s, y) => s + y.amount, 0))}
-                                  </td>
-                                </tr>
-                              ))}
-                              {group.items.length > 1 && (
-                                <tr className="border-b bg-muted/30">
-                                  <td className="py-2 pr-4 pl-8 italic text-muted-foreground">
-                                    Subtotal — {group.label}
-                                  </td>
-                                  <td className="py-2 text-right font-semibold">
-                                    {formatCurrency(
-                                      group.items.reduce(
-                                        (s, o) => s + o.yearlyPayments.reduce((ss, y) => ss + y.amount, 0),
-                                        0,
-                                      ),
-                                    )}
-                                  </td>
-                                </tr>
-                              )}
-                            </Fragment>
-                          ))}
-                        </tbody>
-                      </table>
-
-                      <p className="text-sm text-muted-foreground pt-2">
-                        Future minimum lease payments are approximately:
-                      </p>
-                      <table className="w-full text-sm">
-                        <tbody>
-                          {(() => {
-                            const merged = new Map<string, number>();
-                            for (const op of summary.operatingLeases) {
-                              for (const y of op.yearlyPayments) {
-                                merged.set(y.label, (merged.get(y.label) ?? 0) + y.amount);
-                              }
-                            }
-                            const entries = Array.from(merged.entries()).sort((a, b) => {
-                              if (a[0] === "Thereafter") return 1;
-                              if (b[0] === "Thereafter") return -1;
-                              return Number(a[0]) - Number(b[0]);
-                            });
-                            const total = entries.reduce((s, [, v]) => s + v, 0);
-                            return (
-                              <>
-                                {entries.map(([label, amount]) => (
-                                  <tr key={label} className="border-b">
-                                    <td className="py-1 pr-4 pl-4">{label}</td>
-                                    <td className="py-1 text-right">{formatCurrency(amount)}</td>
-                                  </tr>
-                                ))}
-                                <tr className="border-t-2">
-                                  <td className="py-2 pr-4 pl-4"></td>
-                                  <td className="py-2 text-right font-bold">{formatCurrency(total)}</td>
-                                </tr>
-                              </>
-                            );
-                          })()}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
                 </>
               )}
             </TabsContent>
+
           </Tabs>
         </main>
       </div>
 
       <Dialog
         open={createOpen}
-        onOpenChange={(open) => {
-          setCreateOpen(open);
+          onOpenChange={(open) => {
+            setCreateOpen(open);
+            if (!open) setConfirmedImportedEvents([]);
           if (!open) setEditingLoanId(null);
         }}
       >
@@ -2882,12 +2823,46 @@ export default function FileDetail() {
             </div>
           )}
           <LoanFormFields form={form} setForm={setForm} mode={formMode} />
+          <ModificationAssessment
+            key={`${editingLoanId ?? "new"}-${modification.predecessorAgreementId ?? "none"}`}
+            agreements={[...(loans ?? []), ...(priorLoans ?? [])].filter((item, index, all) => all.findIndex((other) => other.id === item.id) === index)}
+            currentAgreementId={editingLoanId ?? undefined}
+            successor={form}
+            mode={formMode}
+            initialPredecessorId={modification.predecessorAgreementId}
+            initialEffectiveDate={modification.modificationEffectiveDate}
+            initialAssessment={modification.modificationAssessment}
+            onChange={setModification}
+          />
+          {importFindings.length > 0 && (
+            <div className="rounded-md border border-destructive bg-destructive/10 p-4 space-y-3">
+              <div className="flex items-center gap-2 text-destructive font-medium">
+                <AlertTriangle className="h-5 w-5" />
+                <span>Unresolved Import Findings</span>
+              </div>
+              <ul className="space-y-2">
+                {importFindings.map((finding, idx) => (
+                  <li key={idx} className="text-sm">
+                    <strong>{finding.observationDate}:</strong> {finding.reason}
+                    <div className="text-muted-foreground mt-1 bg-background/50 p-2 rounded">{finding.action}</div>
+                  </li>
+                ))}
+              </ul>
+              <Button size="sm" variant="outline" onClick={() => setImportFindings([])}>
+                Mark as Resolved
+              </Button>
+            </div>
+          )}
           <DialogFooter>
-            <Button variant="outline" onClick={() => { setCreateOpen(false); setEditingLoanId(null); }}>
+            <Button variant="outline" onClick={() => { setCreateOpen(false); setEditingLoanId(null); setConfirmedImportedEvents([]); setImportFindings([]); }}>
               Cancel
             </Button>
             <Button
               onClick={() => {
+                if (importFindings.length > 0) {
+                  toast({ title: "Unresolved findings", description: "Please resolve import findings before saving.", variant: "destructive" });
+                  return;
+                }
                 const validationError = validateLoanForm(form, formMode);
                 if (validationError) {
                   toast({ title: "Missing information", description: validationError, variant: "destructive" });
@@ -2904,11 +2879,27 @@ export default function FileDetail() {
                         isCapitalLease: form.isCapitalLease,
                         principal: form.principal,
                         downPayment: form.downPayment,
-                        interestRate: form.interestRate,
+                        interestRate: Number(form.interestRate),
+                        rateType: form.rateType,
+                        rateBenchmark: form.rateType === "prime_linked"
+                          ? form.rateBenchmark === "boc_v80691311" ? "boc_v80691311" : undefined
+                          : null,
+                        contractualPrimeName: form.contractualPrimeName,
+                        benchmarkEquivalentToContractualPrime: form.benchmarkEquivalentToContractualPrime,
+                        rateSpread: form.rateSpread,
+                        rateResetFrequency: form.rateResetFrequency,
+                        rateEffectiveConvention: form.rateEffectiveConvention,
+                        ratePaymentTreatment: form.ratePaymentTreatment,
+                        initialFvRateAssumption: form.initialFvRateAssumption,
                         amortizationYears: form.amortizationYears,
                         termYears: form.termYears,
                         startDate: form.startDate,
                         paymentFrequency: form.paymentFrequency,
+                        paymentTiming: form.paymentTiming,
+                        graceTermMode: form.graceTermMode,
+                        firstPaymentDate: form.firstPaymentDate || null,
+                        semiMonthlyFirstDueDay: form.semiMonthlyFirstDueDay ?? null,
+                        semiMonthlySecondDueDay: form.semiMonthlySecondDueDay ?? null,
                         ioMonths: form.ioMonths,
                         graceMonths: form.graceMonths,
                         graceInterestTreatment: form.graceInterestTreatment,
@@ -2934,10 +2925,7 @@ export default function FileDetail() {
                         otherInducements: form.otherInducements,
                         inducementReceivedInCash: form.inducementReceivedInCash,
                         covenantViolation: form.covenantViolation,
-                        fvRate: form.fvRate,
-                        fvDecision: form.fvDecision,
-                        fvDecisionNote: form.fvDecisionNote || undefined,
-                        securityClauses: form.securityClauses,
+                                                                                                securityClauses: form.securityClauses,
                         collateralType: form.collateralType || null,
                         collateralDescription: form.collateralDescription || null,
                         collateralDepreciableCost: form.collateralDepreciableCost || null,
@@ -2948,6 +2936,9 @@ export default function FileDetail() {
                         collateralDecliningRate: form.collateralDecliningRate || null,
                         collateralSalvageValue: form.collateralSalvageValue || null,
                         masterAgreementId: formMasterId,
+                        predecessorAgreementId: modification.predecessorAgreementId,
+                        modificationEffectiveDate: modification.modificationEffectiveDate,
+                        modificationAssessment: modification.modificationAssessment,
                       },
                     });
                   } else {
@@ -2960,12 +2951,26 @@ export default function FileDetail() {
                         isCapitalLease: form.isCapitalLease,
                         principal: form.principal,
                         downPayment: form.downPayment,
-                        interestRate: form.interestRate,
+                        interestRate: Number(form.interestRate),
+                        rateType: form.rateType,
+                        rateBenchmark: form.rateType === "prime_linked" ? "boc_v80691311" : null,
+                        contractualPrimeName: form.contractualPrimeName,
+                        benchmarkEquivalentToContractualPrime: form.benchmarkEquivalentToContractualPrime,
+                        rateSpread: form.rateSpread,
+                        rateResetFrequency: form.rateResetFrequency,
+                        rateEffectiveConvention: form.rateEffectiveConvention,
+                        ratePaymentTreatment: form.ratePaymentTreatment,
+                        initialFvRateAssumption: form.initialFvRateAssumption,
                         amortizationYears: form.amortizationYears,
                         termYears: form.termYears,
                         startDate: form.startDate,
                         fiscalYearEnd: file?.fiscalYearEnd ?? form.startDate,
                         paymentFrequency: form.paymentFrequency,
+                        paymentTiming: form.paymentTiming,
+                        graceTermMode: form.graceTermMode,
+                        firstPaymentDate: form.firstPaymentDate || null,
+                        semiMonthlyFirstDueDay: form.semiMonthlyFirstDueDay ?? null,
+                        semiMonthlySecondDueDay: form.semiMonthlySecondDueDay ?? null,
                         ioMonths: form.ioMonths,
                         graceMonths: form.graceMonths,
                         graceInterestTreatment: form.graceInterestTreatment,
@@ -2991,10 +2996,7 @@ export default function FileDetail() {
                         otherInducements: form.otherInducements,
                         inducementReceivedInCash: form.inducementReceivedInCash,
                         covenantViolation: form.covenantViolation,
-                        fvRate: form.fvRate,
-                        fvDecision: form.fvDecision,
-                        fvDecisionNote: form.fvDecisionNote || undefined,
-                        securityClauses: form.securityClauses,
+                                                                                                securityClauses: form.securityClauses,
                         collateralType: form.collateralType || null,
                         collateralDescription: form.collateralDescription || null,
                         collateralDepreciableCost: form.collateralDepreciableCost || null,
@@ -3004,15 +3006,25 @@ export default function FileDetail() {
                         collateralUsefulLifeYears: form.collateralUsefulLifeYears || null,
                         collateralDecliningRate: form.collateralDecliningRate || null,
                         collateralSalvageValue: form.collateralSalvageValue || null,
-                        sourceDocumentBlob: pendingSourceDoc?.blob,
+                        sourceDocumentId: pendingSourceDoc?.id,
                         sourceDocumentName: pendingSourceDoc?.name,
                         masterAgreementId: formMasterId,
+                        predecessorAgreementId: modification.predecessorAgreementId,
+                        modificationEffectiveDate: modification.modificationEffectiveDate,
+                        modificationAssessment: modification.modificationAssessment,
+                        ...(confirmedImportedEvents.length > 0
+                          ? {
+                              initialEvents: importedEventsToInputs(confirmedImportedEvents),
+                              initialEventSetReason: "Confirmed from PDF import",
+                              initialEventSetSource: pendingSourceDoc?.name ?? "Imported PDF",
+                            }
+                          : {}),
                       },
                     });
                   }
                 }
               }}
-              disabled={validateLoanForm(form, formMode) !== null || createLoan.isPending || updateLoan.isPending}
+              disabled={validateLoanForm(form, formMode) !== null || !modification.valid || createLoan.isPending || updateLoan.isPending}
             >
               {editingLoanId
                 ? updateLoan.isPending ? "Saving..." : "Save Changes"
@@ -3139,6 +3151,7 @@ export default function FileDetail() {
           if (result.isCapitalLease) {
             const termYears = Math.ceil(result.answers.termMonths / 12);
             setForm({
+              ...makeBlankLoanForm(),
               name: importedLeaseMeta?.name ?? "",
               description: "",
               counterparty: importedLeaseMeta?.lessor ?? null,
@@ -3150,6 +3163,12 @@ export default function FileDetail() {
               termYears: termYears,
               startDate: importedLeaseMeta?.startDate ?? "",
               paymentFrequency: "monthly",
+              paymentTiming: result.answers.paymentAtBeginning ? "beginning" : "end",
+              graceTermMode: "included",
+              firstPaymentDate: deriveFirstPaymentDate(importedLeaseMeta?.startDate ?? "", result.answers.paymentAtBeginning ? "beginning" : "end", 0, "monthly"),
+              firstPaymentDateDerived: true,
+              semiMonthlyFirstDueDay: undefined,
+              semiMonthlySecondDueDay: undefined,
               ioMonths: 0,
               graceMonths: 0,
               graceInterestTreatment: "capitalized",
@@ -3190,11 +3209,13 @@ export default function FileDetail() {
               collateralSalvageValue: 0,
             });
             setEditingLoanId(null);
+            setModification({ predecessorAgreementId: null, modificationEffectiveDate: null, modificationAssessment: null, valid: true });
             setCreateOpen(true);
           } else {
             setOperatingLeaseResult(result);
             setOperatingStartDate(importedLeaseMeta?.startDate ?? "");
             setOperatingCounterparty(importedLeaseMeta?.lessor ?? null);
+            setModification({ predecessorAgreementId: null, modificationEffectiveDate: null, modificationAssessment: null, valid: true });
             setOperatingDialogOpen(true);
           }
         }}
@@ -3486,6 +3507,27 @@ export default function FileDetail() {
             );
           })()}
 
+          {operatingLeaseResult && (
+            <ModificationAssessment
+              key={`operating-${modification.predecessorAgreementId ?? "none"}`}
+              agreements={[...(loans ?? []), ...(priorLoans ?? [])].filter((item, index, all) => all.findIndex((other) => other.id === item.id) === index)}
+              successor={{
+                ...makeBlankLoanForm(),
+                name: importedLeaseMeta?.name || "Operating lease",
+                counterparty: operatingCounterparty,
+                principal: operatingLeaseResult.answers.monthlyPayment * operatingLeaseResult.answers.termMonths,
+                monthlyPayment: operatingLeaseResult.answers.monthlyPayment,
+                termMonths: operatingLeaseResult.answers.termMonths,
+                termYears: operatingLeaseResult.answers.termMonths / 12,
+                startDate: operatingStartDate,
+              }}
+              mode="operating_lease"
+              initialPredecessorId={modification.predecessorAgreementId}
+              initialEffectiveDate={modification.modificationEffectiveDate}
+              initialAssessment={modification.modificationAssessment}
+              onChange={setModification}
+            />
+          )}
           <DialogFooter className="flex-col sm:flex-row gap-2">
             <Button variant="outline" onClick={() => setOperatingDialogOpen(false)} className="gap-2">
               Close
@@ -3550,8 +3592,11 @@ export default function FileDetail() {
                     camMonthly: (r.straightLine?.camMonthly ?? 0) > 0 ? r.straightLine!.camMonthly : undefined,
                     otherInducements: r.straightLine?.otherInducements ?? 0,
                     inducementReceivedInCash: r.straightLine?.inducementReceivedInCash ?? false,
-                    sourceDocumentBlob: pendingSourceDoc?.blob,
+                    sourceDocumentId: pendingSourceDoc?.id,
                     sourceDocumentName: pendingSourceDoc?.name,
+                    predecessorAgreementId: modification.predecessorAgreementId,
+                    modificationEffectiveDate: modification.modificationEffectiveDate,
+                    modificationAssessment: modification.modificationAssessment,
                   },
                 });
                 setOperatingDialogOpen(false);
@@ -3559,7 +3604,7 @@ export default function FileDetail() {
                 setOperatingCounterparty(null);
                 setImportedPercentageRent(null);
               }}
-              disabled={createLoan.isPending || !operatingStartDate}
+              disabled={createLoan.isPending || !operatingStartDate || !modification.valid}
               className="gap-2"
             >
               <FileText className="h-4 w-4" />
@@ -3662,12 +3707,21 @@ export default function FileDetail() {
           <DialogHeader>
             <DialogTitle className="font-display">Roll Forward Year-End File</DialogTitle>
             <DialogDescription>
-              Create a new year-end file for the next fiscal year end and copy all outstanding loans.
+              Create the next year-end file and copy all outstanding loans. Fully paid matured items are skipped.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">
             <div className="space-y-2">
-              <Label htmlFor="newFYE">New Fiscal Year End</Label>
+              <Label htmlFor="rfName">File Name</Label>
+              <Input
+                id="rfName"
+                value={rfName}
+                onChange={(e) => setRfName(e.target.value)}
+                placeholder="e.g. Acme Corp — 2026"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="newFYE">Next Fiscal Year End</Label>
               <Input
                 id="newFYE"
                 type="date"
@@ -3675,6 +3729,47 @@ export default function FileDetail() {
                 onChange={(e) => setNewYearEnd(e.target.value)}
               />
             </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="rfMateriality">Materiality (Optional)</Label>
+                <div className="relative">
+                  <span className="absolute left-3 top-2.5 text-muted-foreground text-sm">$</span>
+                  <Input
+                    id="rfMateriality"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    className="pl-6"
+                    value={rfMateriality}
+                    onChange={(e) => setRfMateriality(e.target.value)}
+                  />
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="rfTrivial">Trivial Threshold (Optional)</Label>
+                <div className="relative">
+                  <span className="absolute left-3 top-2.5 text-muted-foreground text-sm">$</span>
+                  <Input
+                    id="rfTrivial"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    className="pl-6"
+                    value={rfTrivialThreshold}
+                    onChange={(e) => setRfTrivialThreshold(e.target.value)}
+                  />
+                </div>
+              </div>
+            </div>
+            {loans && file?.fiscalYearEnd && (
+              <div className="bg-muted/50 p-3 rounded-md text-sm mt-2">
+                <div className="font-semibold mb-1">Items in scope:</div>
+                <div className="text-muted-foreground">
+                  {loans.length - maturedCount} active {loans.length - maturedCount === 1 ? 'item' : 'items'} will roll forward.
+                  {maturedCount > 0 && ` ${maturedCount} matured ${maturedCount === 1 ? 'item' : 'items'} will be evaluated for payoff.`}
+                </div>
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setRollForwardOpen(false)}>
@@ -3685,7 +3780,12 @@ export default function FileDetail() {
                 if (newYearEnd) {
                   rollForward.mutate({
                     id: fileId,
-                    data: { newFiscalYearEnd: newYearEnd },
+                    data: {
+                      newFiscalYearEnd: newYearEnd,
+                      name: rfName || undefined,
+                      materiality: rfMateriality ? Number(rfMateriality) : null,
+                      trivialThreshold: rfTrivialThreshold ? Number(rfTrivialThreshold) : null,
+                    },
                   });
                 }
               }}
@@ -3696,7 +3796,6 @@ export default function FileDetail() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
       <ConfirmDialog
         open={deleteOpen}
         onOpenChange={setDeleteOpen}

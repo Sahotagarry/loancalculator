@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { calculateBookedSchedule, buildLoanSummary, usesFairValue, effectiveLoanRate } from "./aspe-utils";
+import { calculateFairValueSchedule } from "@workspace/amortization";
 
 /* Regression coverage: a malformed persisted fvRate must never silently
    corrupt the booked schedule that backs loan detail, file views,
@@ -15,6 +16,36 @@ const base = {
 };
 
 describe("calculateBookedSchedule FV rate guarding", () => {
+  it("discounts a pre-first-due event from commencement at fractional elapsed time", () => {
+    const withEvent = {
+      ...base,
+      principal: 10000,
+      amortizationYears: 1,
+      termYears: 1,
+      startDate: "2025-01-01",
+      firstPaymentDate: "2025-03-01",
+      activeEvents: [{
+        id: "event-1",
+        effectiveDate: "2025-02-01",
+        ordering: "before_scheduled_payment" as const,
+        sequence: 1,
+        amount: 100,
+        treatment: "keep_payment" as const,
+      }],
+    };
+    const contractual = calculateBookedSchedule(withEvent);
+    const booked = calculateBookedSchedule({ ...withEvent, fvDecision: "use_fv", fvRate: 12 });
+    const legacyFirstDuePlacement = calculateFairValueSchedule(contractual.schedule, 12, "monthly", {
+      paymentTiming: "end",
+    });
+    const fractionalPeriods = 31 / 59;
+    const expectedDifference =
+      100 / Math.pow(1.01, fractionalPeriods) - 100 / Math.pow(1.01, 1);
+    // Public FV results are rounded to cents.
+    expect(booked.fairValue! - legacyFirstDuePlacement.fairValue).toBeCloseTo(expectedDifference, 2);
+    expect(booked.fairValue!).toBeGreaterThan(legacyFirstDuePlacement.fairValue);
+  });
+
   it("books the effective-interest schedule when use_fv has a valid rate", () => {
     const booked = calculateBookedSchedule({ ...base, fvDecision: "use_fv", fvRate: 7 });
     expect(booked.usedFairValue).toBe(true);

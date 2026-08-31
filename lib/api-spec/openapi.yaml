@@ -6,6 +6,8 @@ info:
 servers:
   - url: /api
     description: Base API path
+security:
+  - entraAuth: []
 tags:
   - name: health
     description: Health operations
@@ -22,6 +24,7 @@ tags:
 paths:
   /healthz:
     get:
+      security: []
       operationId: healthCheck
       tags: [health]
       summary: Health check
@@ -273,7 +276,25 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/File"
+                $ref: "#/components/schemas/RollForwardFileResult"
+        "200":
+          description: Existing idempotent roll-forward result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RollForwardFileResult"
+        "400":
+          description: Invalid roll-forward setup
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Source contractual evidence is unresolved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "404":
           description: File not found
           content:
@@ -544,6 +565,146 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /loans/{id}/event-sets:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: listLoanEventSets
+      tags: [loans]
+      summary: Get the active event set and immutable history
+      responses:
+        "200":
+          description: Active event set and history
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoanEventSetHistory"
+        "404":
+          description: Loan not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      operationId: createLoanEventSet
+      tags: [loans]
+      summary: Append and activate a complete successor event set
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateLoanEventSet"
+      responses:
+        "201":
+          description: Created event set
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoanEventSet"
+        "400":
+          description: Invalid event timeline
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Version conflict or agreement-change workflow required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /loans/{id}/fv-decisions:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: getFvDecisionHistory
+      tags: [loans]
+      summary: Get the current persisted FV decision, derived review status, and immutable history
+      responses:
+        "200":
+          description: FV review status and history
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FvDecisionHistory"
+        "404":
+          description: Loan not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+    post:
+      operationId: confirmFvDecision
+      tags: [loans]
+      summary: Append and persist an explicit FV decision confirmation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FvDecisionConfirmationInput"
+      responses:
+        "201":
+          description: Immutable confirmation appended
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FvDecisionConfirmation" }
+        "400":
+          description: Required decision evidence is invalid or incomplete
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: Optimistic concurrency conflict
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /loans/{id}/event-sets/preview:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      operationId: previewLoanEventSet
+      tags: [loans]
+      summary: Validate and fingerprint a proposed complete event set
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateLoanEventSet"
+      responses:
+        "200":
+          description: Structural preview and evidence
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoanEventSetPreview"
+        "400":
+          description: Invalid event timeline
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Version conflict or agreement-change workflow required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /prime-rate:
     get:
       operationId: getPrimeRate
@@ -568,6 +729,100 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+
+  /loans/{id}/rate-timeline:
+    get:
+      operationId: getLoanRateTimeline
+      tags: [loans]
+      summary: Get immutable contractual rate timeline and findings
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Rate terms, event-set history, and reconciliation findings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RateTimeline"
+
+  /loans/{id}/rate-overrides:
+    post:
+      operationId: overrideLoanRate
+      tags: [loans]
+      summary: Override the contractual benchmark rate from an effective date
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RateOverrideInput"
+      responses:
+        "201":
+          description: Immutable override event-set created
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+
+  /loans/{id}/rate-restores:
+    post:
+      operationId: restoreLoanSourcedRate
+      tags: [loans]
+      summary: Restore sourced benchmark evidence without erasing override history
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RateRestoreInput"
+      responses:
+        "201":
+          description: Immutable restoration event-set created
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+
+  /rate-resets/refresh:
+    post:
+      security: []
+      operationId: refreshDueRateResets
+      tags: [loans]
+      summary: Authenticated server-only due-reset refresh
+      parameters:
+        - name: x-rate-refresh-secret
+          in: header
+          required: true
+          schema: { type: string, writeOnly: true }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RateRefreshInput"
+      responses:
+        "200":
+          description: Refresh run evidence
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RateRefreshRun" }
+        "401":
+          description: Scheduler authentication failed closed
+
+  /rate-resets/status:
+    get:
+      operationId: getRateResetStatus
+      tags: [loans]
+      summary: Get refresh run and unresolved reconciliation status
+      responses:
+        "200":
+          description: Recent runs and unresolved findings
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
 
   /loans/{id}/rollforward:
     parameters:
@@ -595,37 +850,6 @@ paths:
                 $ref: "#/components/schemas/Loan"
         "404":
           description: Loan not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-
-  /settings/unlock:
-    post:
-      operationId: unlockSettings
-      tags: [settings]
-      summary: Exchange the admin password for a short-lived settings token
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/UnlockSettingsInput"
-      responses:
-        "200":
-          description: Unlocked
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/UnlockSettingsResult"
-        "401":
-          description: Incorrect password
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        "429":
-          description: Too many attempts
           content:
             application/json:
               schema:
@@ -765,8 +989,203 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /auth/me:
+    get:
+      operationId: getAuthMe
+      tags: [auth]
+      responses:
+        "200": { description: Current authenticated identity, content: { application/json: { schema: { $ref: "#/components/schemas/AuthMe" } } } }
+  /admin/users:
+    get:
+      operationId: listAdminUsers
+      tags: [admin]
+      responses:
+        "200": { description: Tenant users, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/AppUser" } } } } }
+    post:
+      operationId: createAdminUser
+      tags: [admin]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AppUserInput" } } } }
+      responses: { "201": { description: User registered, content: { application/json: { schema: { $ref: "#/components/schemas/AppUser" } } } } }
+  /admin/users/{id}:
+    patch:
+      operationId: updateAdminUser
+      tags: [admin]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AppUserUpdate" } } } }
+      responses: { "200": { description: Updated user, content: { application/json: { schema: { $ref: "#/components/schemas/AppUser" } } } } }
+  /admin/legacy-clients:
+    get:
+      operationId: listLegacyClients
+      tags: [admin]
+      responses:
+        "200":
+          description: Quarantined legacy clients
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Client" }
+  /admin/legacy-clients/{id}/adopt:
+    post:
+      operationId: adoptLegacyClient
+      tags: [admin]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ClientMembersInput" } } } }
+      responses: { "200": { description: Adopted client, content: { application/json: { schema: { $ref: "#/components/schemas/Client" } } } } }
+  /admin/clients/{id}/members:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+    get:
+      operationId: getClientMembers
+      tags: [admin]
+      responses:
+        "200":
+          description: Client members
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/AppUser" }
+    put:
+      operationId: replaceClientMembers
+      tags: [admin]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ClientMembersInput" } } } }
+      responses: { "204": { description: Replaced } }
+
 components:
+  securitySchemes:
+    entraAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: OIDC
   schemas:
+    AuthMe:
+      type: object
+      required: [tenantId, objectId, firmId, role]
+      properties:
+        tenantId: { type: string }
+        objectId: { type: string }
+        firmId: { type: string }
+        displayName: { type: string, nullable: true }
+        email: { type: string, nullable: true }
+        role: { type: string, enum: [admin, manager, accountant, read_only] }
+    AppUser:
+      type: object
+      required: [objectId, role, isActive]
+      properties:
+        tenantId: { type: string }
+        objectId: { type: string }
+        firmId: { type: string }
+        displayName: { type: string, nullable: true }
+        email: { type: string, nullable: true }
+        role: { type: string, enum: [admin, manager, accountant, read_only] }
+        isActive: { type: boolean }
+    AppUserInput:
+      type: object
+      required: [objectId, role]
+      properties:
+        objectId: { type: string, format: uuid }
+        displayName: { type: string, nullable: true }
+        email: { type: string, nullable: true }
+        role: { type: string, enum: [admin, manager, accountant, read_only] }
+        isActive: { type: boolean }
+    AppUserUpdate:
+      type: object
+      properties:
+        displayName: { type: string, nullable: true }
+        email: { type: string, nullable: true }
+        role: { type: string, enum: [admin, manager, accountant, read_only] }
+        isActive: { type: boolean }
+    ClientMembersInput:
+      type: object
+      required: [memberObjectIds]
+      properties:
+        memberObjectIds: { type: array, items: { type: string } }
+    FvDecisionConfirmationInput:
+      type: object
+      required: [expectedVersion, treatment, confirmedBy]
+      properties:
+        expectedVersion: { type: integer, minimum: 0 }
+        treatment:
+          type: string
+          enum: [use_fv, trivial, immaterial]
+        marketEffectiveRate:
+          type: [number, "null"]
+        rationaleNote:
+          type: [string, "null"]
+        confirmedBy:
+          type: string
+          minLength: 1
+
+    FvDecisionConfirmation:
+      type: object
+      required:
+        - id
+        - loanId
+        - version
+        - treatment
+        - confirmedAt
+        - confirmedBy
+        - canonicalFingerprint
+        - contractFingerprint
+        - reportingContextFingerprint
+        - evidenceVersion
+        - calculationVersion
+        - evidence
+      properties:
+        id: { type: string }
+        loanId: { type: string }
+        sourceConfirmationId: { type: [string, "null"], description: Immutable confirmation from which this historical evidence was inherited. }
+        inheritedFromLoanId: { type: [string, "null"], description: Source loan that owned the inherited evidence. }
+        sourceFileId: { type: [string, "null"], description: Source reporting file for the inherited evidence. }
+        version: { type: integer }
+        treatment:
+          type: string
+          enum: [use_fv, trivial, immaterial]
+        marketEffectiveRate: { type: [string, "null"] }
+        rationaleNote: { type: [string, "null"] }
+        confirmedAt: { type: string, format: date-time }
+        confirmedBy: { type: string }
+        canonicalFingerprint: { type: string }
+        contractFingerprint: { type: string }
+        eventSetFingerprint: { type: [string, "null"] }
+        reportingContextFingerprint: { type: string }
+        modificationFingerprint: { type: [string, "null"] }
+        evidenceVersion: { type: string }
+        calculationVersion: { type: string }
+        evidence:
+          type: object
+          additionalProperties: true
+
+    FvDecisionHistory:
+      type: object
+      required: [status, reviewRequired, staleReasons, missingRequirements, history]
+      properties:
+        status:
+          type: string
+          enum: [current, stale, incomplete]
+        reviewRequired: { type: boolean }
+        staleReasons:
+          type: array
+          items:
+            type: string
+            enum:
+              - contract_terms_changed
+              - event_or_rate_history_changed
+              - reporting_context_changed
+              - modification_assessment_changed
+              - compatibility_projection_mismatch
+              - inherited_historical_evidence
+        missingRequirements:
+          type: array
+          items: { type: string }
+        current:
+          oneOf:
+            - $ref: "#/components/schemas/FvDecisionConfirmation"
+            - type: "null"
+        history:
+          type: array
+          items: { $ref: "#/components/schemas/FvDecisionConfirmation" }
+
     TrashedClient:
       type: object
       properties:
@@ -913,6 +1332,9 @@ components:
           type: number
         materiality:
           type: number
+        rolledFromId:
+          type: string
+          nullable: true
         dismissedFindings:
           type: array
           items:
@@ -988,6 +1410,43 @@ components:
           type: string
         interestRate:
           type: string
+        rateType:
+          type: string
+          enum: [fixed, prime_linked]
+        rateBenchmark:
+          type: string
+          description: Current BoC prime is boc_v80691311; legacy boc_v122495 is returned only as retired, unresolved evidence.
+          enum: [boc_v80691311, boc_v122495]
+          nullable: true
+        contractualPrimeName:
+          type: string
+          nullable: true
+        benchmarkEquivalentToContractualPrime:
+          type: boolean
+          nullable: true
+        rateSpread:
+          type: string
+          nullable: true
+        rateResetFrequency:
+          type: string
+          enum: [immediate, monthly, quarterly, annual]
+          nullable: true
+        rateEffectiveConvention:
+          type: string
+          enum: [observation_date, next_business_day, next_payment_date]
+          nullable: true
+        ratePaymentTreatment:
+          type: string
+          enum: [keep_payment, keep_maturity]
+          nullable: true
+        rateRefreshCheckpointDate:
+          type: string
+          format: date
+          nullable: true
+        initialFvRateAssumption:
+          type: object
+          additionalProperties: true
+          nullable: true
         amortizationYears:
           type: number
         termYears:
@@ -1000,6 +1459,28 @@ components:
           format: date
         paymentFrequency:
           type: string
+        paymentTiming:
+          type: string
+          enum: [beginning, end]
+          description: Whether scheduled payments are due at the end or beginning of each payment period.
+        graceTermMode:
+          type: string
+          enum: [included, added]
+          description: Whether grace months are included in the stated term or extend it.
+        firstPaymentDate:
+          type: string
+          format: date
+          nullable: true
+        semiMonthlyFirstDueDay:
+          type: integer
+          minimum: 1
+          maximum: 31
+          nullable: true
+        semiMonthlySecondDueDay:
+          type: integer
+          minimum: 1
+          maximum: 31
+          nullable: true
         graceMonths:
           type: integer
         graceInterestTreatment:
@@ -1095,6 +1576,18 @@ components:
           type: boolean
         rolledFromId:
           type: string
+        predecessorAgreementId:
+          type: string
+          nullable: true
+          description: Explicit user-selected predecessor agreement; never inferred from annual roll-forward lineage.
+        modificationEffectiveDate:
+          type: string
+          format: date
+          nullable: true
+        modificationAssessment:
+          allOf:
+            - $ref: "#/components/schemas/AgreementModificationAssessment"
+          nullable: true
         masterAgreementId:
           type: string
           nullable: true
@@ -1113,6 +1606,34 @@ components:
         sourceDocumentName:
           type: string
           nullable: true
+        currentRevisionId:
+          type: string
+          nullable: true
+        currentRevisionHash:
+          type: string
+          nullable: true
+        calculationVersion:
+          type: string
+          nullable: true
+        activeEventSetId:
+          type: string
+          nullable: true
+        activeEventSetVersion:
+          type: integer
+        activeEventSetHash:
+          type: string
+          nullable: true
+        activeEvents:
+          type: array
+          description: Events in the active immutable event set, in canonical effective-date, ordering, and sequence order.
+          items:
+            $ref: "#/components/schemas/LoanEvent"
+        activeRateEvents:
+          type: array
+          description: Active immutable sourced or overridden rate-reset segments.
+          items:
+            type: object
+            additionalProperties: true
         createdAt:
           type: string
           format: date-time
@@ -1131,6 +1652,8 @@ components:
         - startDate
         - fiscalYearEnd
         - paymentFrequency
+        - paymentTiming
+        - graceTermMode
         - ioMonths
         - specificIoMonths
         - balloonPayment
@@ -1146,12 +1669,25 @@ components:
         - otherInducements
         - inducementReceivedInCash
         - covenantViolation
+        - activeEventSetVersion
+        - activeEvents
         - createdAt
         - updatedAt
 
     CreateLoan:
       type: object
       properties:
+        initialEvents:
+          type: array
+          description: Optional complete initial principal-event timeline, saved atomically with the first contractual revision.
+          items:
+            $ref: "#/components/schemas/LoanEventInput"
+        initialEventSetReason:
+          type: string
+          minLength: 1
+        initialEventSetSource:
+          type: string
+          minLength: 1
         name:
           type: string
         description:
@@ -1168,6 +1704,40 @@ components:
           nullable: true
         interestRate:
           type: number
+        rateType:
+          type: string
+          enum: [fixed, prime_linked]
+          default: fixed
+        rateBenchmark:
+          type: string
+          description: Prime-linked contracts must explicitly adopt the current BoC prime benchmark.
+          enum: [boc_v80691311]
+          nullable: true
+        contractualPrimeName:
+          type: string
+          nullable: true
+        benchmarkEquivalentToContractualPrime:
+          type: boolean
+          nullable: true
+        rateSpread:
+          type: number
+          nullable: true
+        rateResetFrequency:
+          type: string
+          enum: [immediate, monthly, quarterly, annual]
+          nullable: true
+        rateEffectiveConvention:
+          type: string
+          enum: [observation_date, next_business_day, next_payment_date]
+          nullable: true
+        ratePaymentTreatment:
+          type: string
+          enum: [keep_payment, keep_maturity]
+          nullable: true
+        initialFvRateAssumption:
+          type: object
+          additionalProperties: true
+          nullable: true
         amortizationYears:
           type: number
         termYears:
@@ -1180,6 +1750,28 @@ components:
           format: date
         paymentFrequency:
           type: string
+        paymentTiming:
+          type: string
+          enum: [beginning, end]
+          default: end
+        graceTermMode:
+          type: string
+          enum: [included, added]
+          default: included
+        firstPaymentDate:
+          type: string
+          format: date
+          nullable: true
+        semiMonthlyFirstDueDay:
+          type: integer
+          minimum: 1
+          maximum: 31
+          nullable: true
+        semiMonthlySecondDueDay:
+          type: integer
+          minimum: 1
+          maximum: 31
+          nullable: true
         graceMonths:
           type: integer
         graceInterestTreatment:
@@ -1275,12 +1867,18 @@ components:
           type: boolean
         fvRate:
           type: number
+          deprecated: true
+          description: Direct FV inputs are rejected; use the FV confirmation endpoint after creating the loan.
         fvDecision:
           type: string
           enum: [use_fv, trivial, immaterial]
+          deprecated: true
+          description: Direct FV inputs are rejected; use the FV confirmation endpoint after creating the loan.
         fvDecisionNote:
           type: string
-        sourceDocumentBlob:
+          deprecated: true
+          description: Direct FV inputs are rejected; use the FV confirmation endpoint after creating the loan.
+        sourceDocumentId:
           type: string
           nullable: true
         sourceDocumentName:
@@ -1289,6 +1887,21 @@ components:
         masterAgreementId:
           type: string
           nullable: true
+        predecessorAgreementId:
+          type: string
+          nullable: true
+          description: Explicitly links this agreement to a prior agreement. Send null with the other modification fields null to remove a link.
+        modificationEffectiveDate:
+          type: string
+          format: date
+          nullable: true
+        modificationAssessment:
+          allOf:
+            - $ref: "#/components/schemas/AgreementModificationAssessment"
+          nullable: true
+        changeReason:
+          type: string
+          description: Audit reason recorded on the initial contract revision.
       required:
         - name
         - principal
@@ -1317,6 +1930,39 @@ components:
           nullable: true
         interestRate:
           type: number
+        rateType:
+          type: string
+          enum: [fixed, prime_linked]
+        rateBenchmark:
+          type: string
+          description: Set boc_v80691311 to explicitly adopt the current BoC prime benchmark; retired identifiers cannot be written.
+          enum: [boc_v80691311]
+          nullable: true
+        contractualPrimeName:
+          type: string
+          nullable: true
+        benchmarkEquivalentToContractualPrime:
+          type: boolean
+          nullable: true
+        rateSpread:
+          type: number
+          nullable: true
+        rateResetFrequency:
+          type: string
+          enum: [immediate, monthly, quarterly, annual]
+          nullable: true
+        rateEffectiveConvention:
+          type: string
+          enum: [observation_date, next_business_day, next_payment_date]
+          nullable: true
+        ratePaymentTreatment:
+          type: string
+          enum: [keep_payment, keep_maturity]
+          nullable: true
+        initialFvRateAssumption:
+          type: object
+          additionalProperties: true
+          nullable: true
         amortizationYears:
           type: number
         termYears:
@@ -1326,6 +1972,26 @@ components:
           format: date
         paymentFrequency:
           type: string
+        paymentTiming:
+          type: string
+          enum: [beginning, end]
+        graceTermMode:
+          type: string
+          enum: [included, added]
+        firstPaymentDate:
+          type: string
+          format: date
+          nullable: true
+        semiMonthlyFirstDueDay:
+          type: integer
+          minimum: 1
+          maximum: 31
+          nullable: true
+        semiMonthlySecondDueDay:
+          type: integer
+          minimum: 1
+          maximum: 31
+          nullable: true
         graceMonths:
           type: integer
         graceInterestTreatment:
@@ -1424,13 +2090,6 @@ components:
           type: boolean
         covenantViolation:
           type: boolean
-        fvRate:
-          type: number
-        fvDecision:
-          type: string
-          enum: [use_fv, trivial, immaterial]
-        fvDecisionNote:
-          type: string
         dismissedFindings:
           type: array
           items:
@@ -1439,6 +2098,192 @@ components:
         masterAgreementId:
           type: string
           nullable: true
+        predecessorAgreementId:
+          type: string
+          nullable: true
+          description: Explicitly links this agreement to a prior agreement. Send null with the other modification fields null to remove a link.
+        modificationEffectiveDate:
+          type: string
+          format: date
+          nullable: true
+        modificationAssessment:
+          allOf:
+            - $ref: "#/components/schemas/AgreementModificationAssessment"
+          nullable: true
+        changeReason:
+          type: string
+          description: Audit reason recorded when schedule-driving terms change.
+
+    AgreementModificationAssessment:
+      type: object
+      additionalProperties: false
+      properties:
+        status:
+          type: string
+          enum: [confirmed]
+        assessmentDate:
+          type: string
+          format: date
+        confirmedAt:
+          type: string
+          format: date-time
+        confirmedBy:
+          type: string
+          minLength: 1
+        evidence:
+          $ref: "#/components/schemas/AgreementModificationEvidence"
+        conclusion:
+          $ref: "#/components/schemas/AgreementModificationConclusion"
+      required: [status, assessmentDate, confirmedAt, confirmedBy, evidence, conclusion]
+
+    AgreementModificationEvidence:
+      type: object
+      additionalProperties: false
+      properties:
+        changeSummary:
+          type: string
+          minLength: 1
+        contractualChanges:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/AgreementContractualChange"
+        qualitativeFactors:
+          type: array
+          items:
+            type: string
+            minLength: 1
+        facts:
+          $ref: "#/components/schemas/AgreementModificationFacts"
+        quantitativeTest:
+          allOf:
+            - $ref: "#/components/schemas/AgreementQuantitativeTest"
+          nullable: true
+      required: [changeSummary, contractualChanges, qualitativeFactors, facts]
+
+    AgreementModificationFacts:
+      type: object
+      additionalProperties: false
+      properties:
+        creditorChanged: { type: boolean }
+        creditorChangedEvidence: { type: string }
+        legalDischarge: { type: boolean }
+        legalDischargeEvidence: { type: string }
+        relatedParty: { type: boolean }
+        relatedPartyEvidence: { type: string }
+      required: [creditorChanged, legalDischarge, relatedParty]
+
+    AgreementContractualChange:
+      type: object
+      additionalProperties: false
+      properties:
+        term: { type: string, minLength: 1 }
+        predecessorValue: { type: string, minLength: 1 }
+        successorValue: { type: string, minLength: 1 }
+        significance: { type: string, minLength: 1 }
+        sourceReference: { type: string, minLength: 1 }
+      required: [term, predecessorValue, successorValue, significance, sourceReference]
+
+    AgreementQuantitativeTest:
+      type: object
+      additionalProperties: false
+      properties:
+        method: { type: string, minLength: 1 }
+        originalEffectiveRate: { type: number }
+        carryingAmount: { type: number }
+        originalRemainingCashFlows:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/AgreementCashFlow" }
+        modifiedCashFlows:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/AgreementCashFlow" }
+        sameDayPaymentTreatment:
+          type: string
+          enum: [include, exclude]
+        creditorFees: { type: number }
+        otherTransactionCosts: { type: number }
+        accruedInterest: { type: number }
+        accruedInterestTreatment:
+          type: string
+          enum: [included_in_carrying_amount, include_in_cash_flows, add_to_carrying_amount, exclude]
+        predecessorAmount: { type: number }
+        successorAmount: { type: number }
+        presentValueOfOriginalRemainingCashFlows:
+          type: number
+          description: "Canonical server-computed denominator: present value of remaining original cash flows at the original effective rate."
+        presentValueOfModifiedCashFlows:
+          type: number
+          description: "Canonical server-computed present value of modified cash flows, including applicable creditor fees and accrued interest treatment."
+        differenceAmount: { type: number }
+        differencePercent: { type: number }
+        retainedFeesAndCosts:
+          type: number
+          minimum: 0
+          description: Separately evidenced prior unamortized fees and costs; never includes current transaction costs.
+        retainedFeesAndCostsSourceReference:
+          type: string
+          minLength: 1
+        newFeesAndCosts:
+          type: number
+          minimum: 0
+          description: Resulting-basis input equal to creditorFees plus otherTransactionCosts.
+        settlementConsideration:
+          type: number
+          minimum: 0
+          description: Explicit settlement consideration. Required and greater than zero when the accountant concludes extinguishment; never inferred from present value.
+        recommendation:
+          type: string
+          enum: [derecognize_original, account_as_modification]
+      required: [method, originalEffectiveRate, carryingAmount, originalRemainingCashFlows, modifiedCashFlows, sameDayPaymentTreatment, creditorFees, otherTransactionCosts, accruedInterest, accruedInterestTreatment, presentValueOfOriginalRemainingCashFlows, presentValueOfModifiedCashFlows, differenceAmount, differencePercent, retainedFeesAndCosts, retainedFeesAndCostsSourceReference, newFeesAndCosts, recommendation]
+
+    AgreementCashFlow:
+      type: object
+      additionalProperties: false
+      properties:
+        date: { type: string, format: date }
+        amount: { type: number }
+        description: { type: string, minLength: 1 }
+        sourceReference: { type: string, minLength: 1 }
+      required: [date, amount, description, sourceReference]
+
+    AgreementModificationConclusion:
+      type: object
+      additionalProperties: false
+      properties:
+        agreementChangeType:
+          type: string
+          enum: [renewal, modification]
+        accountingTreatment:
+          type: string
+          enum: [continuation, extinguishment, new_lease]
+        rationale:
+          type: string
+          minLength: 1
+        leaseTransition:
+          $ref: "#/components/schemas/AgreementLeaseTransition"
+      required: [agreementChangeType, accountingTreatment, rationale]
+
+    AgreementLeaseTransition:
+      type: object
+      additionalProperties: false
+      properties:
+        predecessorLeaseType: { type: string, enum: [operating, capital] }
+        originalLeaseTerminated: { type: boolean }
+        replacementLeaseExecuted: { type: boolean }
+        terminationEvidenceReference: { type: string, minLength: 1 }
+        entryDate: { type: string, format: date }
+        debitAccount: { type: string, minLength: 1 }
+        creditAccount: { type: string, minLength: 1 }
+        amount: { type: number }
+        entryEvidenceReference: { type: string, minLength: 1 }
+        predecessorDeferredRentAsset: { type: number, minimum: 0, nullable: true }
+        predecessorDeferredRentLiability: { type: number, minimum: 0, nullable: true }
+        predecessorAssetCost: { type: number, minimum: 0, nullable: true }
+        predecessorAccumulatedDepreciation: { type: number, minimum: 0, nullable: true }
+        successorInitialAmount: { type: number, minimum: 0 }
+      required: [predecessorLeaseType, originalLeaseTerminated, replacementLeaseExecuted, terminationEvidenceReference, entryDate, debitAccount, creditAccount, amount, entryEvidenceReference, predecessorDeferredRentAsset, predecessorDeferredRentLiability, predecessorAssetCost, predecessorAccumulatedDepreciation, successorInitialAmount]
 
     MasterAgreement:
       type: object
@@ -1507,7 +2352,7 @@ components:
         covenantDescription:
           type: string
           nullable: true
-        sourceDocumentBlob:
+        sourceDocumentId:
           type: string
           nullable: true
         sourceDocumentName:
@@ -1557,6 +2402,45 @@ components:
         - suggestedRate
         - source
 
+    RateOverrideInput:
+      type: object
+      properties:
+        effectiveDate: { type: string, format: date }
+        benchmarkRate: { type: number, minimum: 0, maximum: 100 }
+        reason: { type: string, minLength: 1 }
+        author: { type: string, minLength: 1 }
+        sourceUrl: { type: string, minLength: 1 }
+      required: [effectiveDate, benchmarkRate, reason, author, sourceUrl]
+
+    RateRestoreInput:
+      type: object
+      properties:
+        effectiveDate: { type: string, format: date }
+        author: { type: string, minLength: 1 }
+      required: [effectiveDate, author]
+
+    RateTimeline:
+      type: object
+      additionalProperties: true
+
+    RateRefreshRun:
+      type: object
+      properties:
+        id: { type: string }
+        startedAt: { type: string, format: date-time }
+        completedAt: { type: string, format: date-time, nullable: true }
+        status: { type: string, enum: [running, succeeded, partial, failed] }
+        attempted: { type: integer }
+        applied: { type: integer }
+        unresolved: { type: integer }
+        evidence: { type: object, additionalProperties: true, nullable: true }
+      required: [id, startedAt, status, attempted, applied, unresolved]
+
+    RateRefreshInput:
+      type: object
+      properties:
+        date: { type: string, format: date }
+
     RollForwardRequest:
       type: object
       properties:
@@ -1575,8 +2459,35 @@ components:
         newFiscalYearEnd:
           type: string
           format: date
+        name:
+          type: string
+          minLength: 1
+          maxLength: 500
+        trivialThreshold:
+          type: number
+          minimum: 0
+          maximum: 9999999999.99
+          multipleOf: 0.01
+          nullable: true
+        materiality:
+          type: number
+          minimum: 0
+          maximum: 9999999999.99
+          multipleOf: 0.01
+          nullable: true
       required:
         - newFiscalYearEnd
+
+    RollForwardFileResult:
+      allOf:
+        - $ref: "#/components/schemas/File"
+        - type: object
+          properties:
+            rolledLoanCount: { type: integer, minimum: 0 }
+            skippedLoanCount: { type: integer, minimum: 0 }
+            evidenceVersion: { type: string }
+            idempotent: { type: boolean }
+          required: [rolledLoanCount, skippedLoanCount, evidenceVersion, idempotent]
 
     AzureSettingsStatus:
       type: object
@@ -1616,26 +2527,6 @@ components:
           type: string
         storageConnectionString:
           type: string
-
-    UnlockSettingsInput:
-      type: object
-      properties:
-        password:
-          type: string
-          minLength: 1
-      required:
-        - password
-
-    UnlockSettingsResult:
-      type: object
-      properties:
-        token:
-          type: string
-        expiresAt:
-          type: string
-      required:
-        - token
-        - expiresAt
 
     DocumentUpload:
       type: object
@@ -1683,6 +2574,28 @@ components:
           type: string
           enum: [monthly, semi-monthly, bi-weekly, weekly]
           nullable: true
+        paymentTiming:
+          type: string
+          enum: [beginning, end]
+          nullable: true
+        graceTermMode:
+          type: string
+          enum: [included, added]
+          nullable: true
+        firstPaymentDate:
+          type: string
+          format: date
+          nullable: true
+        semiMonthlyFirstDueDay:
+          type: integer
+          minimum: 1
+          maximum: 31
+          nullable: true
+        semiMonthlySecondDueDay:
+          type: integer
+          minimum: 1
+          maximum: 31
+          nullable: true
         paymentAmount:
           type: number
           nullable: true
@@ -1701,6 +2614,11 @@ components:
           nullable: true
         securityDescription:
           type: string
+          nullable: true
+        suggestedEvents:
+          type: array
+          items:
+            $ref: "#/components/schemas/SuggestedLoanEvent"
           nullable: true
 
     ImportedLeaseFields:
@@ -1840,6 +2758,206 @@ components:
           type: string
           nullable: true
 
+    LoanEventInput:
+      type: object
+      properties:
+        kind:
+          type: string
+          enum: [principal_prepayment]
+        effectiveDate:
+          type: string
+          format: date
+        ordering:
+          type: string
+          enum: [before_scheduled_payment, after_scheduled_payment]
+        sequence:
+          type: integer
+          minimum: 1
+        amount:
+          type: number
+          exclusiveMinimum: 0
+        treatment:
+          type: string
+          enum: [keep_payment, keep_maturity]
+        classification:
+          type: string
+          enum: [ordinary, agreement_change]
+        source:
+          type: string
+          minLength: 1
+        reason:
+          type: string
+          minLength: 1
+        authoredAt:
+          type: string
+          format: date-time
+        author:
+          type: string
+          nullable: true
+        supersedesEventId:
+          type: string
+          nullable: true
+        originEventId:
+          type: string
+          nullable: true
+      required: [kind, effectiveDate, ordering, sequence, amount, treatment, classification, source, reason, authoredAt]
+
+    LoanEvent:
+      allOf:
+        - $ref: "#/components/schemas/LoanEventInput"
+        - type: object
+          properties:
+            id:
+              type: string
+            setId:
+              type: string
+            loanId:
+              type: string
+            termRevisionId:
+              type: string
+          required: [id, setId, loanId, termRevisionId]
+
+    CreateLoanEventSet:
+      type: object
+      properties:
+        expectedVersion:
+          type: integer
+          minimum: 0
+        termRevisionId:
+          type: string
+        reason:
+          type: string
+          minLength: 1
+        source:
+          type: string
+          minLength: 1
+        author:
+          type: string
+          nullable: true
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/LoanEventInput"
+      required: [expectedVersion, termRevisionId, reason, source, events]
+
+    LoanEventSet:
+      type: object
+      properties:
+        id:
+          type: string
+        loanId:
+          type: string
+        termRevisionId:
+          type: string
+        version:
+          type: integer
+        fingerprint:
+          type: string
+        supersedesSetId:
+          type: string
+          nullable: true
+        reason:
+          type: string
+        source:
+          type: string
+        author:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/LoanEvent"
+      required: [id, loanId, termRevisionId, version, fingerprint, reason, source, createdAt, events]
+
+    LoanEventSetHistory:
+      type: object
+      properties:
+        active:
+          allOf:
+            - $ref: "#/components/schemas/LoanEventSet"
+          nullable: true
+        history:
+          type: array
+          items:
+            $ref: "#/components/schemas/LoanEventSet"
+      required: [active, history]
+
+    LoanEventSetPreview:
+      type: object
+      properties:
+        valid:
+          type: boolean
+        nextVersion:
+          type: integer
+        fingerprint:
+          type: string
+        termRevisionId:
+          type: string
+        orderedEvents:
+          type: array
+          items:
+            $ref: "#/components/schemas/LoanEventInput"
+        evidence:
+          type: object
+          additionalProperties: true
+        before:
+          $ref: "#/components/schemas/LoanEventSetPreviewMetrics"
+        after:
+          $ref: "#/components/schemas/LoanEventSetPreviewMetrics"
+      required: [valid, nextVersion, fingerprint, termRevisionId, orderedEvents, evidence, before, after]
+
+    LoanEventSetPreviewMetrics:
+      type: object
+      properties:
+        nextRegularPayment:
+          type: number
+        payoffDate:
+          type: string
+          format: date
+          nullable: true
+        contractualMaturity:
+          type: string
+          format: date
+          nullable: true
+        totalInterest:
+          type: number
+        endingBalance:
+          type: number
+      required: [nextRegularPayment, payoffDate, contractualMaturity, totalInterest, endingBalance]
+
+    SuggestedLoanEvent:
+      type: object
+      properties:
+        kind:
+          type: string
+          enum: [principal_prepayment]
+        effectiveDate:
+          type: string
+          format: date
+        ordering:
+          type: string
+          enum: [before_scheduled_payment, after_scheduled_payment]
+        amount:
+          type: number
+        treatment:
+          type: string
+          enum: [keep_payment, keep_maturity]
+          nullable: true
+        classification:
+          type: string
+          enum: [ordinary, agreement_change]
+          nullable: true
+        source:
+          type: string
+        reason:
+          type: string
+        requiresConfirmation:
+          type: boolean
+      required: [kind, effectiveDate, ordering, amount, source, reason, requiresConfirmation]
+
     DocumentImportResult:
       type: object
       properties:
@@ -1850,12 +2968,22 @@ components:
           type: number
         reasoning:
           type: string
-        documentBlob:
+        documentId:
           type: string
           nullable: true
         documentName:
           type: string
           nullable: true
+        unresolvedRateFindings:
+          type: array
+          items:
+            type: object
+            properties:
+              loanName: { type: string, nullable: true }
+              observationDate: { type: string, format: date }
+              reason: { type: string }
+              action: { type: string }
+            required: [observationDate, reason, action]
         loan:
           allOf:
             - $ref: "#/components/schemas/ImportedLoanFields"

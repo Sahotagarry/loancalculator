@@ -1,6 +1,24 @@
 import { Router, type IRouter } from "express";
-import { and, eq, isNull } from "drizzle-orm";
-import { db, filesTable, loansTable, masterAgreementsTable } from "@workspace/db";
+import { randomUUID } from "node:crypto";
+import { and, asc, eq, inArray, isNull, lte, sql } from "drizzle-orm";
+import {
+  db,
+  filesTable,
+  fvDecisionConfirmationsTable,
+  loanContractRevisionsTable,
+  loanEventsTable,
+  loanEventSetsTable,
+  loansTable,
+  masterAgreementsTable,
+  rateResetFindingsTable,
+} from "@workspace/db";
+import {
+  appendContractRevision,
+  buildContractSnapshot,
+  hashContractSnapshot,
+} from "../lib/loan-contract-revisions";
+import { fingerprintLoanEvents, proposedFromStored } from "../lib/loan-events";
+import { isLoanOutstandingAt } from "../lib/rollforward-eligibility";
 import { evaluateFvDecisionsForFile } from "../lib/fv-decisions";
 import {
   CreateFileBody,
@@ -16,6 +34,13 @@ import {
 } from "@workspace/api-zod";
 
 const router: IRouter = Router();
+const ROLLFORWARD_EVIDENCE_VERSION = "2";
+
+class RollForwardError extends Error {
+  constructor(message: string, readonly status = 409) {
+    super(message);
+  }
+}
 
 router.get("/clients/:id/files", async (req, res): Promise<void> => {
   const params = GetClientParams.safeParse(req.params);
@@ -132,24 +157,45 @@ router.patch("/files/:id", async (req, res): Promise<void> => {
   if (parsed.data.materiality !== undefined) updates.materiality = parsed.data.materiality?.toString();
   if (parsed.data.dismissedFindings !== undefined) updates.dismissedFindings = parsed.data.dismissedFindings;
 
-  const [file] = await db
-    .update(filesTable)
-    .set(updates)
-    .where(and(eq(filesTable.id, params.data.id), isNull(filesTable.deletedAt)))
-    .returning();
+  const file = await db.transaction(async (tx) => {
+    const [updatedFile] = await tx
+      .update(filesTable)
+      .set(updates)
+      .where(and(eq(filesTable.id, params.data.id), isNull(filesTable.deletedAt)))
+      .returning();
+    if (!updatedFile) return undefined;
+
+    // The loans in this file carry a denormalized copy of the fiscal year end.
+    // Update the file, every loan, and every revision projection atomically.
+    if (parsed.data.fiscalYearEnd !== undefined) {
+      const changedLoans = await tx
+        .update(loansTable)
+        .set({ fiscalYearEnd: updatedFile.fiscalYearEnd })
+        .where(eq(loansTable.fileId, updatedFile.id))
+        .returning();
+      for (const loan of changedLoans) {
+        const revisionNumber = loan.currentRevisionId
+          ? (
+              await tx.query.loanContractRevisionsTable.findFirst({
+                where: (revision, { eq }) => eq(revision.loanId, loan.id),
+                orderBy: (revision, { desc }) => desc(revision.revisionNumber),
+              })
+            )?.revisionNumber ?? 0
+          : 0;
+        await appendContractRevision(
+          tx,
+          loan,
+          revisionNumber + 1,
+          revisionNumber ? "Fiscal year end updated" : "Legacy baseline",
+        );
+      }
+    }
+    return updatedFile;
+  });
 
   if (!file) {
     res.status(404).json({ error: "File not found" });
     return;
-  }
-
-  // The loans in this file carry a denormalized copy of the fiscal year end —
-  // keep them in sync so schedules, disclosures, and classifications follow.
-  if (parsed.data.fiscalYearEnd !== undefined) {
-    await db
-      .update(loansTable)
-      .set({ fiscalYearEnd: file.fiscalYearEnd })
-      .where(eq(loansTable.fileId, file.id));
   }
 
   if (parsed.data.trivialThreshold !== undefined || parsed.data.materiality !== undefined) {
@@ -207,119 +253,431 @@ router.post("/files/:id/rollforward", async (req, res): Promise<void> => {
     return;
   }
 
-  // Get the source file
-  const [originalFile] = await db
-    .select()
-    .from(filesTable)
-    .where(and(eq(filesTable.id, params.data.id), isNull(filesTable.deletedAt)));
-
-  if (!originalFile) {
-    res.status(404).json({ error: "File not found" });
+  const newFiscalYearEnd = parsed.data.newFiscalYearEnd.toISOString().split("T")[0];
+  if (parsed.data.name !== undefined && !parsed.data.name.trim()) {
+    res.status(400).json({ error: "name must not be blank" });
+    return;
+  }
+  if (
+    parsed.data.trivialThreshold != null &&
+    parsed.data.materiality != null &&
+    parsed.data.trivialThreshold > parsed.data.materiality
+  ) {
+    res.status(400).json({ error: "trivialThreshold must not exceed materiality" });
     return;
   }
 
-  const newFiscalYearEnd = parsed.data.newFiscalYearEnd.toISOString().split("T")[0];
-
-  // Get all loans from the original file (excluding trashed ones)
-  const originalLoans = await db
-    .select()
-    .from(loansTable)
-    .where(and(eq(loansTable.fileId, params.data.id), isNull(loansTable.deletedAt)));
-
-  // Only roll forward loans/leases still outstanding at the source file's
-  // fiscal year end: maturity (start + termMonths, or termYears if months not
-  // set) must fall strictly after the source FYE. Matured loans and expired
-  // leases stay behind in the old file.
-  const sourceFye = originalFile.fiscalYearEnd
-    ? new Date(originalFile.fiscalYearEnd.split("T")[0] + "T00:00:00Z")
-    : null;
-  const outstandingLoans = originalLoans.filter((loan) => {
-    if (!sourceFye || !loan.startDate) return true;
-    const start = new Date(loan.startDate.split("T")[0] + "T00:00:00Z");
-    if (isNaN(start.getTime())) return true;
-    const months =
-      loan.termMonths != null ? loan.termMonths : (loan.termYears ?? 0) * 12;
-    if (months <= 0) return true;
-    const maturity = new Date(start);
-    maturity.setUTCMonth(maturity.getUTCMonth() + months);
-    return maturity.getTime() > sourceFye.getTime();
-  });
-
-  // Create the new file and copy the outstanding loans atomically so a
-  // mid-copy failure never leaves a partially rolled-forward file behind.
-  //
-  // Spread each source row so every column carries forward automatically
-  // (including counterparty, security clauses, collateral, and the ASPE 3856
-  // fair-value fields, which continue under the effective-interest method).
-  // Only the identity/audit columns and the new fiscal year are overridden.
-  // The `id`/`createdAt`/`updatedAt` bindings are destructured out purely to
-  // exclude them from `rest`.
-  const newFile = await db.transaction(async (tx) => {
-    const [createdFile] = await tx
-      .insert(filesTable)
-      .values({
-        name: originalFile.name,
-        fiscalYearEnd: newFiscalYearEnd,
-        clientId: originalFile.clientId,
-        trivialThreshold: originalFile.trivialThreshold,
-        materiality: originalFile.materiality,
-      })
-      .returning();
-
-    // Clone the master agreements referenced by outstanding facilities so the
-    // grouping carries into the new year, and remap each facility's link.
-    const masterIds = new Set(
-      outstandingLoans
-        .map((l) => l.masterAgreementId)
-        .filter((v): v is string => v != null),
-    );
-    const masterIdMap = new Map<string, string>();
-    if (masterIds.size > 0) {
-      const masters = await tx
-        .select()
-        .from(masterAgreementsTable)
-        .where(
-          and(
-            eq(masterAgreementsTable.fileId, originalFile.id),
-            isNull(masterAgreementsTable.deletedAt),
-          ),
+  let outcome: {
+    file: typeof filesTable.$inferSelect;
+    rolledLoanCount: number;
+    skippedLoanCount: number;
+    idempotent: boolean;
+  };
+  try {
+    outcome = await db.transaction(async (tx) => {
+      // The source lock makes the source file, loans and evidence an authoritative
+      // snapshot and serializes competing attempts for the same lineage key.
+      await tx.execute(sql`select id from files where id = ${params.data.id} for update`);
+      const [sourceFile] = await tx.select().from(filesTable).where(
+        and(eq(filesTable.id, params.data.id), isNull(filesTable.deletedAt)),
+      );
+      if (!sourceFile) throw new RollForwardError("File not found", 404);
+      if (newFiscalYearEnd <= sourceFile.fiscalYearEnd) {
+        throw new RollForwardError(
+          "newFiscalYearEnd must be after the source fiscal year end",
+          400,
         );
-      for (const master of masters) {
-        if (!masterIds.has(master.id)) continue;
-        const { id, createdAt, updatedAt, ...rest } = master;
-        const [cloned] = await tx
-          .insert(masterAgreementsTable)
-          .values({ ...rest, fileId: createdFile.id, rolledFromId: master.id })
-          .returning();
-        masterIdMap.set(master.id, cloned.id);
       }
-    }
+      const requestedName = parsed.data.name?.trim() ?? sourceFile.name;
+      const requestedTrivial = parsed.data.trivialThreshold === undefined
+        ? sourceFile.trivialThreshold
+        : parsed.data.trivialThreshold?.toFixed(2) ?? null;
+      const requestedMateriality = parsed.data.materiality === undefined
+        ? sourceFile.materiality
+        : parsed.data.materiality?.toFixed(2) ?? null;
+      if (
+        requestedTrivial != null &&
+        requestedMateriality != null &&
+        Number(requestedTrivial) > Number(requestedMateriality)
+      ) {
+        throw new RollForwardError(
+          "trivialThreshold must not exceed materiality",
+          400,
+        );
+      }
 
-    for (const original of outstandingLoans) {
-      const { id, createdAt, updatedAt, ...rest } = original;
-      await tx.insert(loansTable).values({
-        ...rest,
-        fileId: createdFile.id,
-        fiscalYearEnd: newFiscalYearEnd,
-        rolledFromId: original.id,
-        masterAgreementId: original.masterAgreementId
-          ? (masterIdMap.get(original.masterAgreementId) ?? null)
-          : null,
+      const [existing] = await tx.select().from(filesTable).where(and(
+        eq(filesTable.rolledFromId, sourceFile.id),
+        eq(filesTable.fiscalYearEnd, newFiscalYearEnd),
+        isNull(filesTable.deletedAt),
+      ));
+      if (existing) {
+        if (
+          existing.name !== requestedName ||
+          existing.trivialThreshold !== requestedTrivial ||
+          existing.materiality !== requestedMateriality
+        ) {
+          throw new RollForwardError(
+            "This source file and fiscal year end were already rolled forward with different setup values",
+          );
+        }
+        const [{ count }] = await tx.select({ count: sql<number>`count(*)::int` })
+          .from(loansTable).where(eq(loansTable.fileId, existing.id));
+        const [{ count: sourceCount }] = await tx.select({ count: sql<number>`count(*)::int` })
+          .from(loansTable).where(and(
+            eq(loansTable.fileId, sourceFile.id),
+            isNull(loansTable.deletedAt),
+          ));
+        return {
+          file: existing,
+          rolledLoanCount: count,
+          skippedLoanCount: Math.max(0, sourceCount - count),
+          idempotent: true,
+        };
+      }
+
+      const sourceLoans = await tx.select().from(loansTable).where(and(
+        eq(loansTable.fileId, sourceFile.id),
+        isNull(loansTable.deletedAt),
+      )).orderBy(asc(loansTable.id));
+      if (sourceLoans.length) {
+        await tx.execute(sql`select id from loans where file_id = ${sourceFile.id} and deleted_at is null for update`);
+      }
+      const sourceLoanIds = sourceLoans.map((loan) => loan.id);
+      const revisions = sourceLoanIds.length
+        ? await tx.select().from(loanContractRevisionsTable)
+            .where(inArray(loanContractRevisionsTable.loanId, sourceLoanIds))
+            .orderBy(asc(loanContractRevisionsTable.loanId), asc(loanContractRevisionsTable.revisionNumber))
+        : [];
+      const eventSets = sourceLoanIds.length
+        ? await tx.select().from(loanEventSetsTable)
+            .where(inArray(loanEventSetsTable.loanId, sourceLoanIds))
+            .orderBy(asc(loanEventSetsTable.loanId), asc(loanEventSetsTable.version))
+        : [];
+      const events = sourceLoanIds.length
+        ? await tx.select().from(loanEventsTable)
+            .where(inArray(loanEventsTable.loanId, sourceLoanIds))
+        : [];
+      const confirmations = sourceLoanIds.length
+        ? await tx.select().from(fvDecisionConfirmationsTable)
+            .where(inArray(fvDecisionConfirmationsTable.loanId, sourceLoanIds))
+            .orderBy(asc(fvDecisionConfirmationsTable.loanId), asc(fvDecisionConfirmationsTable.version))
+        : [];
+      const predecessorIds = [...new Set(
+        sourceLoans.map((loan) => loan.predecessorAgreementId)
+          .filter((id): id is string => id != null),
+      )];
+      const validPredecessors = predecessorIds.length
+        ? await tx.select({ id: loansTable.id, clientId: filesTable.clientId })
+            .from(loansTable)
+            .innerJoin(filesTable, eq(loansTable.fileId, filesTable.id))
+            .where(and(
+              inArray(loansTable.id, predecessorIds),
+              isNull(loansTable.deletedAt),
+              isNull(filesTable.deletedAt),
+            ))
+        : [];
+      const validPredecessorIds = new Set(
+        validPredecessors
+          .filter((row) => row.clientId === sourceFile.clientId)
+          .map((row) => row.id),
+      );
+      const unresolvedRates = sourceLoanIds.length
+        ? await tx.select().from(rateResetFindingsTable).where(and(
+            inArray(rateResetFindingsTable.loanId, sourceLoanIds),
+            eq(rateResetFindingsTable.status, "unresolved"),
+            lte(rateResetFindingsTable.contractualEffectiveDate, sourceFile.fiscalYearEnd),
+          ))
+        : [];
+      const unresolvedByLoan = new Set(unresolvedRates.map((finding) => finding.loanId));
+      const revisionById = new Map(revisions.map((revision) => [revision.id, revision]));
+      const setById = new Map(eventSets.map((set) => [set.id, set]));
+      const eventsBySet = new Map<string, typeof events>();
+      for (const event of events) {
+        const grouped = eventsBySet.get(event.setId) ?? [];
+        grouped.push(event);
+        eventsBySet.set(event.setId, grouped);
+      }
+
+      for (const loan of sourceLoans) {
+        const revision = loan.currentRevisionId
+          ? revisionById.get(loan.currentRevisionId)
+          : undefined;
+        if (
+          !revision ||
+          revision.loanId !== loan.id ||
+          revision.inputHash !== loan.currentRevisionHash ||
+          revision.calculationVersion !== loan.calculationVersion ||
+          hashContractSnapshot(buildContractSnapshot(loan)) !== loan.currentRevisionHash
+        ) {
+          throw new RollForwardError(
+            `Loan "${loan.name}" cannot be rolled forward: finalize its current contractual revision first`,
+          );
+        }
+        if (loan.activeEventSetId) {
+          const activeSet = setById.get(loan.activeEventSetId);
+          const activeEvents = eventsBySet.get(loan.activeEventSetId) ?? [];
+          let eventFingerprintValid = false;
+          if (activeSet) {
+            try {
+              eventFingerprintValid =
+                fingerprintLoanEvents(
+                  activeSet.termRevisionId,
+                  activeEvents.map((event) => ({
+                    ...proposedFromStored(event, event.supersedesEventId),
+                    originEventId: event.originEventId,
+                  })),
+                ) === activeSet.fingerprint;
+            } catch {
+              eventFingerprintValid = false;
+            }
+          }
+          if (
+            !activeSet ||
+            activeSet.loanId !== loan.id ||
+            activeSet.termRevisionId !== loan.currentRevisionId ||
+            activeSet.version !== loan.activeEventSetVersion ||
+            activeSet.fingerprint !== loan.activeEventSetHash ||
+            !eventFingerprintValid
+          ) {
+            throw new RollForwardError(
+              `Loan "${loan.name}" cannot be rolled forward: its active event timeline is stale or unresolved`,
+            );
+          }
+        }
+        if (loan.rateType === "prime_linked" && unresolvedByLoan.has(loan.id)) {
+          throw new RollForwardError(
+            `Loan "${loan.name}" cannot be rolled forward: resolve due variable-rate observations through ${sourceFile.fiscalYearEnd}`,
+          );
+        }
+        if (
+          loan.predecessorAgreementId &&
+          (!validPredecessorIds.has(loan.predecessorAgreementId) ||
+            !loan.modificationEffectiveDate ||
+            loan.modificationAssessment?.status !== "confirmed")
+        ) {
+          throw new RollForwardError(
+            `Loan "${loan.name}" cannot be rolled forward: confirm its predecessor agreement transition evidence`,
+          );
+        }
+      }
+
+      // A confirmed successor owns the closing obligation from its effective
+      // date. Suppress the predecessor so it cannot be counted twice.
+      const predecessorOwnedBySuccessor = new Set(
+        sourceLoans
+          .filter((loan) =>
+            loan.predecessorAgreementId &&
+            loan.modificationAssessment?.status === "confirmed" &&
+            loan.modificationEffectiveDate! <= sourceFile.fiscalYearEnd)
+          .map((loan) => loan.predecessorAgreementId!),
+      );
+      const outstandingLoans = sourceLoans.filter((loan) => {
+        if (predecessorOwnedBySuccessor.has(loan.id)) return false;
+        const active = loan.activeEventSetId
+          ? eventsBySet.get(loan.activeEventSetId) ?? []
+          : [];
+        return isLoanOutstandingAt(loan, active, sourceFile.fiscalYearEnd);
       });
-    }
 
-    return createdFile;
-  });
+      const [createdFile] = await tx.insert(filesTable).values({
+        clientId: sourceFile.clientId,
+        name: requestedName,
+        fiscalYearEnd: newFiscalYearEnd,
+        trivialThreshold: requestedTrivial,
+        materiality: requestedMateriality,
+        rolledFromId: sourceFile.id,
+      }).returning();
+
+      const loanIdMap = new Map(outstandingLoans.map((loan) => [loan.id, randomUUID()]));
+      const requiredMasterIds = new Set(
+        outstandingLoans.map((loan) => loan.masterAgreementId)
+          .filter((id): id is string => id != null),
+      );
+      const masters = requiredMasterIds.size
+        ? await tx.select().from(masterAgreementsTable).where(and(
+            eq(masterAgreementsTable.fileId, sourceFile.id),
+            isNull(masterAgreementsTable.deletedAt),
+          ))
+        : [];
+      const masterIdMap = new Map<string, string>();
+      for (const master of masters) {
+        if (!requiredMasterIds.has(master.id)) continue;
+        const targetId = randomUUID();
+        masterIdMap.set(master.id, targetId);
+        const { id, createdAt, updatedAt, ...rest } = master;
+        await tx.insert(masterAgreementsTable).values({
+          ...rest,
+          id: targetId,
+          fileId: createdFile.id,
+          rolledFromId: id,
+          sourceDocumentBlob: null,
+          sourceDocumentName: null,
+        });
+      }
+
+      // Generate every target identity before inserting any relationship.
+      const copiedRevisions = revisions.filter((row) => loanIdMap.has(row.loanId));
+      const copiedSets = eventSets.filter((row) => loanIdMap.has(row.loanId));
+      const copiedEvents = events.filter((row) => loanIdMap.has(row.loanId));
+      const revisionIdMap = new Map(copiedRevisions.map((row) => [row.id, randomUUID()]));
+      const setIdMap = new Map(copiedSets.map((row) => [row.id, randomUUID()]));
+      const eventIdMap = new Map(copiedEvents.map((row) => [row.id, randomUUID()]));
+
+      for (const source of outstandingLoans) {
+        const {
+          id,
+          createdAt,
+          updatedAt,
+          currentRevisionId,
+          currentRevisionHash,
+          calculationVersion,
+          activeEventSetId,
+          activeEventSetVersion,
+          activeEventSetHash,
+          ...rest
+        } = source;
+        await tx.insert(loansTable).values({
+          ...rest,
+          id: loanIdMap.get(id)!,
+          fileId: createdFile.id,
+          fiscalYearEnd: newFiscalYearEnd,
+          rolledFromId: id,
+          // Documents are owned by their original Year-End File. Do not copy
+          // an opaque handle into a different file without cloning its bytes
+          // and ownership record.
+          sourceDocumentBlob: null,
+          sourceDocumentName: null,
+          // Keep the valid source predecessor until every target identity
+          // exists; internal links are remapped in one second pass below.
+          predecessorAgreementId: source.predecessorAgreementId,
+          masterAgreementId: source.masterAgreementId
+            ? masterIdMap.get(source.masterAgreementId) ?? null
+            : null,
+          currentRevisionId: null,
+          currentRevisionHash: null,
+          calculationVersion: null,
+          activeEventSetId: null,
+          activeEventSetVersion: 0,
+          activeEventSetHash: null,
+        });
+      }
+      for (const source of outstandingLoans) {
+        const targetPredecessor = source.predecessorAgreementId
+          ? loanIdMap.get(source.predecessorAgreementId)
+          : undefined;
+        if (targetPredecessor) {
+          await tx.update(loansTable)
+            .set({ predecessorAgreementId: targetPredecessor })
+            .where(eq(loansTable.id, loanIdMap.get(source.id)!));
+        }
+      }
+      for (const revision of copiedRevisions) {
+        const { id, createdAt, ...rest } = revision;
+        await tx.insert(loanContractRevisionsTable).values({
+          ...rest,
+          id: revisionIdMap.get(id)!,
+          loanId: loanIdMap.get(revision.loanId)!,
+        });
+      }
+      for (const set of copiedSets) {
+        const { id, createdAt, ...rest } = set;
+        await tx.insert(loanEventSetsTable).values({
+          ...rest,
+          id: setIdMap.get(id)!,
+          loanId: loanIdMap.get(set.loanId)!,
+          termRevisionId: revisionIdMap.get(set.termRevisionId)!,
+          supersedesSetId: set.supersedesSetId
+            ? setIdMap.get(set.supersedesSetId) ?? set.supersedesSetId
+            : null,
+        });
+      }
+      if (copiedEvents.length) {
+        await tx.insert(loanEventsTable).values(copiedEvents.map((event) => {
+          const { id, ...rest } = event;
+          return {
+            ...rest,
+            id: eventIdMap.get(id)!,
+            loanId: loanIdMap.get(event.loanId)!,
+            setId: setIdMap.get(event.setId)!,
+            termRevisionId: revisionIdMap.get(event.termRevisionId)!,
+            supersedesEventId: event.supersedesEventId
+              ? eventIdMap.get(event.supersedesEventId) ?? event.supersedesEventId
+              : null,
+            originEventId: event.originEventId
+              ? eventIdMap.get(event.originEventId) ?? event.originEventId
+              : event.id,
+          };
+        }));
+      }
+
+      for (const source of outstandingLoans) {
+        const targetId = loanIdMap.get(source.id)!;
+        await tx.update(loansTable).set({
+          currentRevisionId: revisionIdMap.get(source.currentRevisionId!)!,
+          currentRevisionHash: source.currentRevisionHash,
+          calculationVersion: source.calculationVersion,
+          activeEventSetId: source.activeEventSetId
+            ? setIdMap.get(source.activeEventSetId)!
+            : null,
+          activeEventSetVersion: source.activeEventSetVersion,
+          activeEventSetHash: source.activeEventSetHash,
+        }).where(eq(loansTable.id, targetId));
+        const [target] = await tx.select().from(loansTable).where(eq(loansTable.id, targetId));
+        const nextRevision = Math.max(
+          ...copiedRevisions.filter((row) => row.loanId === source.id)
+            .map((row) => row.revisionNumber),
+        ) + 1;
+        await appendContractRevision(
+          tx,
+          target,
+          nextRevision,
+          `Rolled forward from ${sourceFile.fiscalYearEnd}`,
+        );
+      }
+
+      for (const confirmation of confirmations.filter((row) => loanIdMap.has(row.loanId))) {
+        const { id, ...rest } = confirmation;
+        await tx.insert(fvDecisionConfirmationsTable).values({
+          ...rest,
+          id: randomUUID(),
+          loanId: loanIdMap.get(confirmation.loanId)!,
+          // Preserve the source evidence byte-for-byte and explicitly mark it
+          // as historical. On later roll-forwards retain the direct immutable
+          // source confirmation chain rather than losing provenance.
+          sourceConfirmationId: confirmation.id,
+          inheritedFromLoanId: confirmation.loanId,
+          sourceFileId: sourceFile.id,
+        });
+      }
+      return {
+        file: createdFile,
+        rolledLoanCount: outstandingLoans.length,
+        skippedLoanCount: sourceLoans.length - outstandingLoans.length,
+        idempotent: false,
+      };
+    });
+  } catch (error) {
+    if (error instanceof RollForwardError) {
+      res.status(error.status).json({ error: error.message });
+      return;
+    }
+    throw error;
+  }
 
   const stripTime = (d: string | null): string | undefined =>
     d ? d.split("T")[0] : undefined;
   const cleanNum = (v: string | null): number | undefined => v != null ? Number(v) : undefined;
 
-  res.status(201).json({
-    ...newFile,
-    fiscalYearEnd: stripTime(newFile.fiscalYearEnd) ?? newFile.fiscalYearEnd,
-    trivialThreshold: cleanNum(newFile.trivialThreshold),
-    materiality: cleanNum(newFile.materiality),
+  res.status(outcome.idempotent ? 200 : 201).json({
+    ...outcome.file,
+    fiscalYearEnd: stripTime(outcome.file.fiscalYearEnd) ?? outcome.file.fiscalYearEnd,
+    trivialThreshold: cleanNum(outcome.file.trivialThreshold),
+    materiality: cleanNum(outcome.file.materiality),
+    rolledLoanCount: outcome.rolledLoanCount,
+    skippedLoanCount: outcome.skippedLoanCount,
+    evidenceVersion: ROLLFORWARD_EVIDENCE_VERSION,
+    idempotent: outcome.idempotent,
   });
 });
 

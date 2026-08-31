@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect } from "react";
-import { useListClients, useCreateClient, useDeleteClient, useUpdateClient } from "@workspace/api-client-react";
+import { useListClients, useCreateClient, useDeleteClient, useUpdateClient, getListClientsQueryKey } from "@workspace/api-client-react";
 import { queryClient } from "@/lib/queryClient";
 import { Link, useLocation } from "wouter";
+import { useAuth } from "@/hooks/use-auth";
 import { PageHeader } from "@/components/page-header";
 import {
   Card,
@@ -49,6 +50,7 @@ import { getErrorMessage } from "@/lib/errors";
 import { format, parseISO } from "date-fns";
 
 export default function Home() {
+  const { canWrite, canDelete, canManageSettings } = useAuth();
   const [createOpen, setCreateOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [editClientId, setEditClientId] = useState("");
@@ -122,7 +124,7 @@ export default function Home() {
   const createClient = useCreateClient({
     mutation: {
       onSuccess: () => {
-        queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+        queryClient.invalidateQueries({ queryKey: getListClientsQueryKey() });
         setCreateOpen(false);
         setNewName("");
         setNewCode("");
@@ -135,7 +137,7 @@ export default function Home() {
   const deleteClient = useDeleteClient({
     mutation: {
       onSuccess: () => {
-        queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+        queryClient.invalidateQueries({ queryKey: getListClientsQueryKey() });
         setDeleteOpen(false);
         setDeleteTarget(null);
       },
@@ -148,7 +150,7 @@ export default function Home() {
   const updateClient = useUpdateClient({
     mutation: {
       onSuccess: () => {
-        queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+        queryClient.invalidateQueries({ queryKey: getListClientsQueryKey() });
         setEditOpen(false);
       },
       onError: (err) => {
@@ -166,24 +168,28 @@ export default function Home() {
             <span className="text-sm text-muted-foreground hidden md:inline">
               Create and manage loan and lease amortization tables.
             </span>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Link href="/trash" className="inline-flex items-center justify-center h-8 w-8 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors">
-                  <Trash2 className="h-4 w-4" />
-                  <span className="sr-only">Trash</span>
-                </Link>
-              </TooltipTrigger>
-              <TooltipContent>Trash</TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Link href="/settings" className="inline-flex items-center justify-center h-8 w-8 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors">
-                  <Settings className="h-4 w-4" />
-                  <span className="sr-only">Settings</span>
-                </Link>
-              </TooltipTrigger>
-              <TooltipContent>Settings</TooltipContent>
-            </Tooltip>
+            {canDelete && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Link href="/trash" className="inline-flex items-center justify-center h-8 w-8 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors">
+                    <Trash2 className="h-4 w-4" />
+                    <span className="sr-only">Trash</span>
+                  </Link>
+                </TooltipTrigger>
+                <TooltipContent>Trash</TooltipContent>
+              </Tooltip>
+            )}
+            {canManageSettings && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Link href="/settings" className="inline-flex items-center justify-center h-8 w-8 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors">
+                    <Settings className="h-4 w-4" />
+                    <span className="sr-only">Settings</span>
+                  </Link>
+                </TooltipTrigger>
+                <TooltipContent>Settings</TooltipContent>
+              </Tooltip>
+            )}
           </span>
         }
       />
@@ -292,15 +298,17 @@ export default function Home() {
                   <TooltipContent>Table view</TooltipContent>
                 </Tooltip>
               </div>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button onClick={() => setCreateOpen(true)} className="gap-2 shadow-sm hover:shadow-md transition-shadow">
-                    <Plus className="h-4 w-4" />
-                    Add Client
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Create a new client</TooltipContent>
-              </Tooltip>
+              {canWrite && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button onClick={() => setCreateOpen(true)} className="gap-2 shadow-sm hover:shadow-md transition-shadow">
+                      <Plus className="h-4 w-4" />
+                      Add Client
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Create a new client</TooltipContent>
+                </Tooltip>
+              )}
             </div>
           </div>
 
@@ -362,10 +370,12 @@ export default function Home() {
                     <p className="text-xs text-muted-foreground">Schedules, classifications, and disclosures are generated for you.</p>
                   </div>
                 </div>
-                <Button size="lg" onClick={() => setCreateOpen(true)} className="gap-2">
-                  <Plus className="h-4 w-4" />
-                  Add Your First Client
-                </Button>
+                {canWrite && (
+                  <Button size="lg" onClick={() => setCreateOpen(true)} className="gap-2">
+                    <Plus className="h-4 w-4" />
+                    Add Your First Client
+                  </Button>
+                )}
               </CardContent>
             </Card>
           )}
@@ -412,40 +422,48 @@ export default function Home() {
                       </TableCell>
                       <TableCell>
                         <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-8 w-8 text-muted-foreground hover:text-foreground"
-                                onClick={() => {
-                                  setEditClientId(client.id);
-                                  setEditName(client.name);
-                                  setEditCode(client.code ?? "");
-                                  setEditOpen(true);
-                                }}
-                              >
-                                <Pencil className="h-4 w-4" />
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>Edit client details</TooltipContent>
-                          </Tooltip>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                                onClick={() => {
-                                  setDeleteTarget(client.id);
-                                  setDeleteOpen(true);
-                                }}
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>Delete client and all year-end files</TooltipContent>
-                          </Tooltip>
+                          {canWrite && (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                {canWrite && (
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                                  onClick={() => {
+                                    setEditClientId(client.id);
+                                    setEditName(client.name);
+                                    setEditCode(client.code ?? "");
+                                    setEditOpen(true);
+                                  }}
+                                >
+                                  <Pencil className="h-4 w-4" />
+                                </Button>
+                                )}
+                              </TooltipTrigger>
+                              <TooltipContent>Edit client details</TooltipContent>
+                            </Tooltip>
+                          )}
+                          {canDelete && (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                {canDelete && (
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                                  onClick={() => {
+                                    setDeleteTarget(client.id);
+                                    setDeleteOpen(true);
+                                  }}
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                                )}
+                              </TooltipTrigger>
+                              <TooltipContent>Delete client and all year-end files</TooltipContent>
+                            </Tooltip>
+                          )}
                           <Tooltip>
                             <TooltipTrigger asChild>
                               <Link href={`/client/${client.id}`} className="inline-flex items-center justify-center h-8 w-8 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors">
@@ -482,44 +500,48 @@ export default function Home() {
                       </div>
                     </div>
                     <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8 text-muted-foreground hover:text-foreground"
-                            onClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              setEditClientId(client.id);
-                              setEditName(client.name);
-                              setEditCode(client.code ?? "");
-                              setEditOpen(true);
-                            }}
-                          >
-                            <Pencil className="h-4 w-4" />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>Edit client details</TooltipContent>
-                      </Tooltip>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                            onClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              setDeleteTarget(client.id);
-                              setDeleteOpen(true);
-                            }}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>Delete client and all year-end files</TooltipContent>
-                      </Tooltip>
+                      {canWrite && (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setEditClientId(client.id);
+                                setEditName(client.name);
+                                setEditCode(client.code ?? "");
+                                setEditOpen(true);
+                              }}
+                            >
+                              <Pencil className="h-4 w-4" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>Edit client details</TooltipContent>
+                        </Tooltip>
+                      )}
+                      {canDelete && (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setDeleteTarget(client.id);
+                                setDeleteOpen(true);
+                              }}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>Delete client and all year-end files</TooltipContent>
+                        </Tooltip>
+                      )}
                     </div>
                   </div>
                 </CardHeader>

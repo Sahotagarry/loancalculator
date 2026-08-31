@@ -13,6 +13,6 @@ export interface CreateMasterAgreement {
   securityClauses?: string[] | null;
   securityDescription?: string | null;
   covenantDescription?: string | null;
-  sourceDocumentBlob?: string | null;
+  sourceDocumentId?: string | null;
   sourceDocumentName?: string | null;
 }

@@ -84,6 +84,129 @@ describe("calculateAmortization", () => {
     expect(calculateAmortization(50000, 5, 10, 1, START, 0, [], 0, "bi-weekly").schedule).toHaveLength(26);
     expect(calculateAmortization(50000, 5, 10, 1, START, 0, [], 0, "monthly").schedule).toHaveLength(12);
   });
+
+  it("preserves legacy results when the new conventions are omitted", () => {
+    const legacy = calculateAmortization(
+      75000, 5.5, 10, 3, new Date(2024, 0, 31), 2, [6], 5000,
+      "semi-monthly", null, 3, "capitalized",
+    );
+    const explicitLegacy = calculateAmortization(
+      75000, 5.5, 10, 3, new Date(2024, 0, 31), 2, [6], 5000,
+      "semi-monthly", null, 3, "capitalized",
+      { paymentTiming: "end", graceTermMode: "included" },
+    );
+
+    expect(explicitLegacy.monthlyPayment).toBe(legacy.monthlyPayment);
+    expect(explicitLegacy.totalInterest).toBe(legacy.totalInterest);
+    expect(explicitLegacy.schedule).toEqual(legacy.schedule);
+  });
+
+  it("applies beginning payments before accrual and end payments after accrual", () => {
+    const end = calculateAmortization(
+      12000, 12, 1, 1, START, 0, [], 0, "monthly", null, 0, "capitalized",
+      { paymentTiming: "end" },
+    );
+    const beginning = calculateAmortization(
+      12000, 12, 1, 1, START, 0, [], 0, "monthly", null, 0, "capitalized",
+      { paymentTiming: "beginning" },
+    );
+
+    expect(end.schedule[0].interest).toBeCloseTo(120, 8);
+    expect(beginning.monthlyPayment).toBeCloseTo(end.monthlyPayment / 1.01, 8);
+    expect(beginning.schedule[0].interest).toBeCloseTo(
+      (12000 - beginning.monthlyPayment) * 0.01,
+      8,
+    );
+    expect(beginning.schedule[0].principal + beginning.schedule[0].interest)
+      .toBeCloseTo(beginning.schedule[0].payment, 8);
+    expect(beginning.schedule[11].balance).toBeCloseTo(0, 6);
+  });
+
+  it("keeps beginning-of-period interest-only payments balance-neutral", () => {
+    const result = calculateAmortization(
+      100000, 6, 5, 2, START, 12, [], 0, "monthly", null, 0, "capitalized",
+      { paymentTiming: "beginning" },
+    );
+    const expected = 500 / 1.005;
+    expect(result.schedule[0].payment).toBeCloseTo(expected, 8);
+    expect(result.schedule[0].interest).toBeCloseTo(expected, 8);
+    expect(result.schedule[11].balance).toBeCloseTo(100000, 8);
+  });
+
+  it("uses a distinct first payment date and EOM-safe monthly dates", () => {
+    const result = calculateAmortization(
+      1000, 0, 1, 0.25, new Date(2024, 0, 1), 0, [], 0, "monthly", null, 0,
+      "capitalized", { firstPaymentDate: new Date(2024, 0, 31) },
+    );
+    expect(result.schedule.map((row) => [
+      row.date.getFullYear(), row.date.getMonth(), row.date.getDate(),
+    ])).toEqual([
+      [2024, 0, 31],
+      [2024, 1, 29],
+      [2024, 2, 31],
+    ]);
+  });
+
+  it("uses exact seven- and fourteen-day intervals for weekly frequencies", () => {
+    const first = new Date(2024, 1, 29);
+    const weekly = calculateAmortization(
+      1000, 0, 1, 0.06, START, 0, [], 0, "weekly", null, 0, "capitalized",
+      { firstPaymentDate: first },
+    );
+    const biweekly = calculateAmortization(
+      1000, 0, 1, 0.12, START, 0, [], 0, "bi-weekly", null, 0, "capitalized",
+      { firstPaymentDate: first },
+    );
+    expect(weekly.schedule[1].date).toEqual(new Date(2024, 2, 7));
+    expect(weekly.schedule[2].date).toEqual(new Date(2024, 2, 14));
+    expect(biweekly.schedule[1].date).toEqual(new Date(2024, 2, 14));
+  });
+
+  it("uses explicit semi-monthly due days and clamps them at month end", () => {
+    const result = calculateAmortization(
+      1000, 0, 1, 0.25, new Date(2024, 0, 10), 0, [], 0, "semi-monthly",
+      null, 0, "capitalized", { semiMonthlyDueDays: [15, 31] },
+    );
+    expect(result.schedule.slice(0, 5).map((row) => [
+      row.date.getFullYear(), row.date.getMonth(), row.date.getDate(),
+    ])).toEqual([
+      [2024, 0, 15],
+      [2024, 0, 31],
+      [2024, 1, 15],
+      [2024, 1, 29],
+      [2024, 2, 15],
+    ]);
+  });
+
+  it("does not emit duplicate semi-monthly dates when 30 and 31 both clamp in February", () => {
+    const result = calculateAmortization(
+      1000, 0, 1, 0.25, new Date(2024, 0, 1), 0, [], 0, "semi-monthly",
+      null, 0, "capitalized", { semiMonthlyDueDays: [30, 31] },
+    );
+    expect(result.schedule.slice(0, 5).map((row) => [
+      row.date.getFullYear(), row.date.getMonth(), row.date.getDate(),
+    ])).toEqual([
+      [2024, 0, 30],
+      [2024, 0, 31],
+      [2024, 1, 29],
+      [2024, 2, 30],
+      [2024, 2, 31],
+    ]);
+    for (let i = 1; i < result.schedule.length; i++) {
+      expect(result.schedule[i].date.getTime())
+        .toBeGreaterThan(result.schedule[i - 1].date.getTime());
+    }
+  });
+
+  it("honours an explicit first semi-monthly payment before following due days", () => {
+    const result = calculateAmortization(
+      1000, 0, 1, 0.125, START, 0, [], 0, "semi-monthly", null, 0,
+      "capitalized",
+      { firstPaymentDate: new Date(2024, 0, 20), semiMonthlyDueDays: [1, 15] },
+    );
+    expect(result.schedule.map((row) => [row.date.getMonth(), row.date.getDate()]))
+      .toEqual([[0, 20], [1, 1], [1, 15]]);
+  });
 });
 
 describe("calculateFairValueSchedule", () => {
@@ -164,6 +287,29 @@ describe("calculateFairValueSchedule", () => {
       expect(() => calculateFairValueSchedule(contractual.schedule, bad)).toThrow(/finite fair-value rate/);
     }
   });
+
+  it("discounts and accrues beginning-of-period contractual payments consistently", () => {
+    const contractual = calculateAmortization(
+      100000, 2, 5, 5, START, 0, [], 0, "monthly", null, 0, "capitalized",
+      { paymentTiming: "beginning" },
+    );
+    const fv = calculateFairValueSchedule(
+      contractual.schedule, 7, "monthly", { paymentTiming: "beginning" },
+    );
+    const r = 7 / 100 / 12;
+    const residual = contractual.schedule[contractual.schedule.length - 1].balance;
+    const expectedPv = contractual.schedule.reduce(
+      (pv, row, index) => pv + row.payment / Math.pow(1 + r, index),
+      residual / Math.pow(1 + r, contractual.schedule.length),
+    );
+
+    expect(fv.fairValue).toBeCloseTo(expectedPv, 2);
+    expect(fv.schedule[0].interest).toBeCloseTo(
+      (fv.fairValue - fv.schedule[0].payment) * r,
+      4,
+    );
+    expect(fv.schedule[fv.schedule.length - 1].balance).toBeCloseTo(residual, 2);
+  });
 });
 
 describe("isValidFvRate", () => {
@@ -217,6 +363,20 @@ describe("computeFvAdjustment", () => {
     });
 
     expect(Math.abs(adjustment)).toBeLessThan(1);
+  });
+
+  it("accepts timing conventions through the trailing options object", () => {
+    const params = {
+      principal: 100000,
+      contractualRate: 2,
+      fvRate: 7,
+      amortizationYears: 5,
+      termYears: 5,
+      startDate: START,
+    };
+    const end = computeFvAdjustment(params);
+    const beginning = computeFvAdjustment(params, { paymentTiming: "beginning" });
+    expect(beginning).not.toBe(end);
   });
 });
 

@@ -27,6 +27,8 @@ const SEVERITY_STYLES: Record<
   },
 };
 
+import { Link } from "wouter";
+
 export function SeverityBadge({ severity }: { severity: DiagnosticSeverity }) {
   const s = SEVERITY_STYLES[severity];
   return (
@@ -75,6 +77,14 @@ export function FindingsList({ findings, dismissed = [], onDismiss, onRestore }:
                   <SeverityBadge severity={f.severity} />
                 </div>
                 <p className="text-xs text-muted-foreground mt-0.5">{f.suggestion}</p>
+                {f.actionHref && f.actionLabel && (
+                  <div className="mt-2">
+                    <Link href={f.actionHref} className="text-xs text-primary font-medium hover:underline inline-flex items-center gap-1">
+                      {f.actionLabel}
+                      <ChevronRight className="h-3 w-3" />
+                    </Link>
+                  </div>
+                )}
               </div>
               {onDismiss && (
                 <Button

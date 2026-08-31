@@ -116,6 +116,7 @@ export type ImportedEstimates = {
 };
 
 interface Props {
+  readOnly?: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onConfirm: (result: AssessmentResult) => void;
@@ -349,7 +350,7 @@ const CRITERIA: Criterion[] = [
   },
 ];
 
-export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, initialAnswers, initialStraightLine, initialStep, importedNotes, importedEstimates }: Props) {
+export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, initialAnswers, initialStraightLine, initialStep, importedNotes, importedEstimates, readOnly }: Props) {
   const [step, setStep] = useState(0);
   const [expandedCriterion, setExpandedCriterion] = useState<number | null>(null);
   const [showImplicitRateDialog, setShowImplicitRateDialog] = useState(false);
@@ -709,10 +710,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                   </div>
                 )}
                 <div className="flex items-start gap-3 rounded-md border border-emerald-300 bg-white/60 p-3">
-                  <Checkbox
-                    id="fastTrackConfirm"
-                    checked={fastTrackConfirmed}
-                    disabled={answers.transferOfOwnership || answers.bargainPurchaseOption}
+                  <Checkbox id="fastTrackConfirm" checked={fastTrackConfirmed} disabled={readOnly || answers.transferOfOwnership || answers.bargainPurchaseOption}
                     onCheckedChange={(checked) => setFastTrackConfirmed(checked === true)}
                   />
                   <div className="space-y-1">
@@ -725,7 +723,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                   </div>
                 </div>
                 <div className="flex items-start gap-3 rounded-md border border-emerald-300 bg-white/60 p-3">
-                  <Checkbox
+                  <Checkbox disabled={readOnly}
                     id="fastTrackNotSpecialized"
                     checked={fastTrackNotSpecialized}
                     onCheckedChange={(checked) => setFastTrackNotSpecialized(checked === true)}
@@ -737,7 +735,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                   </div>
                 </div>
                 <div className="flex items-start gap-3 rounded-md border border-emerald-300 bg-white/60 p-3">
-                  <Checkbox
+                  <Checkbox disabled={readOnly}
                     id="fastTrackPvBelow"
                     checked={fastTrackPvBelow}
                     onCheckedChange={(checked) => setFastTrackPvBelow(checked === true)}
@@ -753,7 +751,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="ftTermMonths">Lease Term (months)</Label>
-                  <Input
+                  <Input disabled={readOnly}
                     id="ftTermMonths"
                     type="number"
                     step="1"
@@ -765,7 +763,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="ftMonthlyPayment">Monthly Rent ($, before sales tax)</Label>
-                  <Input
+                  <Input disabled={readOnly}
                     id="ftMonthlyPayment"
                     type="number"
                     step="0.01"
@@ -944,7 +942,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                             {/* Lease Term in Months */}
                             <div className="space-y-2">
                               <Label htmlFor="termMonths">Lease Term (months)</Label>
-                              <Input
+                              <Input disabled={readOnly}
                                 id="termMonths"
                                 type="number"
                                 step="1"
@@ -965,7 +963,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                                   </span>
                                 )}
                               </div>
-                              <Input
+                              <Input disabled={readOnly}
                                 id="economicLife"
                                 type="number"
                                 step="0.5"
@@ -1012,7 +1010,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                             {/* Monthly Payment */}
                             <div className="space-y-2">
                               <Label htmlFor="monthlyPayment">Monthly Lease Payment ($)</Label>
-                              <Input
+                              <Input disabled={readOnly}
                                 id="monthlyPayment"
                                 type="number"
                                 step="0.01"
@@ -1026,7 +1024,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                             {/* Down payment / first payment at inception */}
                             <div className="space-y-2">
                               <Label htmlFor="wizardDownPayment">Down Payment / First Payment at Inception ($)</Label>
-                              <Input
+                              <Input disabled={readOnly}
                                 id="wizardDownPayment"
                                 type="number"
                                 step="0.01"
@@ -1043,7 +1041,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                             {/* Tax: pre-tax or includes tax */}
                             <div className="space-y-3">
                               <div className="flex items-center gap-3 p-3 rounded-lg border bg-muted/20">
-                                <Checkbox
+                                <Checkbox disabled={readOnly}
                                   id="paymentIncludesTax"
                                   checked={answers.paymentIncludesTax}
                                   onCheckedChange={(checked) => {
@@ -1129,7 +1127,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                             {/* Fair Value */}
                             <div className="space-y-3">
                               <Label htmlFor="fairValue">Fair Value of Leased Asset ($)</Label>
-                              <Input
+                              <Input disabled={readOnly}
                                 id="fairValue"
                                 type="number"
                                 step="1"
@@ -1179,7 +1177,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
 
                             {/* Payment Timing */}
                             <div className="flex items-center gap-3 p-3 rounded-lg border bg-muted/20">
-                              <Checkbox
+                              <Checkbox disabled={readOnly}
                                 id="paymentAtBeginning"
                                 checked={answers.paymentAtBeginning}
                                 onCheckedChange={(checked) => {
@@ -1217,7 +1215,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                             {/* Discount Rate */}
                             <div className="space-y-3">
                               <Label htmlFor="interestRate">Discount Rate (annual %)</Label>
-                              <Input
+                              <Input disabled={readOnly}
                                 id="interestRate"
                                 type="number"
                                 step="0.01"
@@ -1324,7 +1322,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                         ) : (
                           <div className="space-y-2">
                             <Label htmlFor={c.key}>{c.thresholdLabel}</Label>
-                            <Input
+                            <Input disabled={readOnly}
                               id={c.key}
                               type="number"
                               step="0.01"
@@ -1452,7 +1450,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
 
             <div className="space-y-2">
               <Label htmlFor="freeRentMonths">Free Rent Period (months)</Label>
-              <Input
+              <Input disabled={readOnly}
                 id="freeRentMonths"
                 type="number"
                 min={0}
@@ -1468,12 +1466,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
             <div className="space-y-2 rounded-md border p-3">
               <div className="flex items-center justify-between">
                 <Label>Stepped Rent Schedule ($ per month)</Label>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() =>
-                    setStraightLine((prev) => {
+                <Button type="button" variant="outline" size="sm" disabled={readOnly} onClick={() => setStraightLine((prev) => {
                       const last = prev.rentSteps[prev.rentSteps.length - 1];
                       const nextFrom = last ? last.toYear + 1 : 1;
                       return {
@@ -1502,7 +1495,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                   </div>
                   {straightLine.rentSteps.map((s, i) => (
                     <div key={i} className="grid grid-cols-[1fr_1fr_1.5fr_auto] gap-2 items-center">
-                      <Input
+                      <Input disabled={readOnly}
                         type="number"
                         min={1}
                         value={s.fromYear || ""}
@@ -1515,7 +1508,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                           }))
                         }
                       />
-                      <Input
+                      <Input disabled={readOnly}
                         type="number"
                         min={1}
                         value={s.toYear || ""}
@@ -1528,7 +1521,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                           }))
                         }
                       />
-                      <Input
+                      <Input disabled={readOnly}
                         type="number"
                         min={0}
                         step="0.01"
@@ -1564,12 +1557,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
 
             <div className="space-y-2">
               <Label htmlFor="rentEscalationRate">Rent Escalation Rate (annual %)</Label>
-              <Input
-                id="rentEscalationRate"
-                type="number"
-                step="0.01"
-                min={0}
-                disabled={straightLine.rentSteps.length > 0}
+              <Input id="rentEscalationRate" type="number" step="0.01" min={0} disabled={readOnly || straightLine.rentSteps.length > 0}
                 value={straightLine.rentEscalationRate || ""}
                 onChange={(e) =>
                   setStraightLine((prev) => ({ ...prev, rentEscalationRate: Number(e.target.value) }))
@@ -1585,7 +1573,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
 
             <div className="space-y-2">
               <Label htmlFor="tenantImprovementAllowance">Tenant Improvement Allowance ($)</Label>
-              <Input
+              <Input disabled={readOnly}
                 id="tenantImprovementAllowance"
                 type="number"
                 step="1"
@@ -1601,7 +1589,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
 
             <div className="space-y-2">
               <Label htmlFor="otherInducements">Other Lease Inducements ($)</Label>
-              <Input
+              <Input disabled={readOnly}
                 id="otherInducements"
                 type="number"
                 step="1"
@@ -1617,7 +1605,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
 
             <div className="space-y-2">
               <Label htmlFor="camMonthly">Monthly CAM / Operating Costs ($)</Label>
-              <Input
+              <Input disabled={readOnly}
                 id="camMonthly"
                 type="number"
                 step="0.01"
@@ -1637,7 +1625,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
             </div>
 
             <div className="flex items-start gap-3 rounded-md border p-3">
-              <Checkbox
+              <Checkbox disabled={readOnly}
                 id="inducementReceivedInCash"
                 checked={straightLine.inducementReceivedInCash}
                 onCheckedChange={(checked) =>
@@ -1727,7 +1715,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
           {/* Buyout input */}
           <div className="space-y-2">
             <Label htmlFor="dialogBuyout">Buyout / Residual Value at Lease-End ($)</Label>
-            <Input
+            <Input disabled={readOnly}
               id="dialogBuyout"
               type="number"
               step="1"

@@ -1,36 +1,40 @@
 import { Router, type IRouter } from "express";
 import { and, eq, isNull, isNotNull, desc } from "drizzle-orm";
-import { db, clientsTable, filesTable, loansTable } from "@workspace/db";
+import { db, clientsTable, filesTable, loansTable, masterAgreementsTable, clientMembershipsTable } from "@workspace/db";
 import { RestoreTrashItemParams, PurgeTrashItemParams } from "@workspace/api-zod";
 import { loadAzureSettings } from "../lib/azure-settings";
-import { deleteDocumentRefSafe } from "../lib/document-store";
+import { deleteDocumentRefSafe, deleteExternalStorageRefsSafe, ownedStorageRefs } from "../lib/document-store";
 
 const router: IRouter = Router();
 
 /** Best-effort removal of a loan's source-document blob if no other loan
  * still references it. */
-async function cleanupLoanBlob(blobRef: string | null): Promise<void> {
+async function cleanupDocument(blobRef: string | null, ownership: { tenantId: string; firmId: string; clientId: string; fileId: string }): Promise<void> {
   if (!blobRef) return;
-  const others = await db
+  const loanRefs = await db
     .select({ id: loansTable.id })
     .from(loansTable)
     .where(eq(loansTable.sourceDocumentBlob, blobRef))
     .limit(1);
-  if (others.length === 0) {
+  const masterRefs = await db.select({ id: masterAgreementsTable.id }).from(masterAgreementsTable)
+    .where(eq(masterAgreementsTable.sourceDocumentBlob, blobRef)).limit(1);
+  if (loanRefs.length === 0 && masterRefs.length === 0) {
     const settings = await loadAzureSettings();
-    await deleteDocumentRefSafe(settings, blobRef);
+    await deleteDocumentRefSafe(settings, blobRef, ownership);
   }
 }
 
-router.get("/trash", async (_req, res): Promise<void> => {
+router.get("/trash", async (req, res): Promise<void> => {
+  const member = and(eq(clientMembershipsTable.tenantId, req.auth!.tenantId), eq(clientMembershipsTable.objectId, req.auth!.objectId), eq(clientMembershipsTable.clientId, clientsTable.id));
+  const clientScope = and(eq(clientsTable.firmId, req.auth!.firmId), isNull(clientsTable.quarantinedAt));
   const clients = await db
     .select({
       id: clientsTable.id,
       name: clientsTable.name,
       deletedAt: clientsTable.deletedAt,
     })
-    .from(clientsTable)
-    .where(isNotNull(clientsTable.deletedAt))
+    .from(clientsTable).innerJoin(clientMembershipsTable, member)
+    .where(and(isNotNull(clientsTable.deletedAt), clientScope))
     .orderBy(desc(clientsTable.deletedAt));
 
   // Only show files whose client is NOT itself trashed (those are restored
@@ -45,7 +49,8 @@ router.get("/trash", async (_req, res): Promise<void> => {
     })
     .from(filesTable)
     .innerJoin(clientsTable, eq(clientsTable.id, filesTable.clientId))
-    .where(and(isNotNull(filesTable.deletedAt), isNull(clientsTable.deletedAt)))
+    .innerJoin(clientMembershipsTable, member)
+    .where(and(isNotNull(filesTable.deletedAt), isNull(clientsTable.deletedAt), clientScope))
     .orderBy(desc(filesTable.deletedAt));
 
   const loans = await db
@@ -62,11 +67,12 @@ router.get("/trash", async (_req, res): Promise<void> => {
     .from(loansTable)
     .innerJoin(filesTable, eq(filesTable.id, loansTable.fileId))
     .innerJoin(clientsTable, eq(clientsTable.id, filesTable.clientId))
+    .innerJoin(clientMembershipsTable, member)
     .where(
       and(
         isNotNull(loansTable.deletedAt),
         isNull(filesTable.deletedAt),
-        isNull(clientsTable.deletedAt)
+        isNull(clientsTable.deletedAt), clientScope
       )
     )
     .orderBy(desc(loansTable.deletedAt));
@@ -170,10 +176,15 @@ router.delete("/trash/:type/:id", async (req, res): Promise<void> => {
     // Collect source-document blobs of all loans under this client before the
     // cascade wipes them.
     const loanBlobs = await db
-      .select({ blob: loansTable.sourceDocumentBlob })
+      .select({ blob: loansTable.sourceDocumentBlob, fileId: filesTable.id, clientId: filesTable.clientId })
       .from(loansTable)
       .innerJoin(filesTable, eq(filesTable.id, loansTable.fileId))
       .where(and(eq(filesTable.clientId, id), isNotNull(loansTable.sourceDocumentBlob)));
+    const masterBlobs = await db.select({ blob: masterAgreementsTable.sourceDocumentBlob, fileId: filesTable.id, clientId: filesTable.clientId })
+      .from(masterAgreementsTable).innerJoin(filesTable, eq(masterAgreementsTable.fileId, filesTable.id))
+      .where(and(eq(filesTable.clientId, id), isNotNull(masterAgreementsTable.sourceDocumentBlob)));
+    const cascadeRefs = await Promise.all([...loanBlobs, ...masterBlobs].map(({ blob, fileId, clientId }) =>
+      ownedStorageRefs(blob ? [blob] : [], { tenantId: req.auth!.tenantId, firmId: req.auth!.firmId, clientId, fileId })));
     const [row] = await db
       .delete(clientsTable)
       .where(and(eq(clientsTable.id, id), isNotNull(clientsTable.deletedAt)))
@@ -182,18 +193,24 @@ router.delete("/trash/:type/:id", async (req, res): Promise<void> => {
       res.status(404).json({ error: "Trashed client not found" });
       return;
     }
-    for (const { blob } of loanBlobs) {
+    await deleteExternalStorageRefsSafe(await loadAzureSettings(), cascadeRefs.flat());
+    for (const { blob, fileId, clientId } of [...loanBlobs, ...masterBlobs]) {
       try {
-        await cleanupLoanBlob(blob);
+        await cleanupDocument(blob, { tenantId: req.auth!.tenantId, firmId: req.auth!.firmId, clientId, fileId });
       } catch (err) {
         req.log?.warn({ err }, "Failed to delete source document blob");
       }
     }
   } else if (type === "file") {
     const loanBlobs = await db
-      .select({ blob: loansTable.sourceDocumentBlob })
-      .from(loansTable)
+      .select({ blob: loansTable.sourceDocumentBlob, fileId: filesTable.id, clientId: filesTable.clientId })
+      .from(loansTable).innerJoin(filesTable, eq(loansTable.fileId, filesTable.id))
       .where(and(eq(loansTable.fileId, id), isNotNull(loansTable.sourceDocumentBlob)));
+    const masterBlobs = await db.select({ blob: masterAgreementsTable.sourceDocumentBlob, fileId: filesTable.id, clientId: filesTable.clientId })
+      .from(masterAgreementsTable).innerJoin(filesTable, eq(masterAgreementsTable.fileId, filesTable.id))
+      .where(and(eq(masterAgreementsTable.fileId, id), isNotNull(masterAgreementsTable.sourceDocumentBlob)));
+    const cascadeRefs = await Promise.all([...loanBlobs, ...masterBlobs].map(({ blob, fileId, clientId }) =>
+      ownedStorageRefs(blob ? [blob] : [], { tenantId: req.auth!.tenantId, firmId: req.auth!.firmId, clientId, fileId })));
     const [row] = await db
       .delete(filesTable)
       .where(and(eq(filesTable.id, id), isNotNull(filesTable.deletedAt)))
@@ -202,9 +219,10 @@ router.delete("/trash/:type/:id", async (req, res): Promise<void> => {
       res.status(404).json({ error: "Trashed year-end file not found" });
       return;
     }
-    for (const { blob } of loanBlobs) {
+    await deleteExternalStorageRefsSafe(await loadAzureSettings(), cascadeRefs.flat());
+    for (const { blob, fileId, clientId } of [...loanBlobs, ...masterBlobs]) {
       try {
-        await cleanupLoanBlob(blob);
+        await cleanupDocument(blob, { tenantId: req.auth!.tenantId, firmId: req.auth!.firmId, clientId, fileId });
       } catch (err) {
         req.log?.warn({ err }, "Failed to delete source document blob");
       }
@@ -219,7 +237,8 @@ router.delete("/trash/:type/:id", async (req, res): Promise<void> => {
       return;
     }
     try {
-      await cleanupLoanBlob(row.sourceDocumentBlob);
+      const [file] = await db.select({ clientId: filesTable.clientId }).from(filesTable).where(eq(filesTable.id, row.fileId));
+      if (file) await cleanupDocument(row.sourceDocumentBlob, { tenantId: req.auth!.tenantId, firmId: req.auth!.firmId, clientId: file.clientId, fileId: row.fileId });
     } catch (err) {
       req.log?.warn({ err }, "Failed to delete source document blob");
     }

@@ -7,7 +7,7 @@ import {
 } from "./release-poll";
 
 function run(status: string, conclusion: string | null = null): ActionsRun {
-  return { id: 1, status, conclusion, html_url: "https://github.com/o/r/actions/runs/1" };
+  return { id: 1, status, conclusion, html_url: "https://github.com/o/r/actions/runs/1", head_sha: "abc", event: "push" };
 }
 
 /** Builds a fake clock + sleep so tests run instantly. */
@@ -96,5 +96,42 @@ describe("pollForRunCompletion", () => {
         sleep,
       }),
     ).rejects.toThrowError(DeploymentTimeoutError);
+  });
+
+  it("rejects multiple workflow runs for one commit", async () => {
+    const { now, sleep } = fakeTime();
+    await expect(pollForRunCompletion({
+      headSha: "abc",
+      fetchRuns: async () => [run("queued"), { ...run("queued"), id: 2 }],
+      now,
+      sleep,
+    })).rejects.toThrow(/Multiple deployment runs/);
+  });
+
+  it("resumes polling exactly the persisted workflow run", async () => {
+    const { now, sleep } = fakeTime();
+    const result = await pollForRunCompletion({
+      headSha: "abc",
+      expectedRunId: 2,
+      fetchRuns: async () => [
+        run("completed", "failure"),
+        { ...run("completed", "success"), id: 2, head_sha: "abc" },
+      ],
+      now,
+      sleep,
+    });
+    expect(result.id).toBe(2);
+  });
+
+  it("does not accept a run without the exact commit identity", async () => {
+    const { now, sleep } = fakeTime();
+    await expect(pollForRunCompletion({
+      headSha: "abc",
+      fetchRuns: async () => [{ ...run("completed", "success"), head_sha: undefined }],
+      intervalMs: 10,
+      deadlineMs: 20,
+      now,
+      sleep,
+    })).rejects.toBeInstanceOf(DeploymentTimeoutError);
   });
 });

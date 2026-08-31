@@ -1,5 +1,5 @@
-import { isAfter, addMonths, subDays, parseISO } from "date-fns";
-import { calculateAmortization, calculateFairValueSchedule, isValidFvRate, type AmortizationRow, type Frequency } from "@workspace/amortization";
+import { isAfter, addMonths, subDays, parseISO, format } from "date-fns";
+import { calculateAmortization, calculateFairValueSchedule, calculateProspectiveModificationSchedule, isValidFvRate, type AmortizationRow, type Frequency, type PrincipalPaymentEvent, type RateResetEvent } from "@workspace/amortization";
 import { calculateStraightLineLease, buildYearlyStraightLine } from "./straight-line";
 import { getFiscalYear, getFyEndParts } from "./fiscal";
 
@@ -14,11 +14,291 @@ export interface BookedScheduleInput {
   specificIoMonths?: string | null;
   balloonPayment?: number | string | null;
   paymentFrequency?: string | null;
+  paymentTiming?: "beginning" | "end" | null;
+  graceTermMode?: "included" | "added" | null;
+  firstPaymentDate?: string | null;
+  semiMonthlyFirstDueDay?: number | null;
+  semiMonthlySecondDueDay?: number | null;
   fvDecision?: string | null;
   fvRate?: number | string | null;
   paymentOverride?: number | string | null;
   graceMonths?: number | null;
   graceInterestTreatment?: string | null;
+  rateType?: "fixed" | "prime_linked" | string | null;
+  rateBenchmark?: string | null;
+  contractualPrimeName?: string | null;
+  rateSpread?: number | string | null;
+  ratePaymentTreatment?: "keep_payment" | "keep_maturity" | string | null;
+  /**
+   * Immutable rate-reset evidence from GET /rate-timeline.  It is deliberately
+   * separate from principal events: a rate event does not become a payment.
+   */
+  rateTimelineEvents?: RateTimelineEvent[] | null;
+  /** Alias used by callers that have already selected the active timeline. */
+  activeRateEvents?: readonly unknown[] | null;
+  activeRateSetId?: string | null;
+  /** Frozen recognition-date assumptions; never substitute realized resets here. */
+  initialFvRateAssumption?: Record<string, unknown> | null;
+  /** Immutable, canonically ordered events returned with the active set. */
+  activeEvents?: Array<{
+    kind?: string;
+    id: string;
+    effectiveDate: string;
+    ordering: "before_scheduled_payment" | "after_scheduled_payment";
+    sequence: number;
+    amount: number | string | null;
+    treatment: "keep_payment" | "keep_maturity";
+  }> | null;
+  currentRevisionId?: string | null;
+  currentRevisionHash?: string | null;
+  calculationVersion?: string | null;
+  activeEventSetId?: string | null;
+  activeEventSetVersion?: number | null;
+  activeEventSetHash?: string | null;
+  isCapitalLease?: boolean | null;
+  monthlyPayment?: number | string | null;
+  termMonths?: number | null;
+  freeRentMonths?: number | null;
+  rentEscalationRate?: number | string | null;
+  rentSteps?: Array<{ fromYear: number; toYear: number; monthlyRent: number }> | null;
+  tenantImprovementAllowance?: number | string | null;
+  otherInducements?: number | string | null;
+  /** Explicit predecessor supplied by file/reporting callers for transition-aware output. */
+  predecessorAgreement?: BookedScheduleInput | null;
+  predecessorAgreementId?: string | null;
+  modificationEffectiveDate?: string | null;
+  modificationAssessment?: AgreementModificationAssessment | null;
+}
+
+export interface FairValueDecisionConfirmation {
+  id: string;
+  version: number;
+  treatment: "use_fv" | "trivial" | "immaterial" | string;
+  marketEffectiveRate?: string | number | null;
+  rationaleNote?: string | null;
+  confirmedAt: string | Date;
+  confirmedBy: string;
+  canonicalFingerprint: string;
+  contractFingerprint: string;
+  eventSetFingerprint?: string | null;
+  reportingContextFingerprint: string;
+  modificationFingerprint?: string | null;
+  evidenceVersion: string;
+  calculationVersion: string;
+  evidence: Record<string, unknown>;
+}
+
+export interface FairValueDecisionHistory {
+  status: string;
+  reviewRequired: boolean;
+  staleReasons: string[];
+  missingRequirements: string[];
+  current?: FairValueDecisionConfirmation | null;
+  history: FairValueDecisionConfirmation[];
+}
+
+/** Persisted API shape. Keep this deliberately aligned with the generated contract. */
+export interface AgreementModificationAssessment {
+  status: "confirmed";
+  assessmentDate: string;
+  confirmedAt: string;
+  confirmedBy: string;
+  evidence: {
+    changeSummary: string;
+    contractualChanges: Array<{
+      term: string;
+      predecessorValue: string;
+      successorValue: string;
+      significance: string;
+      sourceReference: string;
+    }>;
+    qualitativeFactors: string[];
+    facts: {
+      creditorChanged: boolean;
+      creditorChangedEvidence?: string;
+      legalDischarge: boolean;
+      legalDischargeEvidence?: string;
+      relatedParty: boolean;
+      relatedPartyEvidence?: string;
+    };
+    quantitativeTest?: {
+      method: string;
+      originalEffectiveRate: number;
+      carryingAmount: number;
+      originalRemainingCashFlows: Array<{ date: string; amount: number; description: string; sourceReference: string }>;
+      modifiedCashFlows: Array<{ date: string; amount: number; description: string; sourceReference: string }>;
+      sameDayPaymentTreatment: "include" | "exclude";
+      creditorFees: number;
+      otherTransactionCosts: number;
+      accruedInterest: number;
+      accruedInterestTreatment: "included_in_carrying_amount" | "include_in_cash_flows" | "add_to_carrying_amount" | "exclude";
+      predecessorAmount?: number;
+      successorAmount?: number;
+      presentValueOfOriginalRemainingCashFlows?: number;
+      presentValueOfModifiedCashFlows?: number;
+      differenceAmount: number;
+      differencePercent: number;
+      retainedFeesAndCosts: number;
+      newFeesAndCosts: number;
+      settlementConsideration?: number;
+      recommendation: "derecognize_original" | "account_as_modification";
+    } | null;
+  };
+  conclusion: {
+    agreementChangeType: "renewal" | "modification";
+    /** `new_lease` is an ASPE 3065 lease transition, not debt modification accounting. */
+    accountingTreatment: "continuation" | "extinguishment" | "new_lease";
+    rationale: string;
+    leaseTransition?: {
+      predecessorLeaseType: "operating" | "capital";
+      originalLeaseTerminated: boolean;
+      replacementLeaseExecuted: boolean;
+      terminationEvidenceReference: string;
+      entryDate: string;
+      debitAccount: string;
+      creditAccount: string;
+      amount: number;
+      entryEvidenceReference: string;
+      predecessorDeferredRentAsset: number | null;
+      predecessorDeferredRentLiability: number | null;
+      predecessorAssetCost: number | null;
+      predecessorAccumulatedDepreciation: number | null;
+      successorInitialAmount: number;
+    };
+  };
+}
+
+export interface RateTimelineEvent {
+  id: string;
+  setId?: string | null;
+  effectiveDate: string;
+  ordering?: "before_scheduled_payment" | "after_scheduled_payment";
+  sequence?: number;
+  observationDate?: string | null;
+  publishedDate?: string | null;
+  fetchedAt?: string | null;
+  benchmarkRate: number | string;
+  spread: number | string;
+  resultingRate?: number | string | null;
+  resultingContractualRate?: number | string | null;
+  benchmark?: string | null;
+  source?: string | null;
+  sourceSeries?: string | null;
+  sourceUrl?: string | null;
+  rateOrigin?: "automatic" | "override" | "restore" | string | null;
+  treatment?: "keep_payment" | "keep_maturity" | string | null;
+  reason?: string | null;
+  author?: string | null;
+  authoredAt?: string | null;
+}
+
+/** Maps API event evidence into the engine's intentionally smaller contract. */
+export function toPrincipalPaymentEvents(loan: Pick<BookedScheduleInput, "activeEvents">): PrincipalPaymentEvent[] {
+  return (loan.activeEvents ?? [])
+    .filter((event) => event.kind == null || event.kind === "principal_prepayment")
+    .filter((event) => event.amount != null && Number.isFinite(Number(event.amount)))
+    .map((event) => ({
+      id: event.id, effectiveDate: parseISO(event.effectiveDate), ordering: event.ordering,
+      sequence: event.sequence, amount: Number(event.amount), treatment: event.treatment,
+    }));
+}
+
+const dateOrUndefined = (value: string | null | undefined): Date | undefined => {
+  if (!value) return undefined;
+  const date = parseISO(value);
+  return Number.isNaN(date.getTime()) ? undefined : date;
+};
+
+/** Convert persisted timeline evidence to the engine's dated-rate contract. */
+export function toRateResetEvents(loan: Pick<BookedScheduleInput, "rateTimelineEvents" | "activeRateEvents" | "activeRateSetId" | "ratePaymentTreatment">): RateResetEvent[] {
+  const rawEvents = (loan.activeRateEvents ?? loan.rateTimelineEvents ?? []) as RateTimelineEvent[];
+  return rawEvents
+    .filter((event) => (event as RateTimelineEvent & { kind?: string }).kind == null || (event as RateTimelineEvent & { kind?: string }).kind === "rate_reset")
+    .filter((event) => !loan.activeRateSetId || !event.setId || event.setId === loan.activeRateSetId)
+    .map((event, index): RateResetEvent | null => {
+      const effectiveDate = dateOrUndefined(event.effectiveDate);
+      const benchmarkRate = Number(event.benchmarkRate);
+      const spread = Number(event.spread);
+      const resultingContractualRate = Number(event.resultingContractualRate ?? event.resultingRate ?? benchmarkRate + spread);
+      if (!effectiveDate || !Number.isFinite(benchmarkRate) || !Number.isFinite(spread) || !Number.isFinite(resultingContractualRate)) return null;
+      const override = event.rateOrigin === "override";
+      const authoredAt = dateOrUndefined(event.authoredAt);
+      return {
+        id: event.id,
+        effectiveDate,
+        ordering: event.ordering === "after_scheduled_payment" ? "after_scheduled_payment" : "before_scheduled_payment",
+        sequence: Number.isSafeInteger(event.sequence) ? event.sequence! : index,
+        benchmarkRate,
+        spread,
+        resultingContractualRate,
+        sourceEvidence: {
+          source: event.sourceSeries ?? event.source ?? event.benchmark ?? "documented rate evidence",
+          observationDate: dateOrUndefined(event.observationDate),
+          publishedDate: dateOrUndefined(event.publishedDate),
+          fetchedAt: dateOrUndefined(event.fetchedAt),
+          reference: event.sourceUrl ?? undefined,
+        },
+        overrideEvidence: override && event.reason && authoredAt
+          ? { reason: event.reason, authoredAt, author: event.author ?? undefined, reference: event.sourceUrl ?? undefined }
+          : undefined,
+        treatment: event.treatment === "keep_maturity" || loan.ratePaymentTreatment === "keep_maturity" ? "keep_maturity" : "keep_payment",
+      };
+    })
+    .filter((event): event is RateResetEvent => event !== null);
+}
+
+/** Day-one assumptions are a separately frozen timeline, not live rate evidence. */
+export function toFrozenFvRateResetEvents(loan: Pick<BookedScheduleInput, "initialFvRateAssumption" | "ratePaymentTreatment">): RateResetEvent[] {
+  const assumption = loan.initialFvRateAssumption;
+  if (!assumption) return [];
+  const events = Array.isArray(assumption.events) ? assumption.events : Array.isArray(assumption.rateResetEvents) ? assumption.rateResetEvents : [];
+  return toRateResetEvents({ activeRateEvents: events as RateTimelineEvent[], ratePaymentTreatment: loan.ratePaymentTreatment });
+}
+
+/** Evidence travels with calculations, including when fair value is applied. */
+export function loanCalculationEvidence(loan: Pick<BookedScheduleInput, "currentRevisionId" | "currentRevisionHash" | "calculationVersion" | "activeEventSetId" | "activeEventSetVersion" | "activeEventSetHash" | "activeEvents" | "activeRateSetId" | "rateTimelineEvents" | "activeRateEvents">) {
+  return {
+    currentRevisionId: loan.currentRevisionId ?? null,
+    currentRevisionHash: loan.currentRevisionHash ?? null,
+    calculationVersion: loan.calculationVersion ?? null,
+    activeEventSetId: loan.activeEventSetId ?? null,
+    activeEventSetVersion: loan.activeEventSetVersion ?? null,
+    activeEventSetHash: loan.activeEventSetHash ?? null,
+    activeEventCount: loan.activeEvents?.length ?? 0,
+    activeRateSetId: loan.activeRateSetId ?? null,
+    activeRateEventCount: ((loan.activeRateEvents ?? loan.rateTimelineEvents ?? []) as RateTimelineEvent[]).filter(
+      (event) => !loan.activeRateSetId || !event.setId || event.setId === loan.activeRateSetId,
+    ).length,
+  };
+}
+
+/**
+ * Recognition-date evidence intentionally excludes the live contractual rate
+ * timeline. Prime observations after recognition are subsequent-measurement
+ * evidence and must never make a day-one measurement appear to have changed.
+ */
+export function dayOneFairValueCalculationEvidence(
+  loan: Pick<BookedScheduleInput, "currentRevisionId" | "currentRevisionHash" | "calculationVersion" | "activeEventSetId" | "activeEventSetVersion" | "activeEventSetHash" | "activeEvents" | "initialFvRateAssumption" | "rateType">,
+) {
+  const assumption = loan.initialFvRateAssumption ?? null;
+  const frozenEvents = assumption && (
+    Array.isArray(assumption.events) ? assumption.events
+      : Array.isArray(assumption.rateResetEvents) ? assumption.rateResetEvents
+        : []
+  );
+  return {
+    currentRevisionId: loan.currentRevisionId ?? null,
+    currentRevisionHash: loan.currentRevisionHash ?? null,
+    calculationVersion: loan.calculationVersion ?? null,
+    activeEventSetId: loan.activeEventSetId ?? null,
+    activeEventSetVersion: loan.activeEventSetVersion ?? null,
+    activeEventSetHash: loan.activeEventSetHash ?? null,
+    activeEventCount: loan.activeEvents?.length ?? 0,
+    rateType: loan.rateType ?? "fixed",
+    recognitionDateRateAssumption: assumption,
+    frozenRateEventCount: frozenEvents?.length ?? 0,
+    fvAssumptionFrozen: loan.rateType !== "prime_linked" || assumption != null,
+  };
 }
 
 /**
@@ -29,13 +309,14 @@ export interface BookedScheduleInput {
  * contractual schedule is returned. This is the single source of truth so every
  * view (loan detail, file cards, reports) reports identical figures.
  */
-export function calculateBookedSchedule(loan: BookedScheduleInput): {
+function calculateStandaloneBookedSchedule(loan: BookedScheduleInput): {
   monthlyPayment: number;
   totalInterest: number;
   totalPayment: number;
   schedule: AmortizationRow[];
   fairValue: number | null;
   usedFairValue: boolean;
+  evidenceMetadata?: Record<string, unknown>;
 } {
   const frequency = (loan.paymentFrequency ?? "monthly") as Frequency;
   const contractual = calculateAmortization(
@@ -51,12 +332,47 @@ export function calculateBookedSchedule(loan: BookedScheduleInput): {
     loan.paymentOverride != null ? Number(loan.paymentOverride) : null,
     loan.graceMonths ?? 0,
     loan.graceInterestTreatment === "none" ? "none" : "capitalized",
+    {
+      paymentTiming: loan.paymentTiming ?? "end",
+      graceTermMode: loan.graceTermMode ?? "included",
+      firstPaymentDate: loan.firstPaymentDate ? parseISO(loan.firstPaymentDate) : undefined,
+      semiMonthlyDueDays:
+        loan.semiMonthlyFirstDueDay != null && loan.semiMonthlySecondDueDay != null
+          ? [loan.semiMonthlyFirstDueDay, loan.semiMonthlySecondDueDay]
+          : undefined,
+      principalEvents: toPrincipalPaymentEvents(loan),
+      rateResetEvents: toRateResetEvents(loan),
+      evidenceMetadata: loanCalculationEvidence(loan),
+    },
   );
   const fvRate = loan.fvRate != null ? Number(loan.fvRate) : 0;
   // A malformed persisted rate (0, negative, NaN, Infinity) must never drive
   // the effective-interest math — fall back to the contractual schedule.
   if (loan.fvDecision === "use_fv" && isValidFvRate(fvRate)) {
-    const fv = calculateFairValueSchedule(contractual.schedule, fvRate, frequency);
+    // Fair value is a recognition-date measurement. Rebuild its contractual
+    // cash-flow input from the approved frozen assumption timeline, rather than
+    // allowing later realized benchmark resets to revise day-one evidence.
+    const frozenRateEvents = toFrozenFvRateResetEvents(loan);
+    const dayOneEvidence = dayOneFairValueCalculationEvidence(loan);
+    const fvContractual = loan.rateType === "prime_linked"
+      ? calculateAmortization(
+          Number(loan.principal) - Number(loan.downPayment ?? 0), Number(loan.interestRate),
+          loan.amortizationYears, loan.termYears, parseISO(loan.startDate), loan.ioMonths ?? 0,
+          loan.specificIoMonths ? loan.specificIoMonths.split(",").map(Number).filter((n) => !isNaN(n)) : [],
+          Number(loan.balloonPayment ?? 0), frequency, loan.paymentOverride != null ? Number(loan.paymentOverride) : null,
+          loan.graceMonths ?? 0, loan.graceInterestTreatment === "none" ? "none" : "capitalized",
+          { paymentTiming: loan.paymentTiming ?? "end", graceTermMode: loan.graceTermMode ?? "included",
+            firstPaymentDate: loan.firstPaymentDate ? parseISO(loan.firstPaymentDate) : undefined,
+            semiMonthlyDueDays: loan.semiMonthlyFirstDueDay != null && loan.semiMonthlySecondDueDay != null ? [loan.semiMonthlyFirstDueDay, loan.semiMonthlySecondDueDay] : undefined,
+            principalEvents: toPrincipalPaymentEvents(loan), rateResetEvents: frozenRateEvents,
+            evidenceMetadata: dayOneEvidence, },
+        )
+      : contractual;
+    const fv = calculateFairValueSchedule(fvContractual.schedule, fvRate, frequency, {
+      paymentTiming: loan.paymentTiming ?? "end",
+      evidenceMetadata: dayOneEvidence,
+      commencementDate: parseISO(loan.startDate),
+    });
     return {
       monthlyPayment: fv.monthlyPayment,
       totalInterest: fv.totalInterest,
@@ -64,6 +380,7 @@ export function calculateBookedSchedule(loan: BookedScheduleInput): {
       schedule: fv.schedule,
       fairValue: fv.fairValue,
       usedFairValue: true,
+      evidenceMetadata: fv.evidenceMetadata,
     };
   }
   return {
@@ -73,7 +390,516 @@ export function calculateBookedSchedule(loan: BookedScheduleInput): {
     schedule: contractual.schedule,
     fairValue: null,
     usedFairValue: false,
+    evidenceMetadata: contractual.evidenceMetadata,
   };
+}
+
+export type BookedScheduleResult = ReturnType<typeof calculateStandaloneBookedSchedule>;
+
+export const PROSPECTIVE_EIR_EVIDENCE_WARNING =
+  "Prospective effective-interest schedule could not be produced from persisted transition evidence. Correct and reconfirm the modification assessment.";
+
+/**
+ * The reporting schedule for a linked agreement. The old agreement owns all
+ * rows through the effective date and the new agreement owns rows after it.
+ * This explicit cut-over prevents the two complete contracts being added
+ * together in annual reports.
+ */
+export function calculateBookedSchedule(loan: BookedScheduleInput): BookedScheduleResult {
+  const successor = calculateStandaloneBookedSchedule(loan);
+  const predecessor = loan.predecessorAgreement;
+  const effective = dateOrUndefined(loan.modificationEffectiveDate);
+  if (!predecessor || !effective || loan.modificationAssessment?.status !== "confirmed") {
+    return successor;
+  }
+  if (isOperatingLeaseLoan({
+    isCapitalLease: !!(predecessor as BookedScheduleInput & { isCapitalLease?: boolean | null }).isCapitalLease,
+    interestRate: predecessor.interestRate,
+    monthlyPayment: (predecessor as BookedScheduleInput & { monthlyPayment?: number | string | null }).monthlyPayment,
+    termMonths: (predecessor as BookedScheduleInput & { termMonths?: number | null }).termMonths,
+  })) {
+    // Operating leases have no liability amortization schedule to splice.
+    return successor;
+  }
+
+  const prior = calculateStandaloneBookedSchedule(predecessor);
+  const quantitative = loan.modificationAssessment.evidence.quantitativeTest;
+  const successorOwnsEffectiveDate =
+    loan.modificationAssessment.conclusion.accountingTreatment !== "new_lease" &&
+    quantitative?.sameDayPaymentTreatment === "include";
+  const predecessorRows = prior.schedule.filter((row) =>
+    successorOwnsEffectiveDate
+      ? row.date.getTime() < effective.getTime()
+      : row.date.getTime() <= effective.getTime(),
+  );
+  let prospective: ReturnType<typeof calculateProspectiveModificationSchedule> | null = null;
+  let prospectiveEirWarning: string | null = null;
+  if (loan.modificationAssessment.conclusion.accountingTreatment === "continuation") {
+    try {
+      // Legacy persisted assessments can predate the structured evidence rules.
+      // Reporting must remain available, while new/edited saves are rejected by
+      // the API/UI until this evidence is corrected.
+      if (!quantitative || !Array.isArray(quantitative.modifiedCashFlows) || quantitative.modifiedCashFlows.length === 0) {
+        throw new Error("Missing modified dated cash flows");
+      }
+      prospective = calculateProspectiveModificationSchedule({
+        effectiveDate: effective,
+        openingCarryingAmount: quantitative.carryingAmount,
+        retainedFeesAndCosts: quantitative.retainedFeesAndCosts,
+        newFeesAndCosts: quantitative.newFeesAndCosts,
+        modifiedCashFlows: quantitative.modifiedCashFlows.map((flow) => ({
+          date: parseISO(flow.date),
+          amount: flow.amount,
+          description: flow.description,
+          sourceReference: flow.sourceReference,
+        })),
+        sameDayPaymentTreatment: quantitative.sameDayPaymentTreatment,
+      });
+    } catch {
+      prospectiveEirWarning = PROSPECTIVE_EIR_EVIDENCE_WARNING;
+    }
+  }
+  const schedule = [
+    ...predecessorRows,
+    ...(prospective?.schedule ?? successor.schedule).filter((row) =>
+      successorOwnsEffectiveDate
+        ? row.date.getTime() >= effective.getTime()
+        : row.date.getTime() > effective.getTime(),
+    ),
+  ].sort((a, b) => a.date.getTime() - b.date.getTime());
+  const totalInterest = schedule.reduce((sum, row) => sum + row.interest, 0);
+  const totalPayment = schedule.reduce((sum, row) => sum + row.payment, 0);
+  return {
+    ...successor,
+    schedule,
+    totalInterest,
+    totalPayment,
+    evidenceMetadata: {
+      ...(successor.evidenceMetadata ?? {}),
+      transition: {
+        predecessorAgreementId: loan.predecessorAgreementId ?? null,
+        effectiveDate: loan.modificationEffectiveDate,
+        accountingTreatment: loan.modificationAssessment.conclusion.accountingTreatment,
+        predecessorRowsThroughEffectiveDate: predecessorRows.length,
+        successorRowsAfterEffectiveDate: (prospective?.schedule ?? successor.schedule).filter((row) =>
+          successorOwnsEffectiveDate ? row.date.getTime() >= effective.getTime() : row.date.getTime() > effective.getTime(),
+        ).length,
+        effectiveDateOwner: successorOwnsEffectiveDate ? "successor" : "predecessor",
+        prospectiveEffectiveInterestBasis: prospective?.effectiveInterestBasis ?? null,
+        prospectiveEffectiveAnnualRate: prospective?.resultingEffectiveAnnualRate ?? null,
+        prospectiveEirWarning,
+        prospectiveEirFallback: prospectiveEirWarning ? "date_cut_standalone_successor" : null,
+        assessmentCorrectionRequired: !!prospectiveEirWarning,
+      },
+    },
+  };
+}
+
+export interface TransitionJournalLine {
+  account: string;
+  debit: number;
+  credit: number;
+}
+
+export interface TransitionJournalEntry {
+  date: string;
+  kind:
+    | "debt_modification"
+    | "debt_extinguishment"
+    | "debt_recognition"
+    | "operating_lease_termination"
+    | "capital_lease_derecognition"
+    | "lease_commencement"
+    | "operating_lease_commencement";
+  memo: string;
+  lines: TransitionJournalLine[];
+}
+
+export interface TransitionJournalInput {
+  effectiveDate: string;
+  assessment: AgreementModificationAssessment;
+  predecessorKind: "loan" | "capital_lease" | "operating_lease";
+  successorKind: "loan" | "capital_lease" | "operating_lease";
+  predecessorCarryingAmount: number;
+  successorInitialAmount: number;
+  /** Existing unamortized fees/costs retained in a continuation. */
+  retainedFeesAndCosts?: number;
+  /** Incremental fees/costs paid for the changed agreement. */
+  newFeesAndCosts?: number;
+  operatingDeferredRentAsset?: number;
+  operatingDeferredRentLiability?: number;
+  capitalLeaseAssetCost?: number;
+  capitalLeaseAccumulatedDepreciation?: number;
+}
+
+const journalLine = (account: string, debit = 0, credit = 0): TransitionJournalLine => ({
+  account,
+  debit: Math.max(0, debit),
+  credit: Math.max(0, credit),
+});
+
+/**
+ * Builds transition-only entries. Routine cash payments and interest remain in
+ * the normal annual entry helpers, so they are not duplicated here.
+ */
+export function buildTransitionJournalEntries(input: TransitionJournalInput): TransitionJournalEntry[] {
+  const entries: TransitionJournalEntry[] = [];
+  const quantitative = input.assessment.evidence.quantitativeTest;
+  const leaseTransition = input.assessment.conclusion.leaseTransition;
+  const retained = Math.max(0, quantitative?.retainedFeesAndCosts ?? input.retainedFeesAndCosts ?? 0);
+  const newCosts = Math.max(0, quantitative?.newFeesAndCosts ?? input.newFeesAndCosts ?? 0);
+  const oldAmount = Math.max(0, quantitative?.carryingAmount ?? input.predecessorCarryingAmount);
+  const newAmount = Math.max(0, leaseTransition?.successorInitialAmount ?? quantitative?.successorAmount ?? input.successorInitialAmount);
+  const treatment = input.assessment.conclusion.accountingTreatment;
+  const isNewLease = treatment === "new_lease";
+
+  // ASPE 3065 new-lease accounting is intentionally handled before debt
+  // branches. A persisted `new_lease` conclusion must never be treated as a
+  // debt continuation or extinguishment, even if malformed source data links
+  // it to a loan predecessor.
+  if (input.predecessorKind === "operating_lease") {
+    const asset = Math.max(0, leaseTransition?.predecessorDeferredRentAsset ?? input.operatingDeferredRentAsset ?? 0);
+    const liability = Math.max(0, leaseTransition?.predecessorDeferredRentLiability ?? input.operatingDeferredRentLiability ?? 0);
+    const netGain = Math.max(0, liability - asset);
+    const netLoss = Math.max(0, asset - liability);
+    entries.push({
+      date: input.effectiveDate,
+      kind: "operating_lease_termination",
+      memo: "Terminate predecessor operating lease and clear deferred rent balances",
+      lines: [
+        journalLine("Deferred rent liability", liability),
+        journalLine("Loss on lease termination", netLoss),
+        journalLine("Deferred rent asset", 0, asset),
+        journalLine("Gain on lease termination", 0, netGain),
+      ].filter((line) => line.debit > 0 || line.credit > 0),
+    });
+  } else if (input.predecessorKind === "capital_lease") {
+    const cost = Math.max(0, leaseTransition?.predecessorAssetCost ?? input.capitalLeaseAssetCost ?? 0);
+    const accumulated = Math.max(0, leaseTransition?.predecessorAccumulatedDepreciation ?? input.capitalLeaseAccumulatedDepreciation ?? 0);
+    const assetNbv = Math.max(0, cost - accumulated);
+    const gain = Math.max(0, oldAmount - assetNbv);
+    const loss = Math.max(0, assetNbv - oldAmount);
+    entries.push({
+      date: input.effectiveDate,
+      kind: "capital_lease_derecognition",
+      memo: "Derecognize predecessor capital lease",
+      lines: [
+        journalLine("Capital lease obligation", oldAmount),
+        journalLine("Accumulated depreciation — leased asset", accumulated),
+        journalLine("Loss on lease derecognition", loss),
+        journalLine("Leased asset", 0, cost),
+        journalLine("Gain on lease derecognition", 0, gain),
+      ].filter((line) => line.debit > 0 || line.credit > 0),
+    });
+  } else if (!isNewLease && treatment === "extinguishment") {
+    if (quantitative?.settlementConsideration == null || !Number.isFinite(quantitative.settlementConsideration)) {
+      throw new Error("Confirmed extinguishment requires persisted quantitativeTest.settlementConsideration");
+    }
+    const settlement = Math.max(0, quantitative.settlementConsideration);
+    const gain = Math.max(0, oldAmount - settlement);
+    const loss = Math.max(0, settlement - oldAmount);
+    entries.push({
+      date: input.effectiveDate,
+      kind: "debt_extinguishment",
+      memo: "Derecognize predecessor debt; present extinguishment gain or loss separately",
+      lines: [
+        journalLine("Predecessor debt", oldAmount),
+        journalLine("Loss on debt extinguishment", loss),
+        journalLine("Cash / settlement consideration", 0, settlement),
+        journalLine("Gain on debt extinguishment", 0, gain),
+      ].filter((line) => line.debit > 0 || line.credit > 0),
+    });
+  } else if (!isNewLease) {
+    // Liability issue costs reduce the continued carrying amount and are
+    // included in the prospective effective-interest basis.
+    const effectiveInterestBasis = Math.max(0, oldAmount - retained - newCosts);
+    entries.push({
+      date: input.effectiveDate,
+      kind: "debt_modification",
+      memo: `Continue predecessor carrying amount; prospective effective-interest basis ${effectiveInterestBasis.toFixed(2)}`,
+      lines: [
+        journalLine("Deferred financing fees / transaction costs", retained + newCosts),
+        journalLine("Cash / fees payable", 0, newCosts),
+        journalLine("Debt carrying amount adjustment", 0, retained),
+      ].filter((line) => line.debit > 0 || line.credit > 0),
+    });
+  }
+
+  if (input.successorKind === "capital_lease") {
+    entries.push({
+      date: input.effectiveDate,
+      kind: "lease_commencement",
+      memo: "Recognize successor capital lease at commencement",
+      lines: [journalLine("Leased asset", newAmount), journalLine("Capital lease obligation", 0, newAmount)],
+    });
+  } else if (!isNewLease && treatment === "extinguishment" && input.successorKind === "loan") {
+    entries.push({
+      date: input.effectiveDate,
+      kind: "debt_recognition",
+      memo: "Recognize successor debt separately from extinguishment of predecessor debt",
+      lines: [journalLine("Cash / consideration received", newAmount), journalLine("Successor debt", 0, newAmount)],
+    });
+  } else if (isNewLease && input.successorKind === "operating_lease") {
+    entries.push({
+      date: input.effectiveDate,
+      kind: "operating_lease_commencement",
+      memo: "Commence successor operating lease; recognize rent on a straight-line basis under ASPE 3065",
+      lines: [],
+    });
+  }
+  return entries;
+}
+
+export interface AccountingJournalLine {
+  account: string;
+  debit: number;
+  credit: number;
+}
+
+export interface AccountingJournalEntry {
+  date: string;
+  purpose: "day_one_fair_value" | "annual_effective_interest";
+  label: string;
+  evidence: Record<string, unknown>;
+  lines: AccountingJournalLine[];
+}
+
+export interface CumulativeFairValueReconciliation {
+  date: string;
+  purpose: "cumulative_fair_value_reconciliation";
+  label: string;
+  evidence: Record<string, unknown>;
+  dayOneDifference: number;
+  priorYearsAccretion: number;
+  currentYearAccretion: number;
+  cumulativeAccretion: number;
+  remainingDiscount: number;
+  /** Supporting catch-up presentation only; this is not the recurring entry. */
+  lines: AccountingJournalLine[];
+}
+
+interface EntryEvidenceInput {
+  evidence?: Record<string, unknown>;
+}
+
+export interface DayOneFairValueJournalInput extends EntryEvidenceInput {
+  recognitionDate: string;
+  faceAmount: number;
+  fairValue: number;
+  isCapitalLease?: boolean;
+}
+
+export interface AnnualEffectiveInterestJournalInput extends EntryEvidenceInput {
+  entryDate: string;
+  fiscalYear: number;
+  effectiveInterest: number;
+  statedContractualInterest: number;
+  isCapitalLease?: boolean;
+}
+
+export interface CumulativeFairValueReconciliationInput extends AnnualEffectiveInterestJournalInput {
+  dayOneDifference: number;
+  priorYearsAccretion: number;
+}
+
+const cents = (amount: number): number => Math.round((amount + Number.EPSILON) * 100) / 100;
+
+const signedJournalLine = (account: string, signedDebit: number): AccountingJournalLine => {
+  const amount = cents(signedDebit);
+  return {
+    account,
+    debit: amount > 0 ? amount : 0,
+    credit: amount < 0 ? -amount : 0,
+  };
+};
+
+/**
+ * Pure day-one entry builder. A positive difference is a discount (face above
+ * fair value); a negative difference is a premium. No journal rows are stored.
+ */
+export function buildDayOneFairValueJournalEntry(input: DayOneFairValueJournalInput): AccountingJournalEntry {
+  const difference = cents(input.faceAmount - input.fairValue);
+  const liability = input.isCapitalLease ? "Obligation under Capital Lease" : "Loan Payable";
+  return {
+    date: input.recognitionDate,
+    purpose: "day_one_fair_value",
+    label: "Day-one fair value recognition",
+    evidence: {
+      ...(input.evidence ?? {}),
+      faceAmount: cents(input.faceAmount),
+      fairValue: cents(input.fairValue),
+      dayOneDifference: difference,
+    },
+    lines: [
+      signedJournalLine(liability, difference),
+      signedJournalLine("Retained Earnings", -difference),
+    ].filter((line) => line.debit !== 0 || line.credit !== 0),
+  };
+}
+
+/**
+ * Pure recurring entry builder. It contains only the fiscal year's booked
+ * effective interest less stated contractual interest; opening retained
+ * earnings belongs exclusively in the separately labelled reconciliation.
+ */
+export function buildAnnualEffectiveInterestJournalEntry(
+  input: AnnualEffectiveInterestJournalInput,
+): AccountingJournalEntry {
+  const accretion = cents(input.effectiveInterest - input.statedContractualInterest);
+  const liability = input.isCapitalLease ? "Obligation under Capital Lease" : "Loan Payable";
+  return {
+    date: input.entryDate,
+    purpose: "annual_effective_interest",
+    label: `Annual effective-interest / accretion entry — fiscal ${input.fiscalYear}`,
+    evidence: {
+      ...(input.evidence ?? {}),
+      fiscalYear: input.fiscalYear,
+      bookedEffectiveInterest: cents(input.effectiveInterest),
+      statedContractualInterest: cents(input.statedContractualInterest),
+      currentYearAccretion: accretion,
+    },
+    lines: [
+      signedJournalLine("Interest Expense", accretion),
+      signedJournalLine(liability, -accretion),
+    ].filter((line) => line.debit !== 0 || line.credit !== 0),
+  };
+}
+
+/** Build the optional cumulative catch-up support without conflating it with
+ * the annual recurring journal entry. */
+export function buildCumulativeFairValueReconciliation(
+  input: CumulativeFairValueReconciliationInput,
+): CumulativeFairValueReconciliation {
+  const dayOneDifference = cents(input.dayOneDifference);
+  const prior = cents(input.priorYearsAccretion);
+  const current = cents(input.effectiveInterest - input.statedContractualInterest);
+  const cumulative = cents(prior + current);
+  const remaining = cents(dayOneDifference - cumulative);
+  const liability = input.isCapitalLease ? "Obligation under Capital Lease" : "Loan Payable";
+  return {
+    date: input.entryDate,
+    purpose: "cumulative_fair_value_reconciliation",
+    label: `Cumulative fair value reconciliation — fiscal ${input.fiscalYear} (support only)`,
+    evidence: { ...(input.evidence ?? {}), fiscalYear: input.fiscalYear },
+    dayOneDifference,
+    priorYearsAccretion: prior,
+    currentYearAccretion: current,
+    cumulativeAccretion: cumulative,
+    remainingDiscount: remaining,
+    lines: [
+      signedJournalLine(liability, remaining),
+      signedJournalLine("Interest Expense", current),
+      signedJournalLine("Retained Earnings (opening)", prior - dayOneDifference),
+    ].filter((line) => line.debit !== 0 || line.credit !== 0),
+  };
+}
+
+export interface FairValueAccountingEntriesInput {
+  loan: BookedScheduleInput;
+  /** ISO reporting year end; entries are produced through this date. */
+  reportingFiscalYearEnd: string;
+  decisionHistory?: FairValueDecisionHistory | null;
+  evidence?: Record<string, unknown>;
+}
+
+export interface FairValueAccountingEntries {
+  treatment: string | null;
+  dayOne: AccountingJournalEntry | null;
+  annualEntries: AccountingJournalEntry[];
+  cumulativeSupport: CumulativeFairValueReconciliation[];
+  decisionHistory: FairValueDecisionHistory | null;
+}
+
+const contractualBasis = (loan: BookedScheduleInput): BookedScheduleInput => ({
+  ...loan,
+  fvDecision: null,
+  fvRate: null,
+  predecessorAgreement: loan.predecessorAgreement ? contractualBasis(loan.predecessorAgreement) : null,
+});
+
+/**
+ * High-level pure builder shared by loan detail and every export. It uses the
+ * frozen recognition-date rate assumption for day one and the date-specific
+ * booked/contractual schedules (including transition cut-over) for each year.
+ */
+export function buildFairValueAccountingEntries(input: FairValueAccountingEntriesInput): FairValueAccountingEntries {
+  const { loan } = input;
+  const decisionHistory = input.decisionHistory ?? null;
+  if (!usesFairValue(loan)) {
+    return { treatment: loan.fvDecision ?? null, dayOne: null, annualEntries: [], cumulativeSupport: [], decisionHistory };
+  }
+
+  const dayOneBooked = calculateStandaloneBookedSchedule({ ...loan, predecessorAgreement: null });
+  if (dayOneBooked.fairValue == null) {
+    return { treatment: loan.fvDecision ?? null, dayOne: null, annualEntries: [], cumulativeSupport: [], decisionHistory };
+  }
+  const faceAmount = Number(loan.principal) - Number(loan.downPayment ?? 0);
+  const {
+    activeRateEvents: _activeRateEvents,
+    rateTimelineEvents: _rateTimelineEvents,
+    activeRateSetId: _activeRateSetId,
+    activeRateEventCount: _activeRateEventCount,
+    ...recognitionEvidence
+  } = input.evidence ?? {};
+  const dayOneEvidence = {
+    ...recognitionEvidence,
+    ...dayOneFairValueCalculationEvidence(loan),
+    treatment: loan.fvDecision,
+    marketEffectiveRate: Number(loan.fvRate),
+    paymentTiming: loan.paymentTiming ?? "end",
+  };
+  const dayOne = buildDayOneFairValueJournalEntry({
+    recognitionDate: loan.startDate,
+    faceAmount,
+    fairValue: dayOneBooked.fairValue,
+    isCapitalLease: !!loan.isCapitalLease,
+    evidence: dayOneEvidence,
+  });
+
+  const booked = calculateBookedSchedule(loan);
+  const contractual = calculateBookedSchedule(contractualBasis(loan));
+  const reportEnd = parseISO(input.reportingFiscalYearEnd);
+  const { month, day } = getFyEndParts(input.reportingFiscalYearEnd);
+  const byFiscalYear = (rows: AmortizationRow[]) => {
+    const totals = new Map<number, number>();
+    for (const row of rows) {
+      if (isAfter(row.date, reportEnd)) continue;
+      const fiscalYear = getFiscalYear(row.date, month, day);
+      totals.set(fiscalYear, (totals.get(fiscalYear) ?? 0) + row.interest);
+    }
+    return totals;
+  };
+  const effectiveInterest = byFiscalYear(booked.schedule);
+  const statedInterest = byFiscalYear(contractual.schedule);
+  const fiscalYears = [...new Set([...effectiveInterest.keys(), ...statedInterest.keys()])].sort((a, b) => a - b);
+  const annualEntries: AccountingJournalEntry[] = [];
+  const cumulativeSupport: CumulativeFairValueReconciliation[] = [];
+  let priorYearsAccretion = 0;
+  for (const fiscalYear of fiscalYears) {
+    const yearEnd = new Date(fiscalYear, month, day);
+    const entryDate = format(isAfter(yearEnd, reportEnd) ? reportEnd : yearEnd, "yyyy-MM-dd");
+    const yearInput: AnnualEffectiveInterestJournalInput = {
+      entryDate,
+      fiscalYear,
+      effectiveInterest: effectiveInterest.get(fiscalYear) ?? 0,
+      statedContractualInterest: statedInterest.get(fiscalYear) ?? 0,
+      isCapitalLease: !!loan.isCapitalLease,
+      evidence: {
+        ...(input.evidence ?? {}),
+        ...loanCalculationEvidence(loan),
+        transition: booked.evidenceMetadata?.transition ?? null,
+      },
+    };
+    const annual = buildAnnualEffectiveInterestJournalEntry(yearInput);
+    annualEntries.push(annual);
+    cumulativeSupport.push(buildCumulativeFairValueReconciliation({
+      ...yearInput,
+      dayOneDifference: faceAmount - dayOneBooked.fairValue,
+      priorYearsAccretion,
+    }));
+    priorYearsAccretion += yearInput.effectiveInterest - yearInput.statedContractualInterest;
+  }
+  return { treatment: loan.fvDecision ?? null, dayOne, annualEntries, cumulativeSupport, decisionHistory };
 }
 
 /**
@@ -154,6 +980,8 @@ export interface OperatingLeaseSummary {
   termMonths: number;
   startDate: string;
   yearlyPayments: YearlyBreakdown[];
+  /** Actual cash rent by fiscal year, including historical transition-owned periods. */
+  yearlyCash: { fiscalYear: number; amount: number }[];
   totalCommitment: number;
   deferredRentAtYearEnd: number;
   totalInducements: number;
@@ -552,6 +1380,11 @@ export function buildLoanSummary(
     specificIoMonths?: string | null;
     balloonPayment?: number | string | null;
     paymentFrequency?: string | null;
+    paymentTiming?: "beginning" | "end" | null;
+    graceTermMode?: "included" | "added" | null;
+    firstPaymentDate?: string | null;
+    semiMonthlyFirstDueDay?: number | null;
+    semiMonthlySecondDueDay?: number | null;
     isCapitalLease?: boolean | null;
     monthlyPayment?: number | string | null;
     paymentOverride?: number | string | null;
@@ -565,6 +1398,18 @@ export function buildLoanSummary(
     otherInducements?: number | string | null;
     fvDecision?: string | null;
     fvRate?: number | string | null;
+    rateType?: BookedScheduleInput["rateType"];
+    rateBenchmark?: string | null;
+    contractualPrimeName?: string | null;
+    benchmarkEquivalentToContractualPrime?: boolean | null;
+    rateSpread?: number | string | null;
+    rateResetFrequency?: string | null;
+    rateEffectiveConvention?: string | null;
+    ratePaymentTreatment?: BookedScheduleInput["ratePaymentTreatment"];
+    rateTimelineEvents?: RateTimelineEvent[] | null;
+    activeRateEvents?: readonly unknown[] | null;
+    activeRateSetId?: string | null;
+    initialFvRateAssumption?: Record<string, unknown> | null;
     covenantViolation?: boolean | null;
     securityClauses?: string[] | null;
     collateralType?: string | null;
@@ -576,6 +1421,17 @@ export function buildLoanSummary(
     collateralUsefulLifeYears?: number | null;
     collateralDecliningRate?: number | string | null;
     collateralSalvageValue?: number | string | null;
+    activeEvents?: BookedScheduleInput["activeEvents"];
+    currentRevisionId?: string | null;
+    currentRevisionHash?: string | null;
+    calculationVersion?: string | null;
+    activeEventSetId?: string | null;
+    activeEventSetVersion?: number | null;
+    activeEventSetHash?: string | null;
+    predecessorAgreement?: BookedScheduleInput | null;
+    predecessorAgreementId?: string | null;
+    modificationEffectiveDate?: string | null;
+    modificationAssessment?: AgreementModificationAssessment | null;
   },
   reportYearEnd: Date,
   fyEndDate: string
@@ -599,6 +1455,13 @@ export function buildLoanSummary(
     const termMonths = loan.termMonths ?? 0;
     let totalCommitment = monthlyPayment * termMonths;
     const startDate = parseISO(loan.startDate);
+    // Cash-commitment buckets follow the contractual first due date when it is
+    // known. Straight-line expense deliberately remains based on lease
+    // inception/term, not payment timing.
+    const paymentStartDate =
+      loan.firstPaymentDate && !isNaN(parseISO(loan.firstPaymentDate).getTime())
+        ? parseISO(loan.firstPaymentDate)
+        : startDate;
 
     // Build year-by-year operating lease payments
     const yearlyMap = new Map<number, number>();
@@ -606,7 +1469,7 @@ export function buildLoanSummary(
       .filter((s) => s.monthlyRent > 0 && s.fromYear >= 1 && s.toYear >= s.fromYear)
       .sort((a, b) => a.fromYear - b.fromYear);
     for (let i = 0; i < termMonths; i++) {
-      const paymentDate = addMonths(startDate, i);
+      const paymentDate = addMonths(paymentStartDate, i);
       if (!isAfter(paymentDate, reportYearEnd)) continue; // only future
       const fy = getFiscalYear(paymentDate, fyEndMonth, fyEndDay);
       let rent = monthlyPayment;
@@ -621,7 +1484,7 @@ export function buildLoanSummary(
 
     // Convert to array, merge "Thereafter" for years beyond the first 5 distinct fiscal years
     const entries = Array.from(yearlyMap.entries()).sort((a, b) => a[0] - b[0]);
-    const yearlyPayments: YearlyBreakdown[] = [];
+    let yearlyPayments: YearlyBreakdown[] = [];
     let thereAfterTotal = 0;
     const maxYears = 5;
     for (let i = 0; i < entries.length; i++) {
@@ -656,17 +1519,129 @@ export function buildLoanSummary(
       fiscalYearEnd: fyEndDate,
     });
     if (sl) totalCommitment = sl.totalLeasePayments;
-    const deferredRentAtYearEnd = sl?.deferredRentAtYearEnd ?? 0;
-    const totalInducements = sl?.totalInducements ?? 0;
-    const monthlyStraightLineExpense = sl?.monthlyStraightLineExpense ?? monthlyPayment;
-    const yearly = sl ? buildYearlyStraightLine(sl.schedule) : [];
-    const inducementLiabilityCurrent = sl?.inducementLiabilityCurrent ?? 0;
-    const inducementLiabilityNonCurrent = sl?.inducementLiabilityNonCurrent ?? 0;
+    let deferredRentAtYearEnd = sl?.deferredRentAtYearEnd ?? 0;
+    let totalInducements = sl?.totalInducements ?? 0;
+    let monthlyStraightLineExpense = sl?.monthlyStraightLineExpense ?? monthlyPayment;
+    let yearly = sl ? buildYearlyStraightLine(sl.schedule) : [];
+    let inducementLiabilityCurrent = sl?.inducementLiabilityCurrent ?? 0;
+    let inducementLiabilityNonCurrent = sl?.inducementLiabilityNonCurrent ?? 0;
+
+    const predecessor = loan.predecessorAgreement;
+    const effective = dateOrUndefined(loan.modificationEffectiveDate);
+    const assessment = loan.modificationAssessment;
+    if (
+      predecessor &&
+      effective &&
+      assessment?.status === "confirmed" &&
+      isOperatingLeaseLoan({
+        isCapitalLease: !!predecessor.isCapitalLease,
+        interestRate: predecessor.interestRate,
+        monthlyPayment: predecessor.monthlyPayment,
+        termMonths: predecessor.termMonths,
+      })
+    ) {
+      const predecessorSl = calculateStraightLineLease({
+        baseMonthlyRent: Number(predecessor.monthlyPayment ?? 0),
+        termMonths: predecessor.termMonths ?? 0,
+        freeRentMonths: predecessor.freeRentMonths ?? 0,
+        escalationRate: Number(predecessor.rentEscalationRate ?? 0),
+        rentSteps: predecessor.rentSteps ?? [],
+        tenantImprovementAllowance: Number(predecessor.tenantImprovementAllowance ?? 0),
+        otherInducements: Number(predecessor.otherInducements ?? 0),
+        startDate: predecessor.startDate,
+        fiscalYearEnd: fyEndDate,
+      });
+      if (predecessorSl && sl) {
+        const q = assessment.evidence.quantitativeTest;
+        const successorOwnsEffectiveDate =
+          assessment.conclusion.accountingTreatment !== "new_lease" &&
+          q?.sameDayPaymentTreatment === "include";
+        const dated = (
+          result: NonNullable<ReturnType<typeof calculateStraightLineLease>>,
+          agreementStart: string,
+          owner: "predecessor" | "successor",
+        ) => {
+          const anchor = parseISO(agreementStart);
+          return result.schedule.map((period) => ({
+            ...period,
+            date: addMonths(anchor, period.monthIndex),
+            owner,
+          }));
+        };
+        const ownedPredecessor = dated(predecessorSl, predecessor.startDate, "predecessor").filter((period) =>
+          successorOwnsEffectiveDate ? period.date < effective : period.date <= effective,
+        );
+        let ownedSuccessor = dated(sl, loan.startDate, "successor").filter((period) =>
+          successorOwnsEffectiveDate ? period.date >= effective : period.date > effective,
+        );
+        // The predecessor termination clears its balances at the boundary.
+        // Restart the successor deferred-rent continuity at the first period it
+        // owns rather than carrying an excluded commencement-date period.
+        const successorOpeningDeferred = ownedSuccessor.length > 0
+          ? ownedSuccessor[0].cumulativeDeferredRent - ownedSuccessor[0].difference
+          : 0;
+        ownedSuccessor = ownedSuccessor.map((period) => ({
+          ...period,
+          cumulativeDeferredRent: period.cumulativeDeferredRent - successorOpeningDeferred,
+        }));
+        const combined = [...ownedPredecessor, ...ownedSuccessor].sort((a, b) => a.date.getTime() - b.date.getTime());
+
+        totalCommitment = combined.reduce((sum, period) => sum + period.actualPayment, 0);
+        const futureCash = new Map<number, number>();
+        const annual = new Map<number, { actual: number; straightLine: number; difference: number; deferredRent: number }>();
+        for (const period of combined) {
+          const fiscalYear = getFiscalYear(period.date, fyEndMonth, fyEndDay);
+          if (isAfter(period.date, reportYearEnd)) {
+            futureCash.set(fiscalYear, (futureCash.get(fiscalYear) ?? 0) + period.actualPayment);
+          }
+          const item = annual.get(fiscalYear) ?? { actual: 0, straightLine: 0, difference: 0, deferredRent: 0 };
+          item.actual += period.actualPayment;
+          item.straightLine += period.straightLineExpense;
+          item.difference += period.difference;
+          item.deferredRent = period.cumulativeDeferredRent;
+          annual.set(fiscalYear, item);
+        }
+        const futureEntries = Array.from(futureCash.entries()).sort((a, b) => a[0] - b[0]);
+        yearlyPayments = futureEntries.slice(0, 5).map(([fiscalYear, amount]) => ({ fiscalYear, label: `${fiscalYear}`, amount }));
+        const thereafter = futureEntries.slice(5).reduce((sum, [, amount]) => sum + amount, 0);
+        if (thereafter > 0) yearlyPayments.push({ fiscalYear: futureEntries.at(-1)?.[0] ?? 0, label: "Thereafter", amount: thereafter });
+        yearly = Array.from(annual.entries()).sort((a, b) => a[0] - b[0]).map(([fiscalYear, values]) => ({ fiscalYear, ...values }));
+
+        const lastOwnedAtYearEnd = combined.filter((period) => !isAfter(period.date, reportYearEnd)).at(-1);
+        deferredRentAtYearEnd = lastOwnedAtYearEnd?.cumulativeDeferredRent ?? 0;
+        const predecessorInducementShare = predecessorSl.totalInducements * ownedPredecessor.length / predecessorSl.schedule.length;
+        const successorInducementShare = sl.totalInducements * ownedSuccessor.length / sl.schedule.length;
+        totalInducements = predecessorInducementShare + successorInducementShare;
+        const nextYearEnd = new Date(reportYearEnd);
+        nextYearEnd.setFullYear(nextYearEnd.getFullYear() + 1);
+        if (lastOwnedAtYearEnd?.owner === "predecessor") {
+          monthlyStraightLineExpense = predecessorSl.monthlyStraightLineExpense;
+          const monthlyInducement = predecessorSl.totalInducements / predecessorSl.schedule.length;
+          const elapsed = ownedPredecessor.filter((period) => !isAfter(period.date, reportYearEnd)).length;
+          const nextYear = ownedPredecessor.filter((period) => isAfter(period.date, reportYearEnd) && !isAfter(period.date, nextYearEnd)).length;
+          const remaining = Math.max(0, predecessorSl.totalInducements - elapsed * monthlyInducement);
+          inducementLiabilityCurrent = Math.min(remaining, nextYear * monthlyInducement);
+          inducementLiabilityNonCurrent = Math.max(0, remaining - inducementLiabilityCurrent);
+        } else {
+          const monthlyInducement = sl.totalInducements / sl.schedule.length;
+          const elapsed = ownedSuccessor.filter((period) => !isAfter(period.date, reportYearEnd)).length;
+          const nextYear = ownedSuccessor.filter((period) => isAfter(period.date, reportYearEnd) && !isAfter(period.date, nextYearEnd)).length;
+          const remaining = Math.max(0, sl.totalInducements - elapsed * monthlyInducement);
+          inducementLiabilityCurrent = Math.min(remaining, nextYear * monthlyInducement);
+          inducementLiabilityNonCurrent = Math.max(0, remaining - inducementLiabilityCurrent);
+        }
+      }
+    }
 
     const opCp = loan.counterparty?.trim() || null;
-    const opNarrative = opCp
+    const opNarrativeBase = opCp
       ? `Operating lease with ${opCp}.`
       : "Operating lease.";
+    const opNarrative = loan.modificationAssessment?.status === "confirmed" && loan.modificationEffectiveDate
+      ? loan.modificationAssessment.conclusion.accountingTreatment === "new_lease"
+        ? `${opNarrativeBase} This is a new operating lease commencing under ASPE 3065 effective ${loan.modificationEffectiveDate}; predecessor lease balances are cleared at that date.`
+        : `${opNarrativeBase} This agreement replaces its linked predecessor effective ${loan.modificationEffectiveDate}; the predecessor is reported through that date and this lease afterward.`
+      : opNarrativeBase;
 
     return {
       id: loan.id,
@@ -677,6 +1652,7 @@ export function buildLoanSummary(
       termMonths,
       startDate: loan.startDate,
       yearlyPayments,
+      yearlyCash: yearly.map((y) => ({ fiscalYear: y.fiscalYear, amount: y.actual })),
       totalCommitment,
       deferredRentAtYearEnd,
       totalInducements,
@@ -763,7 +1739,12 @@ export function buildLoanSummary(
   const leadIn = isCapital
     ? `Capital lease ${cp ? `with ${cp} ` : ""}bearing ${rateText}, repayable in ${freqWord} payments of $${paymentText}`
     : `Loan ${cp ? `from ${cp} ` : ""}bearing ${rateText}, repayable in ${freqWord} payments of $${paymentText}`;
-  const narrative = `${leadIn}. The ${isCapital ? "lease" : "loan"} matures on ${formatDate(maturityDate)}${securityText}`;
+  const transitionDisclosure = loan.modificationAssessment?.status === "confirmed" && loan.modificationEffectiveDate
+    ? loan.modificationAssessment.conclusion.accountingTreatment === "new_lease"
+      ? ` This agreement is a new lease commencing under ASPE 3065 effective ${loan.modificationEffectiveDate}; any predecessor lease is terminated or derecognized at that date and this lease is reported thereafter.`
+      : ` This agreement replaces its linked predecessor effective ${loan.modificationEffectiveDate} and is accounted for as a ${loan.modificationAssessment.conclusion.accountingTreatment}; predecessor activity is retained through the effective date and successor activity thereafter.`
+    : "";
+  const narrative = `${leadIn}. The ${isCapital ? "lease" : "loan"} matures on ${formatDate(maturityDate)}${securityText}${transitionDisclosure}`;
 
   // Year-by-year principal repayments (future years only, for the repayment-terms disclosure)
   // and principal repaid during the current reporting fiscal year (for the cash flow statement).
@@ -952,6 +1933,64 @@ export interface FileSummary {
   nonCashInducementsReceived: number;
 }
 
+// Engagement-level presentation uses the canonical FileSummary above; the
+// builder lives separately so export dependencies never enter accounting code.
+export { buildDisclosureModel, DisclosureEvidenceError } from "./disclosure-model";
+export type {
+  DisclosureModel,
+  BuildDisclosureModelInput,
+  DisclosureAgreementInput,
+  DisclosureComparativeInput,
+} from "./disclosure-model";
+
+/**
+ * Build the reporting population for a file without assuming that a manually
+ * linked predecessor belongs to that same file. Only predecessors referenced
+ * by the file's agreements are added, and every successor receives the full
+ * predecessor record needed by transition schedules and workpaper evidence.
+ */
+export function hydrateLinkedAgreementPredecessors<
+  T extends { id: string; predecessorAgreementId?: string | null },
+>(
+  agreements: readonly T[],
+  predecessorCandidates: readonly T[],
+): Array<T & { predecessorAgreement: T | null }> {
+  const allById = new Map<string, T>();
+  for (const item of predecessorCandidates) allById.set(item.id, item);
+  for (const item of agreements) allById.set(item.id, item);
+
+  const hydrateNode = (node: T, visited: Set<string>): T & { predecessorAgreement: T | null } => {
+    if (visited.has(node.id)) return { ...node, predecessorAgreement: null };
+    visited.add(node.id);
+
+    const pred = node.predecessorAgreementId ? allById.get(node.predecessorAgreementId) : null;
+    return {
+      ...node,
+      predecessorAgreement: pred ? hydrateNode(pred, new Set(visited)) : null,
+    };
+  };
+
+  const reachable = new Set<string>();
+  const queue = agreements.map(a => a.id);
+  while (queue.length > 0) {
+    const id = queue.shift();
+    if (!id || reachable.has(id)) continue;
+    reachable.add(id);
+    const node = allById.get(id);
+    if (node?.predecessorAgreementId) {
+      queue.push(node.predecessorAgreementId);
+    }
+  }
+
+  const flatList: T[] = [];
+  for (const id of reachable) {
+    const node = allById.get(id);
+    if (node) flatList.push(node);
+  }
+
+  return flatList.map((agreement) => hydrateNode(agreement, new Set()));
+}
+
 export function buildFileSummary(
   loans: Array<{
     id: string;
@@ -981,7 +2020,18 @@ export function buildFileSummary(
     inducementReceivedInCash?: boolean | null;
     fvDecision?: string | null;
     fvRate?: number | string | null;
+    rateType?: BookedScheduleInput["rateType"];
+    ratePaymentTreatment?: BookedScheduleInput["ratePaymentTreatment"];
+    initialFvRateAssumption?: Record<string, unknown> | null;
+    activeEvents?: BookedScheduleInput["activeEvents"];
+    activeRateEvents?: readonly unknown[] | null;
+    activeEventSetId?: string | null;
+    activeEventSetVersion?: number | null;
+    activeEventSetHash?: string | null;
     covenantViolation?: boolean | null;
+    predecessorAgreementId?: string | null;
+    modificationEffectiveDate?: string | null;
+    modificationAssessment?: AgreementModificationAssessment | null;
   }>,
   fyEndDate: string
 ): FileSummary {
@@ -1058,8 +2108,23 @@ export function buildFileSummary(
   // Reporting fiscal year window: the 12 months ending on the FY-end date.
   const fyWindowStart = new Date(fy - 1, reportYearEnd.getMonth(), reportYearEnd.getDate());
 
+  const byId = new Map(loans.map((loan) => [loan.id, loan]));
+  const linkedPredecessors = new Set(
+    loans
+      .filter((loan) => loan.modificationAssessment?.status === "confirmed")
+      .map((loan) => loan.predecessorAgreementId)
+      .filter((id): id is string => !!id),
+  );
   for (const loan of loans) {
-    const summary = buildLoanSummary(loan, reportYearEnd, fyEndDate);
+    // A confirmed successor presents the linked agreements as one accounting
+    // timeline. Suppress the standalone predecessor to avoid double counting.
+    if (linkedPredecessors.has(loan.id)) continue;
+    const predecessor = loan.predecessorAgreementId ? byId.get(loan.predecessorAgreementId) : undefined;
+    const summary = buildLoanSummary(
+      { ...loan, predecessorAgreement: predecessor as BookedScheduleInput | undefined },
+      reportYearEnd,
+      fyEndDate,
+    );
     if (!summary) continue;
 
     if ("monthlyPayment" in summary && "termMonths" in summary) {
@@ -1076,7 +2141,7 @@ export function buildFileSummary(
       const slAmount = op.yearlyStraightLine.find((y) => y.fiscalYear === fy)?.amount ?? 0;
       totalStraightLineRentExpense += slAmount;
       // Cash payments for current fiscal year (actual cash, not straight-line expense)
-      const cashAmount = op.yearlyPayments.find((y) => y.fiscalYear === fy)?.amount ?? 0;
+      const cashAmount = op.yearlyCash.find((y) => y.fiscalYear === fy)?.amount ?? 0;
       totalOperatingLeaseCash += cashAmount;
       // Deferred rent classification
       if (op.deferredRentAtYearEnd < 0) deferredRentAsset += Math.abs(op.deferredRentAtYearEnd);

@@ -6,10 +6,10 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export type UpdateLoanFvDecision = typeof UpdateLoanFvDecision[keyof typeof UpdateLoanFvDecision];
+export type FvDecisionConfirmationTreatment = typeof FvDecisionConfirmationTreatment[keyof typeof FvDecisionConfirmationTreatment];
 
 
-export const UpdateLoanFvDecision = {
+export const FvDecisionConfirmationTreatment = {
   use_fv: 'use_fv',
   trivial: 'trivial',
   immaterial: 'immaterial',

@@ -1,4 +1,5 @@
 import { useState, type Dispatch, type SetStateAction } from "react";
+import { addDays, addMonths, format, parseISO } from "date-fns";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -20,11 +21,28 @@ export interface LoanFormState {
   isCapitalLease: boolean;
   principal: number;
   downPayment: number;
-  interestRate: number;
+  interestRate: number | "";
+  rateType: "fixed" | "prime_linked";
+  rateBenchmark: string | null;
+  contractualPrimeName: string | null;
+  benchmarkEquivalentToContractualPrime: boolean;
+  rateSpread: number | null;
+  rateResetFrequency: "immediate" | "monthly" | "quarterly" | "annual" | null;
+  rateEffectiveConvention: "observation_date" | "next_business_day" | "next_payment_date" | null;
+  ratePaymentTreatment: "keep_payment" | "keep_maturity" | null;
+  initialFvRateAssumption: { [key: string]: unknown } | null;
   amortizationYears: number;
   termYears: number;
   startDate: string;
   paymentFrequency: "monthly" | "semi-monthly" | "bi-weekly" | "weekly";
+  paymentTiming: "beginning" | "end";
+  graceTermMode: "included" | "added";
+  /** Blank retains legacy date anchoring for existing records. */
+  firstPaymentDate: string;
+  /** UI-only: keeps derived dates in sync without overwriting contract dates. */
+  firstPaymentDateDerived: boolean;
+  semiMonthlyFirstDueDay: number | undefined;
+  semiMonthlySecondDueDay: number | undefined;
   ioMonths: number;
   graceMonths: number;
   graceInterestTreatment: "capitalized" | "none";
@@ -67,6 +85,45 @@ export interface LoanFormState {
 
 export type LoanFormMode = "loan" | "capital_lease" | "operating_lease";
 
+export function deriveFirstPaymentDate(
+  startDate: string,
+  paymentTiming: "beginning" | "end",
+  graceMonths: number,
+  frequency: LoanFormState["paymentFrequency"],
+  firstDueDay?: number,
+  secondDueDay?: number,
+): string {
+  const start = parseISO(startDate);
+  if (isNaN(start.getTime())) return "";
+  const graceBoundary = addMonths(start, Math.max(0, graceMonths));
+  if (paymentTiming === "beginning") return format(graceBoundary, "yyyy-MM-dd");
+  if (frequency === "monthly") return format(addMonths(graceBoundary, 1), "yyyy-MM-dd");
+  if (frequency === "bi-weekly") return format(addDays(graceBoundary, 14), "yyyy-MM-dd");
+  if (frequency === "weekly") return format(addDays(graceBoundary, 7), "yyyy-MM-dd");
+  if (firstDueDay == null || secondDueDay == null) return format(addDays(graceBoundary, 15), "yyyy-MM-dd");
+  const days = [firstDueDay, secondDueDay].sort((a, b) => a - b);
+  for (let offset = 0; offset < 2; offset++) {
+    const month = addMonths(new Date(graceBoundary.getFullYear(), graceBoundary.getMonth(), 1), offset);
+    for (const day of days) {
+      const candidate = new Date(month.getFullYear(), month.getMonth() + 1, 0);
+      candidate.setDate(Math.min(day, candidate.getDate()));
+      if (candidate > graceBoundary) return format(candidate, "yyyy-MM-dd");
+    }
+  }
+  return "";
+}
+
+export function getGraceTermPreview(
+  statedTermMonths: number,
+  graceMonths: number,
+  mode: "included" | "added",
+): { repaymentMonths: number; totalContractualMonths: number } {
+  return {
+    repaymentMonths: Math.max(0, statedTermMonths - (mode === "included" ? graceMonths : 0)),
+    totalContractualMonths: statedTermMonths + (mode === "added" ? graceMonths : 0),
+  };
+}
+
 export function shouldShowAssetTracking(mode: LoanFormMode, _securityClauses: string[]): boolean {
   // Only capital leases track a leased asset here. For loans, the pledged
   // asset is tracked in the Collateral Asset section (Security & Collateral).
@@ -85,9 +142,32 @@ export function validateLoanForm(form: LoanFormState, mode: LoanFormMode): strin
   if (!form.principal || form.principal <= 0) return "Principal is required.";
   if (form.downPayment < 0) return "Down payment cannot be negative.";
   if (form.downPayment >= form.principal) return "Down payment must be less than the principal.";
+  if (form.interestRate === "") return "Interest rate is required.";
   if (form.interestRate < 0) return "Interest rate cannot be negative.";
+  if (form.rateType === "prime_linked") {
+    if (!(form.interestRate > 0)) return "Prime-linked loans require an evidenced positive opening contractual rate; no zero/public fallback is permitted.";
+    if (!form.rateBenchmark) return "Prime-linked loans require the benchmark series.";
+    if (!form.contractualPrimeName?.trim()) return "Confirm the lender's contractual prime name; a public BoC series is not necessarily lender prime.";
+    if (form.rateSpread == null) return "Prime-linked loans require the contractual spread.";
+    if (!form.rateResetFrequency || !form.rateEffectiveConvention || !form.ratePaymentTreatment) {
+      return "Prime-linked loans require reset frequency, effective-date convention, and payment treatment.";
+    }
+    if (!form.initialFvRateAssumption || Object.keys(form.initialFvRateAssumption).length === 0) {
+      return "Confirm and freeze the day-one fair-value rate assumption before creating a prime-linked loan.";
+    }
+  }
   if (!form.amortizationYears || form.amortizationYears <= 0) return "Amortization is required.";
   if (!form.termYears || form.termYears <= 0) return "Term is required.";
+  if (form.firstPaymentDate && isNaN(parseISO(form.firstPaymentDate).getTime())) {
+    return "First payment date is invalid.";
+  }
+  if (form.paymentFrequency === "semi-monthly") {
+    const first = form.semiMonthlyFirstDueDay;
+    const second = form.semiMonthlySecondDueDay;
+    if (first == null || second == null || first < 1 || first > 31 || second < 1 || second > 31 || first === second) {
+      return "Semi-monthly payments require two different due days from 1 through 31.";
+    }
+  }
   return null;
 }
 
@@ -115,6 +195,27 @@ export function LoanFormFields({ form, setForm, mode = "loan" }: LoanFormFieldsP
   // "Periods" only makes sense as a distinct unit when payments happen more
   // often than monthly (for monthly loans, periods === months).
   const offerPeriods = periodsPerYear > 12;
+  const statedTermMonths = Math.round((form.termMonths ?? form.termYears * 12) * 100) / 100;
+  const { repaymentMonths, totalContractualMonths } = getGraceTermPreview(
+    statedTermMonths,
+    form.graceMonths,
+    form.graceTermMode,
+  );
+  const previewDate =
+    form.firstPaymentDate && !isNaN(parseISO(form.firstPaymentDate).getTime())
+      ? format(parseISO(form.firstPaymentDate), "MMMM d, yyyy")
+      : form.startDate && !isNaN(parseISO(form.startDate).getTime())
+        ? format(parseISO(form.startDate), "MMMM d, yyyy")
+        : "Enter an inception date";
+  const setDerivedFirstDate = (patch: Partial<LoanFormState>) => {
+    const next = { ...form, ...patch };
+    return {
+      ...next,
+      firstPaymentDate: next.firstPaymentDateDerived
+        ? deriveFirstPaymentDate(next.startDate, next.paymentTiming, next.graceMonths, next.paymentFrequency, next.semiMonthlyFirstDueDay, next.semiMonthlySecondDueDay)
+        : next.firstPaymentDate,
+    };
+  };
 
   type DurationUnit = "years" | "months" | "periods";
 
@@ -221,44 +322,221 @@ export function LoanFormFields({ form, setForm, mode = "loan" }: LoanFormFieldsP
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="rate">
-                Interest Rate (%) <Req />
-              </Label>
-              <Input
-                id="rate"
-                type="number"
-                step="0.01"
-                value={form.interestRate || ""}
-                onChange={(e) => setForm({ ...form, interestRate: e.target.value === "" ? 0 : Number(e.target.value) })}
-                required
-              />
+              <Label htmlFor="rateType">Rate Type <Req /></Label>
+              <Select
+                value={form.rateType}
+                onValueChange={(v) => setForm({ ...form, rateType: v as "fixed" | "prime_linked" })}
+              >
+                <SelectTrigger id="rateType"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="fixed">Fixed</SelectItem>
+                  <SelectItem value="prime_linked">Prime-Linked Variable</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label htmlFor="downPayment">
-                {mode === "capital_lease" ? "Down Payment / First Payment" : "Down Payment"}
-              </Label>
-              <Input
-                id="downPayment"
-                type="number"
-                min="0"
-                value={form.downPayment || ""}
-                onChange={(e) => setForm({ ...form, downPayment: e.target.value === "" ? 0 : Number(e.target.value) })}
-                placeholder={
-                  mode === "capital_lease"
-                    ? "Paid at lease inception (optional)"
-                    : "Lump sum paid upfront (optional)"
-                }
-              />
-              {form.downPayment > 0 && form.principal > form.downPayment ? (
-                <p className="text-xs text-muted-foreground">
-                  {mode === "capital_lease" ? "Obligation financed" : "Amount financed"}:{" "}
-                  {(form.principal - form.downPayment).toLocaleString("en-CA", { style: "currency", currency: "CAD" })}
-                </p>
-              ) : null}
+
+          {form.rateType === "fixed" && (
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="rate">
+                  Fixed Interest Rate (%) <Req />
+                </Label>
+                <Input
+                  id="rate"
+                  type="number"
+                  step="0.01"
+                  value={form.interestRate === "" ? "" : form.interestRate}
+                  onChange={(e) => setForm({ ...form, interestRate: e.target.value === "" ? "" : Number(e.target.value) })}
+                  required
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="downPayment">
+                  {mode === "capital_lease" ? "Down Payment / First Payment" : "Down Payment"}
+                </Label>
+                <Input
+                  id="downPayment"
+                  type="number"
+                  min="0"
+                  value={form.downPayment || ""}
+                  onChange={(e) => setForm({ ...form, downPayment: e.target.value === "" ? 0 : Number(e.target.value) })}
+                  placeholder={
+                    mode === "capital_lease"
+                      ? "Paid at lease inception (optional)"
+                      : "Lump sum paid upfront (optional)"
+                  }
+                />
+                {form.downPayment > 0 && form.principal > form.downPayment ? (
+                  <p className="text-xs text-muted-foreground">
+                    {mode === "capital_lease" ? "Obligation financed" : "Amount financed"}:{" "}
+                    {(form.principal - form.downPayment).toLocaleString("en-CA", { style: "currency", currency: "CAD" })}
+                  </p>
+                ) : null}
+              </div>
             </div>
-          </div>
+          )}
+
+          {form.rateType === "prime_linked" && (
+            <div className="space-y-4 rounded-lg border border-primary/20 bg-primary/5 p-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="openingRate">Opening Contractual Rate (%) <Req /></Label>
+                  <Input
+                    id="openingRate"
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={form.interestRate === "" ? "" : form.interestRate}
+                    onChange={(e) => setForm({ ...form, interestRate: e.target.value === "" ? "" : Number(e.target.value) })}
+                    placeholder="e.g. 7.20"
+                    required
+                  />
+                  <p className="text-[10px] text-muted-foreground leading-tight">Must be evidenced from the contract.</p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="downPaymentPrime">
+                    {mode === "capital_lease" ? "Down Payment / First Payment" : "Down Payment"}
+                  </Label>
+                  <Input
+                    id="downPaymentPrime"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={form.downPayment || ""}
+                    onChange={(e) => setForm({ ...form, downPayment: Number(e.target.value) })}
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="rateBenchmark">Benchmark Rate <Req /></Label>
+                  <Select
+                    value={form.rateBenchmark || ""}
+                    onValueChange={(v) => setForm({ ...form, rateBenchmark: v })}
+                  >
+                    <SelectTrigger id="rateBenchmark"><SelectValue placeholder="Select benchmark..." /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="boc_v80691311">Bank of Canada Prime (V80691311)</SelectItem>
+                      <SelectItem value="OTHER">Other Prime</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="rateSpread">Spread (%) <Req /></Label>
+                  <Input
+                    id="rateSpread"
+                    type="number"
+                    step="0.01"
+                    value={form.rateSpread ?? ""}
+                    onChange={(e) => setForm({ ...form, rateSpread: e.target.value === "" ? null : Number(e.target.value) })}
+                    placeholder="e.g. +1.50 or -0.50"
+                    required={form.rateType === "prime_linked"}
+                  />
+                </div>
+              </div>
+              <label className="flex items-start gap-2 text-xs text-muted-foreground">
+                <Checkbox
+                  checked={form.benchmarkEquivalentToContractualPrime}
+                  onCheckedChange={(checked) => setForm({ ...form, benchmarkEquivalentToContractualPrime: checked === true })}
+                />
+                <span>I confirm the selected public benchmark is contractually equivalent to the lender prime. Leave unchecked when lender-prime evidence or an override is required.</span>
+              </label>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="rateResetFrequency">Reset Frequency</Label>
+                  <Select
+                    value={form.rateResetFrequency || ""}
+                    onValueChange={(v) => setForm({ ...form, rateResetFrequency: v as any })}
+                  >
+                    <SelectTrigger id="rateResetFrequency"><SelectValue placeholder="Select..." /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="immediate">Immediate</SelectItem>
+                      <SelectItem value="monthly">Monthly</SelectItem>
+                      <SelectItem value="quarterly">Quarterly</SelectItem>
+                      <SelectItem value="annual">Annual</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="rateEffectiveConvention">Effective Convention</Label>
+                  <Select
+                    value={form.rateEffectiveConvention || ""}
+                    onValueChange={(v) => setForm({ ...form, rateEffectiveConvention: v as any })}
+                  >
+                    <SelectTrigger id="rateEffectiveConvention"><SelectValue placeholder="Select..." /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="observation_date">Observation Date</SelectItem>
+                      <SelectItem value="next_business_day">Next Business Day</SelectItem>
+                      <SelectItem value="next_payment_date">Next Payment Date</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="contractualPrimeName">Contractual Prime Name</Label>
+                  <Input
+                    id="contractualPrimeName"
+                    value={form.contractualPrimeName || ""}
+                    onChange={(e) => setForm({ ...form, contractualPrimeName: e.target.value || null })}
+                    placeholder="e.g. RBC Prime"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="ratePaymentTreatment">Payment Recalculation</Label>
+                  <Select
+                    value={form.ratePaymentTreatment || ""}
+                    onValueChange={(v) => setForm({ ...form, ratePaymentTreatment: v as any })}
+                  >
+                    <SelectTrigger id="ratePaymentTreatment"><SelectValue placeholder="Select..." /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="keep_maturity">Adjust Payment (Keep Maturity)</SelectItem>
+                      <SelectItem value="keep_payment">Adjust Maturity (Keep Payment)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="initialFvRateAssumption">Day-One FV Assumption Basis</Label>
+                <Select
+                  value={(form.initialFvRateAssumption as any)?.basis || ""}
+                  onValueChange={(v) => setForm({ ...form, initialFvRateAssumption: v ? { basis: v } : null })}
+                >
+                  <SelectTrigger id="initialFvRateAssumption"><SelectValue placeholder="Select basis..." /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="constant_benchmark">Constant Initial Benchmark (Frozen)</SelectItem>
+                    <SelectItem value="lender_schedule">Lender Provided Expected Schedule</SelectItem>
+                    <SelectItem value="forward_curve">Forward Curve</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">The assumption used at initial recognition. Later realized prime observations never replace this day-one assumption retrospectively.</p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="downPaymentPrime">
+                  {mode === "capital_lease" ? "Down Payment / First Payment" : "Down Payment"}
+                </Label>
+                <Input
+                  id="downPaymentPrime"
+                  type="number"
+                  min="0"
+                  value={form.downPayment || ""}
+                  onChange={(e) => setForm({ ...form, downPayment: e.target.value === "" ? 0 : Number(e.target.value) })}
+                  placeholder={
+                    mode === "capital_lease"
+                      ? "Paid at lease inception (optional)"
+                      : "Lump sum paid upfront (optional)"
+                  }
+                />
+                {form.downPayment > 0 && form.principal > form.downPayment ? (
+                  <p className="text-xs text-muted-foreground">
+                    {mode === "capital_lease" ? "Obligation financed" : "Amount financed"}:{" "}
+                    {(form.principal - form.downPayment).toLocaleString("en-CA", { style: "currency", currency: "CAD" })}
+                  </p>
+                ) : null}
+              </div>
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label htmlFor="amort">
@@ -372,7 +650,7 @@ export function LoanFormFields({ form, setForm, mode = "loan" }: LoanFormFieldsP
             id="startDate"
             type="date"
             value={form.startDate}
-            onChange={(e) => setForm({ ...form, startDate: e.target.value })}
+            onChange={(e) => setForm(setDerivedFirstDate({ startDate: e.target.value }))}
             required
           />
         </div>
@@ -381,7 +659,7 @@ export function LoanFormFields({ form, setForm, mode = "loan" }: LoanFormFieldsP
             <Label htmlFor="freq">Payment Frequency</Label>
             <Select
               value={form.paymentFrequency}
-              onValueChange={(v) => setForm({ ...form, paymentFrequency: v as any })}
+              onValueChange={(v) => setForm(setDerivedFirstDate({ paymentFrequency: v as LoanFormState["paymentFrequency"] }))}
             >
               <SelectTrigger id="freq">
                 <SelectValue />
@@ -396,6 +674,53 @@ export function LoanFormFields({ form, setForm, mode = "loan" }: LoanFormFieldsP
           </div>
         )}
       </div>
+
+      {isDebt && (
+        <div className="space-y-3 rounded-lg border border-primary/20 bg-primary/5 p-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="paymentTiming">Payment Timing</Label>
+              <Select value={form.paymentTiming} onValueChange={(v) => setForm(setDerivedFirstDate({ paymentTiming: v as "beginning" | "end" }))}>
+                <SelectTrigger id="paymentTiming"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="end">End of each period</SelectItem>
+                  <SelectItem value="beginning">Beginning of each period</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="firstPaymentDate">First Payment Date</Label>
+              <Input id="firstPaymentDate" type="date" value={form.firstPaymentDate} onChange={(e) => setForm({ ...form, firstPaymentDate: e.target.value, firstPaymentDateDerived: false })} />
+            </div>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="graceTermMode">Grace Term Treatment</Label>
+            <Select value={form.graceTermMode} onValueChange={(v) => setForm({ ...form, graceTermMode: v as "included" | "added" })}>
+              <SelectTrigger id="graceTermMode"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="included">Grace is included in the stated term</SelectItem>
+                <SelectItem value="added">Grace extends the stated term</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          {form.paymentFrequency === "semi-monthly" && (
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="semiMonthlyFirstDueDay">First monthly due day</Label>
+                <Input id="semiMonthlyFirstDueDay" type="number" min={1} max={31} value={form.semiMonthlyFirstDueDay ?? ""} onChange={(e) => setForm(setDerivedFirstDate({ semiMonthlyFirstDueDay: e.target.value === "" ? undefined : Number(e.target.value) }))} />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="semiMonthlySecondDueDay">Second monthly due day</Label>
+                <Input id="semiMonthlySecondDueDay" type="number" min={1} max={31} value={form.semiMonthlySecondDueDay ?? ""} onChange={(e) => setForm(setDerivedFirstDate({ semiMonthlySecondDueDay: e.target.value === "" ? undefined : Number(e.target.value) }))} />
+              </div>
+            </div>
+          )}
+          <p className="text-xs text-muted-foreground" data-testid="text-payment-timing-preview">
+            Actual first contractual payment: <strong>{previewDate}</strong>{form.firstPaymentDateDerived ? " (derived from inception, grace, and timing)" : form.firstPaymentDate ? "" : " (legacy inception-date anchor retained)"}. Repayment term: <strong>{repaymentMonths} months</strong>. Total contractual term: <strong>{totalContractualMonths} months</strong>.
+            {form.graceMonths > 0 && ` For example, 60 repayment months + 13 months of added grace = 73 total months; when grace is included, 13 grace months within a 60-month term leave 47 repayment months.`}
+          </p>
+        </div>
+      )}
 
       {isDebt && (
         <div className="space-y-2">
@@ -449,11 +774,10 @@ export function LoanFormFields({ form, setForm, mode = "loan" }: LoanFormFieldsP
                 type="number"
                 min={0}
                 value={form.graceMonths}
-                onChange={(e) => setForm({ ...form, graceMonths: Math.max(0, Number(e.target.value)) })}
+                onChange={(e) => setForm(setDerivedFirstDate({ graceMonths: Math.max(0, Number(e.target.value)) }))}
               />
               <p className="text-xs text-muted-foreground">
-                Months with no payments at all before repayment starts. The term should include
-                these months; the amortization period should not.
+                Months with no payments at all before repayment starts. {form.graceTermMode === "included" ? "They are included in the stated term." : "They extend the stated term."} The amortization period excludes them.
               </p>
             </div>
             {form.graceMonths > 0 && (
