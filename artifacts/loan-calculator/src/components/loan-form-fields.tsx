@@ -59,6 +59,7 @@ export interface LoanFormState {
   capitalLeaseRationale: string;
   monthlyPayment: number | undefined;
   paymentOverride: number | undefined;
+  firstPaymentAmount: number | undefined;
   termMonths: number | undefined;
   isOfficeProperty: boolean;
   freeRentMonths: number;
@@ -737,6 +738,27 @@ export function LoanFormFields({ form, setForm, mode = "loan" }: LoanFormFieldsP
           />
           <p className="text-xs text-muted-foreground">
             Optional — enter the contractual payment per period if it differs from the calculated amount.
+          </p>
+        </div>
+      )}
+
+      {isDebt && (
+        <div className="space-y-2">
+          <Label htmlFor="firstPaymentAmount">First Payment Amount ($)</Label>
+          <Input
+            id="firstPaymentAmount"
+            data-testid="input-first-payment-amount"
+            type="number"
+            step="0.01"
+            min="0"
+            value={form.firstPaymentAmount ?? ""}
+            placeholder="Leave blank if the first payment equals the regular payment"
+            onChange={(e) =>
+              setForm({ ...form, firstPaymentAmount: e.target.value ? Number(e.target.value) : undefined })
+            }
+          />
+          <p className="text-xs text-muted-foreground">
+            Optional — use when the contract states a different first installment (for example $2,450 first, then $1,980 per period). Any balance left at the end of the term is shown as a final adjustment.
           </p>
         </div>
       )}

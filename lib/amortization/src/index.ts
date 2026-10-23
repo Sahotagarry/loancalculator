@@ -117,6 +117,12 @@ export interface AmortizationOptions {
    * scheduled due date on the FV timeline.
    */
   commencementDate?: Date;
+  /**
+   * Contractual first installment when it differs from the recurring payment.
+   * Applied to the first non-grace payment row only; later rows use the
+   * regular (or overridden) payment. Omitted/null preserves legacy output.
+   */
+  firstPaymentAmount?: number | null;
 }
 
 export interface AmortizationResult {
@@ -324,6 +330,13 @@ function calculateAmortizationLegacy(
     standardPeriodicPayment = paymentOverride;
   }
 
+  const firstPaymentAmount = options.firstPaymentAmount;
+  const useFirstPaymentAmount =
+    firstPaymentAmount != null &&
+    Number.isFinite(firstPaymentAmount) &&
+    firstPaymentAmount > 0 &&
+    adjGracePeriods < totalTermPeriods;
+
   for (let i = 1; i <= totalTermPeriods; i++) {
     const currentDate =
       i <= syntheticGracePeriods
@@ -353,6 +366,16 @@ function calculateAmortizationLegacy(
       } else {
         interestForPeriod = 0;
       }
+    } else if (useFirstPaymentAmount && i === adjGracePeriods + 1) {
+      // Contract states a distinct first installment (e.g. $2,450 then
+      // $1,980/month). It is applied exactly as written, even when the period
+      // would otherwise be interest-only; principal is the remainder after
+      // interest and any residual surfaces in the final adjustment.
+      payment = firstPaymentAmount!;
+      if (paymentTiming === "beginning") {
+        interestForPeriod = (balance - payment) * periodicRate;
+      }
+      principalForPeriod = payment - interestForPeriod;
     } else if (isInterestOnly) {
       payment =
         paymentTiming === "beginning"
@@ -536,6 +559,11 @@ export function calculateAmortization(
   const schedule: AmortizationRow[] = [];
   const epsilon = 1e-8;
   let pendingCurrentDueRecast = false;
+  const firstPaymentAmount = options.firstPaymentAmount;
+  const firstPaymentRowIndex =
+    firstPaymentAmount != null && Number.isFinite(firstPaymentAmount) && firstPaymentAmount > 0
+      ? legacy.schedule.findIndex((row) => !row.isGrace)
+      : -1;
 
   const futureAmortizingCount = (from: number, includeCurrent: boolean): number =>
     legacy.schedule.slice(from + (includeCurrent ? 0 : 1))
@@ -723,10 +751,10 @@ export function calculateAmortization(
       // A principal event never pays interest. Any interest earned before an
       // exact payoff is therefore settled separately on the next due date.
       payment = accruedInterest;
-    } else if (template.isInterestOnly) {
+    } else if (template.isInterestOnly && i !== firstPaymentRowIndex) {
       payment = accruedInterest;
     } else {
-      payment = standardPayment;
+      payment = i === firstPaymentRowIndex ? firstPaymentAmount! : standardPayment;
       if (payment + epsilon < accruedInterest) {
         throw new Error("principal event would cause negative amortization");
       }

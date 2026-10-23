@@ -22,6 +22,8 @@ export interface BookedScheduleInput {
   fvDecision?: string | null;
   fvRate?: number | string | null;
   paymentOverride?: number | string | null;
+  /** Contractual first installment when it differs from the regular payment. */
+  firstPaymentAmount?: number | string | null;
   graceMonths?: number | null;
   graceInterestTreatment?: string | null;
   rateType?: "fixed" | "prime_linked" | string | null;
@@ -336,6 +338,7 @@ function calculateStandaloneBookedSchedule(loan: BookedScheduleInput): {
       paymentTiming: loan.paymentTiming ?? "end",
       graceTermMode: loan.graceTermMode ?? "included",
       firstPaymentDate: loan.firstPaymentDate ? parseISO(loan.firstPaymentDate) : undefined,
+      firstPaymentAmount: loan.firstPaymentAmount != null ? Number(loan.firstPaymentAmount) : null,
       semiMonthlyDueDays:
         loan.semiMonthlyFirstDueDay != null && loan.semiMonthlySecondDueDay != null
           ? [loan.semiMonthlyFirstDueDay, loan.semiMonthlySecondDueDay]
@@ -363,6 +366,7 @@ function calculateStandaloneBookedSchedule(loan: BookedScheduleInput): {
           loan.graceMonths ?? 0, loan.graceInterestTreatment === "none" ? "none" : "capitalized",
           { paymentTiming: loan.paymentTiming ?? "end", graceTermMode: loan.graceTermMode ?? "included",
             firstPaymentDate: loan.firstPaymentDate ? parseISO(loan.firstPaymentDate) : undefined,
+            firstPaymentAmount: loan.firstPaymentAmount != null ? Number(loan.firstPaymentAmount) : null,
             semiMonthlyDueDays: loan.semiMonthlyFirstDueDay != null && loan.semiMonthlySecondDueDay != null ? [loan.semiMonthlyFirstDueDay, loan.semiMonthlySecondDueDay] : undefined,
             principalEvents: toPrincipalPaymentEvents(loan), rateResetEvents: frozenRateEvents,
             evidenceMetadata: dayOneEvidence, },
@@ -1388,6 +1392,7 @@ export function buildLoanSummary(
     isCapitalLease?: boolean | null;
     monthlyPayment?: number | string | null;
     paymentOverride?: number | string | null;
+    firstPaymentAmount?: number | string | null;
     graceMonths?: number | null;
     graceInterestTreatment?: string | null;
     termMonths?: number | null;
@@ -2009,6 +2014,7 @@ export function buildFileSummary(
     isCapitalLease?: boolean | null;
     monthlyPayment?: number | string | null;
     paymentOverride?: number | string | null;
+    firstPaymentAmount?: number | string | null;
     graceMonths?: number | null;
     graceInterestTreatment?: string | null;
     termMonths?: number | null;

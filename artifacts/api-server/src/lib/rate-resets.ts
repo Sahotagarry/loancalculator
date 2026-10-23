@@ -70,6 +70,7 @@ function contractualEffectiveDate(
     loan.graceInterestTreatment === "none" ? "none" : "capitalized",
     {
       paymentTiming: loan.paymentTiming === "beginning" ? "beginning" : "end",
+      firstPaymentAmount: loan.firstPaymentAmount == null ? null : Number(loan.firstPaymentAmount),
       graceTermMode: loan.graceTermMode === "added" ? "added" : "included",
       firstPaymentDate: loan.firstPaymentDate ? new Date(`${loan.firstPaymentDate}T00:00:00Z`) : undefined,
       semiMonthlyDueDays: loan.semiMonthlyFirstDueDay != null && loan.semiMonthlySecondDueDay != null

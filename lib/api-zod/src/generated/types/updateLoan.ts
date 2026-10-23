@@ -79,6 +79,8 @@ export interface UpdateLoan {
   capitalLeaseRationale?: string | null;
   monthlyPayment?: number;
   paymentOverride?: number | null;
+  /** Contractual first installment when it differs from the regular payment. */
+  firstPaymentAmount?: number | null;
   termMonths?: number;
   isOfficeProperty?: boolean;
   freeRentMonths?: number;

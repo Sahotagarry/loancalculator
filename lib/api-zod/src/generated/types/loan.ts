@@ -88,6 +88,8 @@ export interface Loan {
   capitalLeaseRationale?: string;
   monthlyPayment?: string;
   paymentOverride?: string | null;
+  /** Contractual first installment when it differs from the regular payment. */
+  firstPaymentAmount?: string | null;
   termMonths?: number;
   isOfficeProperty: boolean;
   freeRentMonths: number;

@@ -146,6 +146,7 @@ export const loansTable = pgTable("loans", {
   // Lease payment (stored for both capital and operating leases)
   monthlyPayment: numeric("monthly_payment", { precision: 15, scale: 2 }),
   paymentOverride: numeric("payment_override", { precision: 15, scale: 2 }),
+  firstPaymentAmount: numeric("first_payment_amount", { precision: 15, scale: 2 }),
   termMonths: integer("term_months"),
   // Asset tracking
   assetDescription: text("asset_description"),

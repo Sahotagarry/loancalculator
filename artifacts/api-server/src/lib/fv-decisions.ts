@@ -298,6 +298,7 @@ export interface FvEvalLoanInput {
   semiMonthlySecondDueDay?: number | null;
   fvRate?: string | null;
   paymentOverride?: string | null;
+  firstPaymentAmount?: string | null;
   principalEvents?: PrincipalPaymentEvent[];
 }
 
@@ -357,6 +358,7 @@ export async function computeFvSuggestion(
   }, {
     principalEvents: loan.principalEvents,
     commencementDate: startDateObj,
+    firstPaymentAmount: loan.firstPaymentAmount != null ? Number(loan.firstPaymentAmount) : null,
   });
 
   const trivialThreshold = file.trivialThreshold != null ? Number(file.trivialThreshold) : null;
@@ -435,6 +437,7 @@ export async function evaluateFvDecisionsForFile(
           semiMonthlySecondDueDay: current.semiMonthlySecondDueDay,
           fvRate: current.fvRate,
           paymentOverride: current.paymentOverride,
+          firstPaymentAmount: current.firstPaymentAmount,
           principalEvents: (current.activeEventSetId
             ? events.filter(
                 (event) =>

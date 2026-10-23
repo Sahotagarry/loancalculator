@@ -298,6 +298,7 @@ const cleanLoan = (
   capitalLeaseRationale: loan.capitalLeaseRationale ?? undefined,
   monthlyPayment: loan.monthlyPayment ?? undefined,
   paymentOverride: loan.paymentOverride ?? undefined,
+  firstPaymentAmount: loan.firstPaymentAmount ?? undefined,
   termMonths: loan.termMonths ?? undefined,
   isOfficeProperty: loan.isOfficeProperty ?? undefined,
   freeRentMonths: loan.freeRentMonths ?? undefined,
@@ -418,6 +419,7 @@ const previewMetrics = (
     loan.graceInterestTreatment === "none" ? "none" : "capitalized",
     {
       paymentTiming: loan.paymentTiming === "beginning" ? "beginning" : "end",
+      firstPaymentAmount: loan.firstPaymentAmount == null ? null : Number(loan.firstPaymentAmount),
       graceTermMode: loan.graceTermMode === "added" ? "added" : "included",
       firstPaymentDate: loan.firstPaymentDate
         ? new Date(`${stripTime(loan.firstPaymentDate)}T00:00:00Z`)
@@ -557,6 +559,13 @@ router.post("/files/:id/loans", async (req, res): Promise<void> => {
     res.status(400).json({ error: rentStepsError });
     return;
   }
+  if (
+    data.firstPaymentAmount != null &&
+    !(Number.isFinite(data.firstPaymentAmount) && data.firstPaymentAmount > 0)
+  ) {
+    res.status(400).json({ error: "First payment amount must be greater than zero" });
+    return;
+  }
   const rateTermsError = validateRateTerms(data);
   if (rateTermsError) {
     res.status(400).json({ error: rateTermsError });
@@ -674,6 +683,7 @@ router.post("/files/:id/loans", async (req, res): Promise<void> => {
       capitalLeaseRationale: data.capitalLeaseRationale,
       monthlyPayment: data.monthlyPayment != null ? data.monthlyPayment.toString() : null,
       paymentOverride: data.paymentOverride != null ? data.paymentOverride.toString() : null,
+      firstPaymentAmount: data.firstPaymentAmount != null ? data.firstPaymentAmount.toString() : null,
       termMonths: data.termMonths ?? null,
       isOfficeProperty: data.isOfficeProperty ?? false,
       freeRentMonths: data.freeRentMonths ?? 0,
@@ -1310,6 +1320,16 @@ router.patch("/loans/:id", async (req, res): Promise<void> => {
   if (data.monthlyPayment != null) updates.monthlyPayment = data.monthlyPayment.toString();
   if (data.paymentOverride !== undefined)
     updates.paymentOverride = data.paymentOverride != null ? data.paymentOverride.toString() : null;
+  if (
+    data.firstPaymentAmount != null &&
+    !(Number.isFinite(data.firstPaymentAmount) && data.firstPaymentAmount > 0)
+  ) {
+    res.status(400).json({ error: "First payment amount must be greater than zero" });
+    return;
+  }
+  if (data.firstPaymentAmount !== undefined)
+    updates.firstPaymentAmount =
+      data.firstPaymentAmount != null ? data.firstPaymentAmount.toString() : null;
   if (data.downPayment !== undefined)
     updates.downPayment = data.downPayment != null ? data.downPayment.toString() : "0";
   if (data.termMonths != null) updates.termMonths = data.termMonths;
@@ -1591,6 +1611,7 @@ router.post("/loans/:id/rollforward", async (req, res): Promise<void> => {
     capitalLeaseRationale: original.capitalLeaseRationale,
     monthlyPayment: original.monthlyPayment,
     paymentOverride: original.paymentOverride,
+    firstPaymentAmount: original.firstPaymentAmount,
     termMonths: original.termMonths,
     isOfficeProperty: original.isOfficeProperty,
     freeRentMonths: original.freeRentMonths,

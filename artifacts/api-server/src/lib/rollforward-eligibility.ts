@@ -85,6 +85,7 @@ export function isLoanOutstandingAt(
     loan.graceInterestTreatment === "none" ? "none" : "capitalized",
     {
       paymentTiming: loan.paymentTiming === "beginning" ? "beginning" : "end",
+      firstPaymentAmount: loan.firstPaymentAmount == null ? null : Number(loan.firstPaymentAmount),
       graceTermMode: loan.graceTermMode === "added" ? "added" : "included",
       firstPaymentDate: loan.firstPaymentDate ? asDate(loan.firstPaymentDate) : undefined,
       semiMonthlyDueDays:

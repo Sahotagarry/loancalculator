@@ -48,6 +48,7 @@ export const SCHEDULE_DRIVING_FIELDS = new Set<keyof Loan>([
   "specializedAsset",
   "monthlyPayment",
   "paymentOverride",
+  "firstPaymentAmount",
   "assetCost",
   "assetUsefulLife",
   "collateralDepreciableCost",

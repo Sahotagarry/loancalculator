@@ -1550,6 +1550,10 @@ components:
         paymentOverride:
           type: string
           nullable: true
+        firstPaymentAmount:
+          type: string
+          nullable: true
+          description: Contractual first installment when it differs from the regular payment.
         termMonths:
           type: integer
         isOfficeProperty:
@@ -1841,6 +1845,10 @@ components:
         paymentOverride:
           type: number
           nullable: true
+        firstPaymentAmount:
+          type: number
+          nullable: true
+          description: Contractual first installment when it differs from the regular payment.
         termMonths:
           type: integer
         isOfficeProperty:
@@ -2066,6 +2074,10 @@ components:
         paymentOverride:
           type: number
           nullable: true
+        firstPaymentAmount:
+          type: number
+          nullable: true
+          description: Contractual first installment when it differs from the regular payment.
         termMonths:
           type: integer
         isOfficeProperty:

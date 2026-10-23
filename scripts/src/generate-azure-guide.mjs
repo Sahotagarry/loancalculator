@@ -111,7 +111,7 @@ const doc = new Document({
       numbered("steps5")("Copy the ", b("endpoint"), " and ", b("Key 1"), "."),
 
       h2("4.5 App Service (the app itself)"),
-      numbered("steps6")("Create a ", b("Web App"), ": Publish = Code, Runtime = Node 22 LTS (or Node 20 LTS), OS = Linux."),
+      numbered("steps6")("Create a ", b("Web App"), ": Publish = Code, Runtime = Node 22 LTS, OS = Linux."),
       numbered("steps6")("Plan: Basic B1 is a good starting point (Free F1 works for testing but sleeps and is slow)."),
       numbered("steps6")("After it deploys: Configuration → General settings → set ", b("Startup Command"), " to:"),
       codeBlock("node --enable-source-maps dist/index.mjs"),
