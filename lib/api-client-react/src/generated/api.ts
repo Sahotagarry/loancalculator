@@ -3464,6 +3464,77 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
       return useMutation(getUpdateAdminUserMutationOptions(options));
     }
 
+export const getListAdminClientsUrl = () => {
+
+
+
+
+  return `/api/admin/clients`
+}
+
+export const listAdminClients = async ( options?: RequestInit): Promise<Client[]> => {
+
+  return customFetch<Client[]>(getListAdminClientsUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getListAdminClientsQueryKey = () => {
+    return [
+    `/api/admin/clients`
+    ] as const;
+    }
+
+
+export const getListAdminClientsQueryOptions = <TData = Awaited<ReturnType<typeof listAdminClients>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listAdminClients>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListAdminClientsQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listAdminClients>>> = ({ signal }) => listAdminClients({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listAdminClients>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ListAdminClientsQueryResult = NonNullable<Awaited<ReturnType<typeof listAdminClients>>>
+export type ListAdminClientsQueryError = ErrorType<unknown>
+
+
+
+export function useListAdminClients<TData = Awaited<ReturnType<typeof listAdminClients>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listAdminClients>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getListAdminClientsQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
 export const getListLegacyClientsUrl = () => {
 
 

@@ -2247,6 +2247,22 @@ export const UpdateAdminUserResponse = zod.object({
 })
 
 
+export const listAdminClientsResponseLatestFiscalYearEndRegExp = new RegExp('^\\d{4}-\\d{2}-\\d{2}$');
+
+
+export const ListAdminClientsResponseItem = zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "code": zod.string(),
+  "createdAt": zod.coerce.date(),
+  "updatedAt": zod.coerce.date(),
+  "fileCount": zod.number().optional().describe('Number of year-end files for this client (list endpoint only)'),
+  "loanCount": zod.number().optional().describe('Number of loans\/leases across all files (list endpoint only)'),
+  "latestFiscalYearEnd": zod.string().regex(listAdminClientsResponseLatestFiscalYearEndRegExp).nullish().describe('Most recent fiscal year end among the client\'s files (list endpoint only)')
+})
+export const ListAdminClientsResponse = zod.array(ListAdminClientsResponseItem)
+
+
 export const listLegacyClientsResponseLatestFiscalYearEndRegExp = new RegExp('^\\d{4}-\\d{2}-\\d{2}$');
 
 

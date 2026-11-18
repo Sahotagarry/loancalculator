@@ -71,6 +71,15 @@ router.patch("/admin/users/:id", async (req, res): Promise<void> => {
   res.json(user);
 });
 
+router.get("/admin/clients", async (req, res): Promise<void> => {
+  // Admin authorization is enforced by authorizeRequest. Managing assignments
+  // must not depend on the administrator already being a client member.
+  res.json(await db.select().from(clientsTable).where(and(
+    eq(clientsTable.firmId, req.auth!.firmId), isNull(clientsTable.deletedAt),
+    isNotNull(clientsTable.adoptedAt), isNull(clientsTable.quarantinedAt),
+  )).orderBy(clientsTable.name));
+});
+
 router.get("/admin/legacy-clients", async (req, res): Promise<void> => {
   // Unowned/quarantined rows deliberately remain invisible to business routes.
   res.json(await db.select().from(clientsTable).where(and(

@@ -8,7 +8,8 @@ import {
   useAdoptLegacyClient, 
   useGetClientMembers, 
   useReplaceClientMembers,
-  useListClients,
+  useListAdminClients,
+  getListAdminClientsQueryKey,
   getListAdminUsersQueryKey,
   getListLegacyClientsQueryKey,
   getListClientsQueryKey,
@@ -55,9 +56,9 @@ export default function AccessSettingsPage() {
     }
   });
 
-  const { data: activeClients, isLoading: activeClientsLoading } = useListClients({
+  const { data: activeClients, isLoading: activeClientsLoading, error: activeClientsError } = useListAdminClients({
     query: {
-      queryKey: getListClientsQueryKey(),
+      queryKey: getListAdminClientsQueryKey(),
       enabled: canManageSettings,
     }
   });
@@ -129,7 +130,8 @@ export default function AccessSettingsPage() {
           </div>
           
           <div className="space-y-6 md:col-span-2">
-            <ActiveClientsSection clients={activeClients} isLoading={activeClientsLoading} allUsers={users || []} />
+            {activeClientsError ? <p role="alert" className="text-destructive">Unable to load clients. Refresh to try again.</p> :
+              <ActiveClientsSection clients={activeClients} isLoading={activeClientsLoading} allUsers={users || []} />}
           </div>
         </div>
       </div>
@@ -447,6 +449,7 @@ function LegacyClientRow({ client, activeUsers }: { client: Client, activeUsers:
       onSuccess: () => {
         queryClient.invalidateQueries({ queryKey: getListLegacyClientsQueryKey() });
         queryClient.invalidateQueries({ queryKey: getListClientsQueryKey() });
+        queryClient.invalidateQueries({ queryKey: getListAdminClientsQueryKey() });
         setIsAdoptOpen(false);
         toast({ title: "Client adopted successfully" });
       },
@@ -550,7 +553,7 @@ function ActiveClientsSection({ clients, isLoading, allUsers }: { clients?: Clie
           <CheckCircle2 className="h-5 w-5 text-emerald-600" /> Adopted Clients
         </CardTitle>
         <CardDescription>
-          Manage access assignments for adopted clients.
+          Manage access for all adopted clients in your firm, including clients you are not assigned to.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -588,7 +591,7 @@ function ActiveClientRow({ client, activeUsers }: { client: Client, activeUsers:
   const [isManageOpen, setIsManageOpen] = useState(false);
   const [selectedMembers, setSelectedMembers] = useState<string[]>([]);
   
-  const { data: members, isLoading: membersLoading } = useGetClientMembers(client.id, {
+  const { data: members, isLoading: membersLoading, isError: membersError } = useGetClientMembers(client.id, {
     query: {
       queryKey: getGetClientMembersQueryKey(client.id),
       retry: false,
@@ -599,6 +602,7 @@ function ActiveClientRow({ client, activeUsers }: { client: Client, activeUsers:
     mutation: {
       onSuccess: () => {
         queryClient.invalidateQueries({ queryKey: getGetClientMembersQueryKey(client.id) });
+        queryClient.invalidateQueries({ queryKey: getListClientsQueryKey() });
         setIsManageOpen(false);
         toast({ title: "Client members updated" });
       },
@@ -649,7 +653,8 @@ function ActiveClientRow({ client, activeUsers }: { client: Client, activeUsers:
           </span>
         </td>
         <td className="px-4 py-3 text-right">
-          <Button variant="ghost" size="sm" onClick={openManage}>
+          {membersError && <span role="alert" className="text-destructive text-xs">Unable to load members. Refresh to retry.</span>}
+          <Button variant="ghost" size="sm" onClick={openManage} disabled={membersLoading || membersError || !members}>
             Manage Access
           </Button>
         </td>
