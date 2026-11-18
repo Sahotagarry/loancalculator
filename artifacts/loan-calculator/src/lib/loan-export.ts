@@ -1,4 +1,5 @@
 import * as XLSX from "xlsx";
+import { applyExcelNumberTypes } from "./excel-numbers";
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 import { format } from "date-fns";
@@ -169,6 +170,7 @@ export function exportScheduleXlsx(loanName: string, schedule: ScheduleRow[], ev
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(supportRows), "FV Cumulative Support");
     }
   }
+  applyExcelNumberTypes(wb);
   XLSX.writeFile(wb, `${loanName}_Schedule.xlsx`);
 }
 
@@ -266,6 +268,7 @@ export function exportAnnualXlsx(loanName: string, yearlyTotals: YearlyTotal[], 
       ]),
     ]), "FV Cumulative Support");
   }
+  applyExcelNumberTypes(wb);
   XLSX.writeFile(wb, `${loanName}_Annual.xlsx`);
 }
 

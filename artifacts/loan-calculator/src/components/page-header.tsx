@@ -58,12 +58,21 @@ export function PageHeader({ backHref, breadcrumb, title, meta, actions }: PageH
               alt="Clearline Logo"
               className="h-7 w-auto object-contain"
             />
-            <span
-              className="text-[10px] leading-none text-muted-foreground"
-              data-testid="text-app-version"
-            >
-              v{__APP_VERSION__}
-            </span>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  className="text-[10px] leading-none text-muted-foreground cursor-help rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
+                  data-testid="text-app-version"
+                  aria-label={`Version ${__APP_VERSION__}, build details`}
+                >
+                  v{__APP_VERSION__}
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" data-testid="tooltip-app-build">
+                Built: {__APP_BUILD_TIME__.replace("T", " ").replace(/\.\d+Z$/, " UTC")}
+              </TooltipContent>
+            </Tooltip>
           </div>
           <div className="flex w-full flex-wrap items-center gap-2 justify-end min-w-0 sm:w-auto">
             {actions}

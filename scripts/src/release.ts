@@ -38,7 +38,7 @@ const REPOSITORY = `${OWNER}/${REPO}`;
 const DEPLOY_WORKFLOW_PATH = ".github/workflows/deploy.yml";
 const API = "https://api.github.com";
 const WRITE_SPACING_MS = parsePositiveInteger(process.env.RELEASE_WRITE_SPACING_MS, 2_000);
-const proxyFetch = new ReplitConnectors().createProxyFetch("github");
+const proxyFetch = new ReplitConnectors().createProxyFetch("github-source-control");
 
 function parsePositiveInteger(value: string | undefined, fallback: number): number {
   if (value === undefined) return fallback;

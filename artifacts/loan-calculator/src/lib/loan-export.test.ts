@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { exportScheduleXlsx, exportSchedulePdf, exportAnnualXlsx, exportAnnualPdf } from "./loan-export";
 
 vi.mock("xlsx", () => ({
-  utils: { json_to_sheet: vi.fn(() => ({})), aoa_to_sheet: vi.fn(() => ({})), book_new: vi.fn(), book_append_sheet: vi.fn() },
+  utils: { json_to_sheet: vi.fn(() => ({})), aoa_to_sheet: vi.fn(() => ({})), book_new: vi.fn(() => ({ Sheets: {}, SheetNames: [] })), book_append_sheet: vi.fn() },
   writeFile: vi.fn()
 }));
 vi.mock("jspdf", () => {

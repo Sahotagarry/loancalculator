@@ -1,4 +1,5 @@
 import * as XLSX from "xlsx";
+import { applyExcelNumberTypes } from "./excel-numbers";
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 import { format, parseISO, subYears, isAfter } from "date-fns";
@@ -814,6 +815,7 @@ export function exportLoanWorkpaperXlsx(wp: Workpaper): void {
   if (wp.schedule && wp.schedule.length > 0) {
     XLSX.utils.book_append_sheet(wb, scheduleSheet(wp.schedule), usedSheetNameSafe("Schedule", used));
   }
+  applyExcelNumberTypes(wb);
   XLSX.writeFile(wb, `${wp.loanName}_Workpaper.xlsx`);
 }
 
@@ -1103,6 +1105,7 @@ export function exportFileWorkpapersXlsx(input: FileWorkpaperInput): void {
     }
   }
 
+  applyExcelNumberTypes(wb);
   XLSX.writeFile(wb, `${input.clientName}_Debt_Lease_Workpapers.xlsx`);
 }
 
@@ -1113,5 +1116,6 @@ export function exportFileLeadSheetXlsx(input: FileWorkpaperInput): void {
   const wb = XLSX.utils.book_new();
   const used = new Set<string>();
   XLSX.utils.book_append_sheet(wb, buildLeadSheetWs(input, lead), usedSheetNameSafe("Lead Sheet", used));
+  applyExcelNumberTypes(wb);
   XLSX.writeFile(wb, `${input.clientName}_Debt_Lease_Summary.xlsx`);
 }
