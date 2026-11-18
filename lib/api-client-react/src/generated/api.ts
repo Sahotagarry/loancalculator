@@ -3464,6 +3464,77 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
       return useMutation(getUpdateAdminUserMutationOptions(options));
     }
 
+export const getListAccessUsersUrl = () => {
+
+
+
+
+  return `/api/access/users`
+}
+
+export const listAccessUsers = async ( options?: RequestInit): Promise<AppUser[]> => {
+
+  return customFetch<AppUser[]>(getListAccessUsersUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getListAccessUsersQueryKey = () => {
+    return [
+    `/api/access/users`
+    ] as const;
+    }
+
+
+export const getListAccessUsersQueryOptions = <TData = Awaited<ReturnType<typeof listAccessUsers>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listAccessUsers>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListAccessUsersQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listAccessUsers>>> = ({ signal }) => listAccessUsers({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listAccessUsers>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ListAccessUsersQueryResult = NonNullable<Awaited<ReturnType<typeof listAccessUsers>>>
+export type ListAccessUsersQueryError = ErrorType<unknown>
+
+
+
+export function useListAccessUsers<TData = Awaited<ReturnType<typeof listAccessUsers>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listAccessUsers>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getListAccessUsersQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
 export const getListAdminClientsUrl = () => {
 
 

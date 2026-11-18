@@ -179,6 +179,9 @@ export default function Home() {
                 <TooltipContent>Trash</TooltipContent>
               </Tooltip>
             )}
+            {!canManageSettings && (
+              <Link href="/settings/access" className="text-xs underline">Manage Client Access</Link>
+            )}
             {canManageSettings && (
               <Tooltip>
                 <TooltipTrigger asChild>

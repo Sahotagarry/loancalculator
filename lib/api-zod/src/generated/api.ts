@@ -2247,6 +2247,18 @@ export const UpdateAdminUserResponse = zod.object({
 })
 
 
+export const ListAccessUsersResponseItem = zod.object({
+  "tenantId": zod.string().optional(),
+  "objectId": zod.string(),
+  "firmId": zod.string().optional(),
+  "displayName": zod.string().nullish(),
+  "email": zod.string().nullish(),
+  "role": zod.enum(['admin', 'manager', 'accountant', 'read_only']),
+  "isActive": zod.boolean()
+})
+export const ListAccessUsersResponse = zod.array(ListAccessUsersResponseItem)
+
+
 export const listAdminClientsResponseLatestFiscalYearEndRegExp = new RegExp('^\\d{4}-\\d{2}-\\d{2}$');
 
 

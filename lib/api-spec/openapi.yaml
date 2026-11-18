@@ -1013,6 +1013,18 @@ paths:
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AppUserUpdate" } } } }
       responses: { "200": { description: Updated user, content: { application/json: { schema: { $ref: "#/components/schemas/AppUser" } } } } }
+  /access/users:
+    get:
+      operationId: listAccessUsers
+      tags: [admin]
+      responses:
+        "200":
+          description: Active staff eligible for client access within the signed-in user's firm
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/AppUser" }
   /admin/clients:
     get:
       operationId: listAdminClients

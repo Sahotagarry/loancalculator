@@ -27,7 +27,7 @@ import { authorizeRequest } from "./authorization";
 
 const auth = {
   tenantId: "tenant", objectId: "user", firmId: "firm-a",
-  displayName: null, email: null, role: "manager" as const,
+  displayName: null, email: null, role: "manager",
 };
 const adopted = (id = "client-a", firmId = "firm-a") => ({
   id, firmId, adoptedAt: new Date(), quarantinedAt: null,
@@ -42,7 +42,30 @@ async function invoke(path: string, method = "GET", body?: unknown) {
 }
 
 describe("direct resource authorization", () => {
-  beforeEach(() => { mocks.results.length = 0; });
+  beforeEach(() => { mocks.results.length = 0; auth.role = "manager"; });
+
+  for (const role of ["manager", "accountant", "read_only"]) {
+    it(`allows ${role} members to manage only their client's access`, async () => {
+      auth.role = role;
+      mocks.results.push([adopted()], [{ clientId: "client-a" }]);
+      expect(await invoke("/admin/clients/client-a/members", "PUT")).toEqual({ next: true, status: undefined });
+      mocks.results.push([adopted()], []);
+      expect(await invoke("/admin/clients/client-a/members", "PUT")).toEqual({ next: false, status: 404 });
+      expect(await invoke("/admin/users", "POST")).toEqual({ next: false, status: 403 });
+      expect(await invoke("/admin/clients")).toEqual({ next: false, status: 403 });
+    });
+  }
+  it("allows an administrator without membership but never across firms", async () => {
+    auth.role = "admin";
+    mocks.results.push([adopted()]);
+    expect(await invoke("/admin/clients/client-a/members", "PUT")).toEqual({ next: true, status: undefined });
+    mocks.results.push([adopted("client-b", "other-firm")]);
+    expect(await invoke("/admin/clients/client-b/members", "PUT")).toEqual({ next: false, status: 404 });
+  });
+  it("keeps other read-only writes forbidden", async () => {
+    auth.role = "read_only";
+    expect(await invoke("/loans/loan-a", "PATCH")).toEqual({ next: false, status: 403 });
+  });
 
   const directPaths = [
     "/clients/client-x", "/files/file-x", "/loans/loan-x",

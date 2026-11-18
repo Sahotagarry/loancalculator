@@ -16,6 +16,15 @@ router.get("/auth/me", (req, res): void => {
 router.get("/admin/users", async (req, res): Promise<void> => {
   res.json(await db.select().from(appUsersTable).where(eq(appUsersTable.firmId, req.auth!.firmId)));
 });
+router.get("/access/users", async (req, res): Promise<void> => {
+  res.json(await db.select({
+    objectId: appUsersTable.objectId, displayName: appUsersTable.displayName,
+    email: appUsersTable.email, role: appUsersTable.role, isActive: appUsersTable.isActive,
+  }).from(appUsersTable).where(and(
+    eq(appUsersTable.firmId, req.auth!.firmId), eq(appUsersTable.tenantId, req.auth!.tenantId),
+    eq(appUsersTable.isActive, true),
+  )));
+});
 router.post("/admin/users", async (req, res): Promise<void> => {
   const body = userInput.safeParse(req.body);
   if (!body.success) { res.status(400).json({ error: body.error.message }); return; }
@@ -128,6 +137,17 @@ router.put("/admin/clients/:id/members", async (req, res): Promise<void> => {
   if (!body.success) { res.status(400).json({ error: body.error.message }); return; }
   const auth = req.auth!; const ids = [...new Set([...body.data.memberObjectIds, auth.objectId])];
   const result = await db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${params.data.id}))`);
+    // Recheck under the write lock: a concurrently revoked user cannot grant
+    // access using authorization performed before the revocation.
+    if (auth.role !== "admin") {
+      const members = await tx.select().from(clientMembershipsTable).where(and(
+        eq(clientMembershipsTable.clientId, params.data.id),
+        eq(clientMembershipsTable.tenantId, auth.tenantId),
+        eq(clientMembershipsTable.objectId, auth.objectId),
+      ));
+      if (!members.length) return false;
+    }
     const [client] = await tx.select({ id: clientsTable.id }).from(clientsTable).where(and(eq(clientsTable.id, params.data.id), eq(clientsTable.firmId, auth.firmId), isNotNull(clientsTable.adoptedAt), isNull(clientsTable.quarantinedAt)));
     const active = await tx.select({ objectId: appUsersTable.objectId }).from(appUsersTable).where(and(eq(appUsersTable.tenantId, auth.tenantId), eq(appUsersTable.firmId, auth.firmId), eq(appUsersTable.isActive, true)));
     if (!client || ids.some((x) => !active.some((u) => u.objectId === x))) return false;

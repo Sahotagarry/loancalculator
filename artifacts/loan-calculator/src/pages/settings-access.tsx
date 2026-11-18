@@ -9,6 +9,9 @@ import {
   useGetClientMembers, 
   useReplaceClientMembers,
   useListAdminClients,
+  useListClients,
+  useListAccessUsers,
+  getListAccessUsersQueryKey,
   getListAdminClientsQueryKey,
   getListAdminUsersQueryKey,
   getListLegacyClientsQueryKey,
@@ -39,7 +42,7 @@ const ROLE_LABELS: Record<string, string> = {
 };
 
 export default function AccessSettingsPage() {
-  const { canManageSettings, isLoading: authLoading } = useAuth();
+  const { user, canManageSettings, isLoading: authLoading } = useAuth();
   const [location] = useLocation();
 
   const { data: users, isLoading: usersLoading } = useListAdminUsers({
@@ -62,10 +65,22 @@ export default function AccessSettingsPage() {
       enabled: canManageSettings,
     }
   });
+  const assignedClients = useListClients({ query: { queryKey: getListClientsQueryKey(), enabled: !!user && !canManageSettings } });
+  const assignableUsers = useListAccessUsers({ query: { queryKey: getListAccessUsersQueryKey(), enabled: !!user && !canManageSettings } });
 
   if (authLoading) return null;
 
   if (!canManageSettings) {
+    if (user) return (
+      <div className="min-h-screen bg-background">
+        <PageHeader backHref="/" title="Client Access" />
+        <main className="max-w-4xl mx-auto p-6">
+          {assignedClients.error || assignableUsers.error
+            ? <p role="alert">Unable to load client access. Refresh to try again.</p>
+            : <ActiveClientsSection clients={assignedClients.data} isLoading={assignedClients.isLoading || assignableUsers.isLoading} allUsers={assignableUsers.data || []} />}
+        </main>
+      </div>
+    );
     return (
       <div className="min-h-screen bg-background">
         <PageHeader
@@ -553,7 +568,7 @@ function ActiveClientsSection({ clients, isLoading, allUsers }: { clients?: Clie
           <CheckCircle2 className="h-5 w-5 text-emerald-600" /> Adopted Clients
         </CardTitle>
         <CardDescription>
-          Manage access for all adopted clients in your firm, including clients you are not assigned to.
+          Assign active staff to clients listed here. Administrators can manage every adopted client; other users can manage their assigned clients.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -588,6 +603,7 @@ function ActiveClientsSection({ clients, isLoading, allUsers }: { clients?: Clie
 }
 
 function ActiveClientRow({ client, activeUsers }: { client: Client, activeUsers: AppUser[] }) {
+  const { user: signedInUser } = useAuth();
   const [isManageOpen, setIsManageOpen] = useState(false);
   const [selectedMembers, setSelectedMembers] = useState<string[]>([]);
   
@@ -666,6 +682,7 @@ function ActiveClientRow({ client, activeUsers }: { client: Client, activeUsers:
             <DialogTitle>Manage Client Access</DialogTitle>
             <DialogDescription>
               Select which staff members can access "{client.name}".
+              Your own access is retained when you save.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
@@ -676,7 +693,8 @@ function ActiveClientRow({ client, activeUsers }: { client: Client, activeUsers:
                 <div key={user.objectId} className="flex items-center space-x-2">
                   <Checkbox 
                     id={`manage-${user.objectId}`} 
-                    checked={selectedMembers.includes(user.objectId)}
+                    checked={user.objectId === signedInUser?.objectId || selectedMembers.includes(user.objectId)}
+                    disabled={user.objectId === signedInUser?.objectId}
                     onCheckedChange={() => toggleMember(user.objectId)}
                   />
                   <label htmlFor={`manage-${user.objectId}`} className="text-sm font-medium leading-none cursor-pointer">

@@ -58,6 +58,18 @@ export const authorizeRequest: RequestHandler = async (req, res, next) => {
   }
   const auth = req.auth!;
   const mutation = !["GET", "HEAD", "OPTIONS"].includes(req.method);
+  // Membership administration is the sole read-only mutation exception.
+  if (/^\/admin\/clients\/[^/]+\/members$/.test(req.path) && ["GET", "PUT"].includes(req.method)) {
+    const clientId = routeParts(req.path)[2];
+    const [client] = await db.select().from(clientsTable).where(and(
+      eq(clientsTable.id, clientId), eq(clientsTable.firmId, auth.firmId), isNull(clientsTable.deletedAt),
+    ));
+    if (!client || client.firmId !== auth.firmId || client.deletedAt || !client.adoptedAt || client.quarantinedAt ||
+      (auth.role !== "admin" && !(await canAccessClient(req, client)))) {
+      res.status(404).json({ error: "Not found" }); return;
+    }
+    next(); return;
+  }
   if (req.path.startsWith("/admin/") || req.path === "/rate-resets/status" || req.path.startsWith("/settings/")) {
     if (auth.role !== "admin") { res.status(403).json({ error: "Insufficient role" }); return; }
     next(); return;
