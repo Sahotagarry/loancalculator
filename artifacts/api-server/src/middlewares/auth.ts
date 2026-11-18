@@ -30,12 +30,12 @@ const decode = (value: string) => JSON.parse(Buffer.from(value.replace(/-/g, "+"
 
 async function keys(tenant: string, refresh = false): Promise<{ issuer: string; keys: Jwk[] } | null> {
   if (!refresh && keyCache && keyCache.until > Date.now()) return keyCache;
-  const discovery = await fetch(`https://login.microsoftonline.com/${tenant}/v2.0/.well-known/openid-configuration`);
-  if (!discovery.ok) return null;
+  const discovery = await fetch(`https://login.microsoftonline.com/${tenant}/v2.0/.well-known/openid-configuration`, { signal: AbortSignal.timeout(10000) });
+  if (!discovery.ok) throw new Error("Identity service unavailable");
   const metadata = await discovery.json() as { issuer?: unknown; jwks_uri?: unknown };
   if (typeof metadata.issuer !== "string" || typeof metadata.jwks_uri !== "string") return null;
-  const jwks = await fetch(metadata.jwks_uri);
-  if (!jwks.ok) return null;
+  const jwks = await fetch(metadata.jwks_uri, { signal: AbortSignal.timeout(10000) });
+  if (!jwks.ok) throw new Error("Identity service unavailable");
   const body = await jwks.json() as { keys?: unknown };
   if (!Array.isArray(body.keys)) return null;
   keyCache = { until: Date.now() + TTL_MS, issuer: metadata.issuer, keys: body.keys as Jwk[] };
@@ -67,7 +67,10 @@ export async function verifyEntraToken(token: string | undefined): Promise<Princ
         email: typeof claims.preferred_username === "string" ? claims.preferred_username : null };
     }
     return null;
-  } catch { return null; }
+  } catch (error) {
+    if (error instanceof SyntaxError) return null;
+    throw error;
+  }
 }
 
 function developmentPrincipal(): Principal {
@@ -140,11 +143,15 @@ export const requireAuthentication: RequestHandler = async (req, res, next) => {
   const isReplitDevelopmentPreview = environment === "development"
     && typeof process.env["REPLIT_DEV_DOMAIN"] === "string"
     && process.env["REPLIT_DEV_DOMAIN"].length > 0;
-  const identity = environment === "production"
-    ? await verifyEntraToken(req.header("x-ms-token-aad-id-token"))
-    : isReplitDevelopmentPreview
-      ? developmentPrincipal()
-      : null;
+  let identity: Principal | null;
+  try {
+    identity = environment === "production"
+      ? await verifyEntraToken(req.header("x-ms-token-aad-id-token"))
+      : isReplitDevelopmentPreview ? developmentPrincipal() : null;
+  } catch {
+    res.status(503).json({ error: "Identity verification temporarily unavailable" });
+    return;
+  }
   if (!identity) {
     res.status(401).json({ error: "Authentication required" });
     return;

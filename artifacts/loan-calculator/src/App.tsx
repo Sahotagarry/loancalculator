@@ -11,6 +11,7 @@ import LoanDetail from "@/pages/loan-detail";
 import SettingsPage from "@/pages/settings";
 import AccessSettingsPage from "@/pages/settings-access";
 import TrashPage from "@/pages/trash";
+import { SessionBoundary } from "@/components/session-boundary";
 
 function Router() {
   return (
@@ -33,7 +34,7 @@ function App() {
       <TooltipProvider>
         <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
           <Toaster />
-          <Router />
+          <SessionBoundary><Router /></SessionBoundary>
         </WouterRouter>
       </TooltipProvider>
     </QueryClientProvider>

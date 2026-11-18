@@ -77,7 +77,7 @@ export default function Home() {
     return () => document.removeEventListener("mousedown", onClickOutside);
   }, []);
 
-  const { data: clients, isLoading } = useListClients();
+  const { data: clients, isLoading, error: clientsError, refetch: retryClients } = useListClients();
 
   const searchQuery = clientSearch.trim().toLowerCase();
   const suggestions = searchQuery
@@ -332,6 +332,7 @@ export default function Home() {
             </div>
           )}
 
+          {clientsError && <div role="alert" className="rounded border p-6">Unable to load clients. Your records may still be available. <button className="underline" onClick={() => void retryClients()}>Retry</button></div>}
           {!isLoading && clients && clients.length === 0 && (
             <Card className="border-dashed border-2 border-muted bg-muted/30">
               <CardContent className="py-10 text-center space-y-6">
