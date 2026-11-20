@@ -6,12 +6,14 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { AgreementModificationAssessment } from './agreementModificationAssessment';
+import type { LeaseEndingTerms } from './leaseEndingTerms';
 import type { LoanActiveRateEventsItem } from './loanActiveRateEventsItem';
 import type { LoanEvent } from './loanEvent';
 import type { LoanFvDecision } from './loanFvDecision';
 import type { LoanGraceInterestTreatment } from './loanGraceInterestTreatment';
 import type { LoanGraceTermMode } from './loanGraceTermMode';
 import type { LoanInitialFvRateAssumption } from './loanInitialFvRateAssumption';
+import type { LoanInterestMethod } from './loanInterestMethod';
 import type { LoanPaymentTiming } from './loanPaymentTiming';
 import type { LoanRateBenchmark } from './loanRateBenchmark';
 import type { LoanRateEffectiveConvention } from './loanRateEffectiveConvention';
@@ -46,6 +48,8 @@ export interface Loan {
   startDate: Date;
   fiscalYearEnd: Date;
   paymentFrequency: string;
+  /** Contractual loan interest calculation; null on a stored loan preserves equal-period legacy schedules. */
+  interestMethod?: LoanInterestMethod;
   /** Whether scheduled payments are due at the end or beginning of each payment period. */
   paymentTiming: LoanPaymentTiming;
   /** Whether grace months are included in the stated term or extend it. */
@@ -90,6 +94,7 @@ export interface Loan {
   paymentOverride?: string | null;
   /** Contractual first installment when it differs from the regular payment. */
   firstPaymentAmount?: string | null;
+  leaseEndingTerms?: LeaseEndingTerms | null;
   termMonths?: number;
   isOfficeProperty: boolean;
   freeRentMonths: number;

@@ -7,6 +7,7 @@
  */
 import type { ImportedLoanFieldsGraceInterestTreatment } from './importedLoanFieldsGraceInterestTreatment';
 import type { ImportedLoanFieldsGraceTermMode } from './importedLoanFieldsGraceTermMode';
+import type { ImportedLoanFieldsInterestMethod } from './importedLoanFieldsInterestMethod';
 import type { ImportedLoanFieldsPaymentFrequency } from './importedLoanFieldsPaymentFrequency';
 import type { ImportedLoanFieldsPaymentTiming } from './importedLoanFieldsPaymentTiming';
 import type { SuggestedLoanEvent } from './suggestedLoanEvent';
@@ -23,6 +24,8 @@ export interface ImportedLoanFields {
   termYears?: number | null;
   startDate?: string | null;
   paymentFrequency?: ImportedLoanFieldsPaymentFrequency;
+  /** Contractual loan interest calculation; null on a stored loan preserves equal-period legacy schedules. */
+  interestMethod?: ImportedLoanFieldsInterestMethod;
   paymentTiming?: ImportedLoanFieldsPaymentTiming;
   graceTermMode?: ImportedLoanFieldsGraceTermMode;
   firstPaymentDate?: Date | null;
@@ -36,6 +39,8 @@ export interface ImportedLoanFields {
      * @maximum 31
      */
   semiMonthlySecondDueDay?: number | null;
+  /** Verbatim agreement wording, separate from the app default. */
+  interestMethodQuote?: string | null;
   paymentAmount?: number | null;
   interestOnlyMonths?: number | null;
   graceMonths?: number | null;

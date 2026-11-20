@@ -6,10 +6,12 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { AgreementModificationAssessment } from './agreementModificationAssessment';
+import type { LeaseEndingTerms } from './leaseEndingTerms';
 import type { RentStep } from './rentStep';
 import type { UpdateLoanGraceInterestTreatment } from './updateLoanGraceInterestTreatment';
 import type { UpdateLoanGraceTermMode } from './updateLoanGraceTermMode';
 import type { UpdateLoanInitialFvRateAssumption } from './updateLoanInitialFvRateAssumption';
+import type { UpdateLoanInterestMethod } from './updateLoanInterestMethod';
 import type { UpdateLoanPaymentTiming } from './updateLoanPaymentTiming';
 import type { UpdateLoanRateBenchmark } from './updateLoanRateBenchmark';
 import type { UpdateLoanRateEffectiveConvention } from './updateLoanRateEffectiveConvention';
@@ -39,6 +41,8 @@ export interface UpdateLoan {
   termYears?: number;
   startDate?: Date;
   paymentFrequency?: string;
+  /** Contractual loan interest calculation; null on a stored loan preserves equal-period legacy schedules. */
+  interestMethod?: UpdateLoanInterestMethod;
   paymentTiming?: UpdateLoanPaymentTiming;
   graceTermMode?: UpdateLoanGraceTermMode;
   firstPaymentDate?: Date | null;
@@ -81,6 +85,7 @@ export interface UpdateLoan {
   paymentOverride?: number | null;
   /** Contractual first installment when it differs from the regular payment. */
   firstPaymentAmount?: number | null;
+  leaseEndingTerms?: LeaseEndingTerms | null;
   termMonths?: number;
   isOfficeProperty?: boolean;
   freeRentMonths?: number;

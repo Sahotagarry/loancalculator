@@ -298,6 +298,7 @@ export interface FvEvalLoanInput {
   semiMonthlySecondDueDay?: number | null;
   fvRate?: string | null;
   paymentOverride?: string | null;
+  interestMethod?: import("@workspace/amortization").InterestMethod | null;
   firstPaymentAmount?: string | null;
   principalEvents?: PrincipalPaymentEvent[];
 }
@@ -356,6 +357,7 @@ export async function computeFvSuggestion(
         ? [loan.semiMonthlyFirstDueDay, loan.semiMonthlySecondDueDay]
         : undefined,
   }, {
+    interestMethod: loan.interestMethod,
     principalEvents: loan.principalEvents,
     commencementDate: startDateObj,
     firstPaymentAmount: loan.firstPaymentAmount != null ? Number(loan.firstPaymentAmount) : null,
@@ -430,6 +432,7 @@ export async function evaluateFvDecisionsForFile(
           graceInterestTreatment: current.graceInterestTreatment,
           balloonPayment: current.balloonPayment,
           paymentFrequency: current.paymentFrequency,
+          interestMethod: current.interestMethod,
           paymentTiming: current.paymentTiming,
           graceTermMode: current.graceTermMode,
           firstPaymentDate: current.firstPaymentDate,

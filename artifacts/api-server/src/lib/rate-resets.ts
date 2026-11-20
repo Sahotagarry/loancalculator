@@ -69,6 +69,7 @@ function contractualEffectiveDate(
     loan.paymentOverride == null ? null : Number(loan.paymentOverride), loan.graceMonths,
     loan.graceInterestTreatment === "none" ? "none" : "capitalized",
     {
+      interestMethod: loan.interestMethod,
       paymentTiming: loan.paymentTiming === "beginning" ? "beginning" : "end",
       firstPaymentAmount: loan.firstPaymentAmount == null ? null : Number(loan.firstPaymentAmount),
       graceTermMode: loan.graceTermMode === "added" ? "added" : "included",

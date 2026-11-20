@@ -1,8 +1,15 @@
 import type { FileSummary } from "./aspe-utils";
+import { leaseScheduleSupportIssue } from "@workspace/amortization";
 
 export const DISCLOSURE_MODEL_VERSION = "presentation-disclosure/v1";
 
 export interface DisclosureAgreementInput {
+  leaseEndingTerms?: { [key: string]: unknown } | null;
+  startDate?: string | null;
+  firstPaymentDate?: string | null;
+  paymentTiming?: string | null;
+  rateType?: string | null;
+  activeEvents?: readonly unknown[] | null;
   id: string;
   name: string;
   rolledFromId?: string | null;
@@ -197,6 +204,9 @@ export function buildDisclosureModel(input: BuildDisclosureModelInput): Disclosu
     throw new DisclosureEvidenceError("Required external predecessor evidence is unresolved.");
   }
   for (const agreement of input.agreements) {
+    if (agreement.leaseEndingTerms && (agreement.leaseEndingTerms.status !== "reviewed" || leaseScheduleSupportIssue(agreement))) {
+      throw new DisclosureEvidenceError(`${agreement.name}: lease ending terms remain unresolved or unreviewed.`);
+    }
     if (agreement.predecessorAgreementId && !agreement.predecessorAgreement) {
       throw new DisclosureEvidenceError(`Predecessor ${agreement.predecessorAgreementId} for ${agreement.name} is unresolved.`);
     }

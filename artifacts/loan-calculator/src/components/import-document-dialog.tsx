@@ -1,3 +1,4 @@
+import { interestMethods, type InterestMethod } from "@workspace/amortization";
 import { useRef, useState } from "react";
 import { useImportDocument, type DocumentImportResult } from "@workspace/api-client-react";
 import {
@@ -47,6 +48,7 @@ function buildFieldRows(result: DocumentImportResult): FieldRow[] {
       { label: "Payment frequency", value: fmtText(f?.paymentFrequency ?? null) },
       { label: "Payment timing", value: fmtText(f?.paymentTiming ?? null) },
       { label: "Grace term treatment", value: fmtText(f?.graceTermMode ?? null) },
+      { label: "Interest calculation", value: f?.interestMethod ? `${interestMethods[f.interestMethod].label} · “${f.interestMethodQuote}”` : `Default: Daily · 365-day year (not confirmed by the document)${f?.interestMethodQuote ? ` · “${f.interestMethodQuote}”` : ""}` },
       { label: "First payment date", value: fmtText(f?.firstPaymentDate) , optional: true },
       { label: "Semi-monthly first due day", value: fmtNum(f?.semiMonthlyFirstDueDay), optional: f?.paymentFrequency !== "semi-monthly" },
       { label: "Semi-monthly second due day", value: fmtNum(f?.semiMonthlySecondDueDay), optional: f?.paymentFrequency !== "semi-monthly" },
@@ -89,6 +91,10 @@ function buildFieldRows(result: DocumentImportResult): FieldRow[] {
       { label: "Fair value", value: fmtMoney(f?.fairValue) },
       { label: "Economic life", value: fmtNum(f?.economicLifeYears, " years") },
       { label: "Buyout amount", value: fmtMoney(f?.buyoutAmount), optional: true },
+      { label: "Ending treatment", value: fmtText((f?.leaseEndingTerms?.kind as string | undefined)?.replaceAll("_", " ")) },
+      { label: "Ending value", value: fmtMoney(f?.leaseEndingTerms?.amount as number | null) },
+      { label: "Ending evidence", value: fmtText(f?.leaseEndingTerms?.source as string | null) },
+      { label: "Calculated basis", value: fmtText(f?.leaseEndingTerms?.explanation as string | null), optional: true },
       { label: "Ownership transfers", value: fmtBool(f?.transferOfOwnership) },
       { label: "Bargain purchase option", value: fmtBool(f?.bargainPurchaseOption) },
       { label: "Specialized asset", value: fmtBool(f?.specializedAsset) },
@@ -422,6 +428,7 @@ export default function ImportDocumentDialog({ open, onOpenChange, fileId, onUse
                             f.interestRate != null ? `${f.interestRate}%` : null,
                             f.amortizationYears != null ? `${f.amortizationYears} yr amortization` : null,
                             f.startDate ?? null,
+                            f.interestMethod ? `${interestMethods[f.interestMethod as InterestMethod].label}: “${f.interestMethodQuote}”` : "Daily · 365-day year (default, not confirmed)",
                           ]
                             .filter(Boolean)
                             .join(" · ")}

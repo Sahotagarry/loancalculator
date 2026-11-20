@@ -1,0 +1,178 @@
+import { addMonths, format, parseISO } from "date-fns";
+
+/** Explicit opt-in contract: absence MUST retain historical lease calculations. */
+export type LeaseEndingKind = "mandatory_payment" | "guaranteed_residual" | "optional_purchase" | "bargain_purchase" | "lessor_residual" | "none" | "unresolved";
+export interface LeaseEndingTerms {
+  version: 1;
+  kind: LeaseEndingKind;
+  amount: number | null;
+  basis: "stated" | "percentage" | "reserve" | "sum" | "unsupported";
+  source: string;
+  baseAmount?: number | null;
+  percentage?: number | null;
+  reserves?: Array<{ fromMonth: number; toMonth: number; monthlyAmount: number }>;
+  sumAmounts?: number[];
+  settlementMonth: number | null;
+  issues: string[];
+  status: "draft" | "reviewed";
+  explanation?: string;
+  commencement?: { date: string; basis: "stated" | "inferred"; source: string; confirmed: boolean };
+  taxTreatment?: "recoverable" | "nonrecoverable" | "excluded" | "unresolved";
+  servicesMonthly?: number;
+  refundableDeposit?: number;
+  incrementalBorrowingRate?: number | null;
+  implicitRate?: number | null;
+  discountRate?: number | null;
+  paymentComponentsApplied?: boolean;
+  grossMonthlyPayment?: number;
+  grossFirstPaymentAmount?: number;
+  firstPaymentComponentsApplied?: boolean;
+  taxRate?: number;
+}
+
+const nonnegative = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n) && n >= 0;
+const cents = (n: number) => Math.round(n * 100) / 100;
+
+/** AI supplies operands and operative clauses; only this function supplies arithmetic. */
+export function normalizeLeaseEnding(input: LeaseEndingTerms, termMonths: number): LeaseEndingTerms {
+  const result: LeaseEndingTerms = { ...input, issues: [...(input.issues ?? [])] };
+  const issue = (message: string) => { if (!result.issues.includes(message)) result.issues.push(message); };
+  if (input.version !== 1) issue("Unsupported ending-term version.");
+  if (!Number.isInteger(termMonths) || termMonths <= 0) issue("A positive whole-month lease term is required.");
+  if (!input.source?.trim()) issue("Source clauses or reviewer evidence are required.");
+  if (input.kind === "unresolved") issue("Ending obligation remains unresolved.");
+  if (input.basis === "unsupported") {
+    result.amount = null;
+    issue("Formula requires professional review; no amount was guessed.");
+  } else if (input.basis === "sum") {
+    if (!input.sumAmounts?.length || !input.sumAmounts.every(nonnegative)) {
+      result.amount = null;
+      issue("A sum requires documented, non-negative amounts in the same currency, without alternative or duplicated settlements.");
+    } else {
+      result.amount = cents(input.sumAmounts.reduce((sum, n) => sum + n, 0));
+      result.explanation = `${input.sumAmounts.join(" + ")} = ${result.amount}`;
+    }
+  } else if (input.basis === "percentage") {
+    if (!nonnegative(input.baseAmount) || !nonnegative(input.percentage) || input.percentage > 100) {
+      result.amount = null;
+      issue("Percentage requires a supported base and a percentage from 0 to 100.");
+    } else {
+      result.amount = cents(input.baseAmount * input.percentage / 100);
+      result.explanation = `${input.baseAmount} × ${input.percentage}% = ${result.amount}`;
+    }
+  } else if (input.basis === "reserve") {
+    const blocks = [...(input.reserves ?? [])].sort((a, b) => a.fromMonth - b.fromMonth);
+    let next = 1, total = 0;
+    let valid = nonnegative(input.baseAmount) && blocks.length > 0;
+    for (const block of blocks) {
+      if (!Number.isInteger(block.fromMonth) || !Number.isInteger(block.toMonth) ||
+          block.fromMonth !== next || block.toMonth < block.fromMonth ||
+          block.toMonth > termMonths || !nonnegative(block.monthlyAmount)) valid = false;
+      total += (block.toMonth - block.fromMonth + 1) * block.monthlyAmount;
+      next = block.toMonth + 1;
+    }
+    if (!valid || next !== termMonths + 1 || total > (input.baseAmount ?? 0)) {
+      result.amount = null;
+      issue("Reserve periods must cover the full term once, with valid monthly amounts not exceeding cost.");
+    } else {
+      result.amount = cents(input.baseAmount! - total);
+      result.explanation = `${input.baseAmount} − reserves ${cents(total)} = ${result.amount}. The table alone does not establish a guarantee.`;
+    }
+  }
+  if (!nonnegative(result.amount)) issue("Ending amount is missing or invalid.");
+  if (input.kind === "none" && result.amount !== 0) issue("No obligation requires an explicitly supported zero amount.");
+  if (!Number.isInteger(input.settlementMonth) || input.settlementMonth! < termMonths) issue("Confirm settlement timing at or after the final rental period.");
+  if (input.commencement?.basis === "inferred" && !input.commencement.confirmed) issue("Confirm inferred commencement against delivery or commencement evidence.");
+  if (input.taxTreatment === "unresolved") issue("Resolve recoverable taxes, non-recoverable taxes and services separately.");
+  if (input.servicesMonthly != null && !nonnegative(input.servicesMonthly)) issue("Service amount must be non-negative.");
+  if (input.refundableDeposit != null && !nonnegative(input.refundableDeposit)) issue("Refundable deposit must be non-negative.");
+  if (result.issues.length) result.status = "draft";
+  return result;
+}
+
+export function lesseeEndingAmount(terms: LeaseEndingTerms): number {
+  if (terms.issues.length || !nonnegative(terms.amount) || terms.kind === "unresolved") {
+    throw new Error("Resolve lease ending terms before calculating accounting outputs.");
+  }
+  return ["mandatory_payment", "guaranteed_residual", "bargain_purchase"].includes(terms.kind) ? terms.amount : 0;
+}
+
+export interface LeaseCashFlows {
+  monthlyPayment: number;
+  termMonths: number;
+  paymentAtBeginning: boolean;
+  downPayment: number;
+  firstPaymentAmount?: number | null;
+  ending: LeaseEndingTerms;
+}
+
+/** Fail closed for calendars/timelines the explicit monthly engine cannot represent. */
+export function leaseScheduleSupportIssue(loan: {
+  startDate?: string | Date | null; firstPaymentDate?: string | Date | null;
+  paymentTiming?: string | null; rateType?: string | null;
+  activeEvents?: readonly unknown[] | null; initialEvents?: readonly unknown[] | null;
+  rateTimelineEvents?: readonly unknown[] | null; activeRateEvents?: readonly unknown[] | null;
+}): string | null {
+  if (loan.rateType === "prime_linked" || loan.activeEvents?.length || loan.initialEvents?.length ||
+      loan.rateTimelineEvents?.length || loan.activeRateEvents?.length) {
+    return "Dated prepayments and rate resets require the event-aware accounting path. Keep ending terms in draft; existing events cannot be discarded.";
+  }
+  if (loan.firstPaymentDate) {
+    const start = loan.startDate instanceof Date ? loan.startDate : parseISO(loan.startDate ?? "");
+    const first = loan.firstPaymentDate instanceof Date ? loan.firstPaymentDate : parseISO(loan.firstPaymentDate);
+    if (!Number.isFinite(start.getTime()) || !Number.isFinite(first.getTime()) ||
+        format(first, "yyyy-MM-dd") !== format(addMonths(start, loan.paymentTiming === "beginning" ? 0 : 1), "yyyy-MM-dd")) {
+      return "The contractual first-payment date is not a standard commencement-anchored monthly date. Keep ending terms in draft until this calendar is supported.";
+    }
+  }
+  return null;
+}
+
+export function lastLeaseRentalDate(startDate: Date, firstPaymentDate: Date | null, termMonths: number, atBeginning: boolean): Date {
+  const first = firstPaymentDate ?? addMonths(startDate, atBeginning ? 0 : 1);
+  return addMonths(first, Math.max(0, termMonths - 1));
+}
+
+export function leasePresentValue(a: LeaseCashFlows, annualRate: number, forImplicitRate = false): number {
+  if (!nonnegative(annualRate) || !nonnegative(a.monthlyPayment) || !nonnegative(a.downPayment) ||
+      !Number.isInteger(a.termMonths) || a.termMonths <= 0 ||
+      (a.firstPaymentAmount != null && !nonnegative(a.firstPaymentAmount))) throw new Error("Invalid lease cash flows.");
+  const end = lesseeEndingAmount(a.ending);
+  const residual = forImplicitRate && a.ending.kind === "lessor_residual" ? a.ending.amount! : end;
+  const r = annualRate / 1200;
+  let pv = a.downPayment;
+  for (let i = 0; i < a.termMonths; i++) {
+    const payment = i === 0 ? a.firstPaymentAmount ?? a.monthlyPayment : a.monthlyPayment;
+    pv += payment / (1 + r) ** (i + (a.paymentAtBeginning ? 0 : 1));
+  }
+  return pv + residual / (1 + r) ** a.ending.settlementMonth!;
+}
+
+/** Returns null, never a confident zero, when the supported cash flows have no nonnegative solution. */
+export function leaseImplicitRate(a: LeaseCashFlows, fairValue: number): number | null {
+  if (!nonnegative(fairValue) || fairValue <= a.downPayment) return null;
+  const zeroPV = leasePresentValue(a, 0, true);
+  if (zeroPV < fairValue) return null;
+  if (Math.abs(zeroPV - fairValue) < 1e-9) return 0;
+  let lo = 0, hi = 100;
+  while (leasePresentValue(a, hi, true) > fairValue && hi < 1e6) hi *= 2;
+  if (leasePresentValue(a, hi, true) > fairValue) return null;
+  for (let i = 0; i < 160; i++) {
+    const mid = (lo + hi) / 2;
+    if (leasePresentValue(a, mid, true) > fairValue) lo = mid;
+    else hi = mid;
+  }
+  return (lo + hi) / 2;
+}
+
+export function inferLeaseCommencement(expiry: string, months: number): LeaseEndingTerms["commencement"] | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(expiry) || !Number.isInteger(months) || months <= 0) return null;
+  const date = new Date(`${expiry}T00:00:00Z`);
+  if (!Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== expiry) return null;
+  const day = date.getUTCDate();
+  date.setUTCDate(1);
+  date.setUTCMonth(date.getUTCMonth() - months);
+  const last = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0)).getUTCDate();
+  date.setUTCDate(Math.min(day, last));
+  return { date: date.toISOString().slice(0, 10), basis: "inferred", source: `Expiry ${expiry} minus ${months} months; not a delivery date.`, confirmed: false };
+}

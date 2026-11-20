@@ -272,6 +272,12 @@ export interface UpdateFile {
   dismissedFindings?: string[] | null;
 }
 
+/**
+ * Versioned lease ending evidence. Null retains legacy accounting; non-null is validated deterministically.
+ * @nullable
+ */
+export type LeaseEndingTerms = { [key: string]: unknown } | null;
+
 export type LoanRateType = typeof LoanRateType[keyof typeof LoanRateType];
 
 
@@ -319,6 +325,19 @@ export const LoanRatePaymentTreatment = {
 } as const;
 
 export type LoanInitialFvRateAssumption = { [key: string]: unknown } | null;
+
+/**
+ * Contractual loan interest calculation; null on a stored loan preserves equal-period legacy schedules.
+ */
+export type LoanInterestMethod = typeof LoanInterestMethod[keyof typeof LoanInterestMethod] | null;
+
+
+export const LoanInterestMethod = {
+  actual_365: 'actual_365',
+  actual_year: 'actual_year',
+  periodic: 'periodic',
+  semi_annual: 'semi_annual',
+} as const;
 
 /**
  * Whether scheduled payments are due at the end or beginning of each payment period.
@@ -637,6 +656,8 @@ export interface Loan {
   startDate: string;
   fiscalYearEnd: string;
   paymentFrequency: string;
+  /** Contractual loan interest calculation; null on a stored loan preserves equal-period legacy schedules. */
+  interestMethod?: LoanInterestMethod;
   /** Whether scheduled payments are due at the end or beginning of each payment period. */
   paymentTiming: LoanPaymentTiming;
   /** Whether grace months are included in the stated term or extend it. */
@@ -681,6 +702,7 @@ export interface Loan {
   paymentOverride?: string | null;
   /** Contractual first installment when it differs from the regular payment. */
   firstPaymentAmount?: string | null;
+  leaseEndingTerms?: LeaseEndingTerms | null;
   termMonths?: number;
   isOfficeProperty: boolean;
   freeRentMonths: number;
@@ -763,6 +785,19 @@ export const CreateLoanRatePaymentTreatment = {
 
 export type CreateLoanInitialFvRateAssumption = { [key: string]: unknown } | null;
 
+/**
+ * Contractual loan interest calculation; null on a stored loan preserves equal-period legacy schedules.
+ */
+export type CreateLoanInterestMethod = typeof CreateLoanInterestMethod[keyof typeof CreateLoanInterestMethod] | null;
+
+
+export const CreateLoanInterestMethod = {
+  actual_365: 'actual_365',
+  actual_year: 'actual_year',
+  periodic: 'periodic',
+  semi_annual: 'semi_annual',
+} as const;
+
 export type CreateLoanPaymentTiming = typeof CreateLoanPaymentTiming[keyof typeof CreateLoanPaymentTiming];
 
 
@@ -829,6 +864,8 @@ export interface CreateLoan {
   startDate: string;
   fiscalYearEnd: string;
   paymentFrequency?: string;
+  /** Contractual loan interest calculation; null on a stored loan preserves equal-period legacy schedules. */
+  interestMethod?: CreateLoanInterestMethod;
   paymentTiming?: CreateLoanPaymentTiming;
   graceTermMode?: CreateLoanGraceTermMode;
   firstPaymentDate?: string | null;
@@ -871,6 +908,7 @@ export interface CreateLoan {
   paymentOverride?: number | null;
   /** Contractual first installment when it differs from the regular payment. */
   firstPaymentAmount?: number | null;
+  leaseEndingTerms?: LeaseEndingTerms | null;
   termMonths?: number;
   isOfficeProperty?: boolean;
   freeRentMonths?: number;
@@ -954,6 +992,19 @@ export const UpdateLoanRatePaymentTreatment = {
 
 export type UpdateLoanInitialFvRateAssumption = { [key: string]: unknown } | null;
 
+/**
+ * Contractual loan interest calculation; null on a stored loan preserves equal-period legacy schedules.
+ */
+export type UpdateLoanInterestMethod = typeof UpdateLoanInterestMethod[keyof typeof UpdateLoanInterestMethod] | null;
+
+
+export const UpdateLoanInterestMethod = {
+  actual_365: 'actual_365',
+  actual_year: 'actual_year',
+  periodic: 'periodic',
+  semi_annual: 'semi_annual',
+} as const;
+
 export type UpdateLoanPaymentTiming = typeof UpdateLoanPaymentTiming[keyof typeof UpdateLoanPaymentTiming];
 
 
@@ -1000,6 +1051,8 @@ export interface UpdateLoan {
   termYears?: number;
   startDate?: string;
   paymentFrequency?: string;
+  /** Contractual loan interest calculation; null on a stored loan preserves equal-period legacy schedules. */
+  interestMethod?: UpdateLoanInterestMethod;
   paymentTiming?: UpdateLoanPaymentTiming;
   graceTermMode?: UpdateLoanGraceTermMode;
   firstPaymentDate?: string | null;
@@ -1042,6 +1095,7 @@ export interface UpdateLoan {
   paymentOverride?: number | null;
   /** Contractual first installment when it differs from the regular payment. */
   firstPaymentAmount?: number | null;
+  leaseEndingTerms?: LeaseEndingTerms | null;
   termMonths?: number;
   isOfficeProperty?: boolean;
   freeRentMonths?: number;
@@ -1219,6 +1273,19 @@ export const ImportedLoanFieldsPaymentFrequency = {
   weekly: 'weekly',
 } as const;
 
+/**
+ * Contractual loan interest calculation; null on a stored loan preserves equal-period legacy schedules.
+ */
+export type ImportedLoanFieldsInterestMethod = typeof ImportedLoanFieldsInterestMethod[keyof typeof ImportedLoanFieldsInterestMethod] | null;
+
+
+export const ImportedLoanFieldsInterestMethod = {
+  actual_365: 'actual_365',
+  actual_year: 'actual_year',
+  periodic: 'periodic',
+  semi_annual: 'semi_annual',
+} as const;
+
 export type ImportedLoanFieldsPaymentTiming = typeof ImportedLoanFieldsPaymentTiming[keyof typeof ImportedLoanFieldsPaymentTiming] | null;
 
 
@@ -1298,6 +1365,8 @@ export interface ImportedLoanFields {
   termYears?: number | null;
   startDate?: string | null;
   paymentFrequency?: ImportedLoanFieldsPaymentFrequency;
+  /** Contractual loan interest calculation; null on a stored loan preserves equal-period legacy schedules. */
+  interestMethod?: ImportedLoanFieldsInterestMethod;
   paymentTiming?: ImportedLoanFieldsPaymentTiming;
   graceTermMode?: ImportedLoanFieldsGraceTermMode;
   firstPaymentDate?: string | null;
@@ -1311,6 +1380,8 @@ export interface ImportedLoanFields {
      * @maximum 31
      */
   semiMonthlySecondDueDay?: number | null;
+  /** Verbatim agreement wording, separate from the app default. */
+  interestMethodQuote?: string | null;
   paymentAmount?: number | null;
   interestOnlyMonths?: number | null;
   graceMonths?: number | null;
@@ -1352,6 +1423,7 @@ export interface ImportedLeaseFields {
   fairValue?: number | null;
   economicLifeYears?: number | null;
   buyoutAmount?: number | null;
+  leaseEndingTerms?: LeaseEndingTerms | null;
   transferOfOwnership?: boolean | null;
   bargainPurchaseOption?: boolean | null;
   specializedAsset?: boolean | null;

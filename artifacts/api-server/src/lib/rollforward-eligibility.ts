@@ -1,5 +1,10 @@
 import {
   calculateAmortization,
+  calculateLeaseSchedule,
+  leaseScheduleSupportIssue,
+  lesseeEndingAmount,
+  lastLeaseRentalDate,
+  type LeaseEndingTerms,
   type PrincipalPaymentEvent,
   type RateResetEvent,
 } from "@workspace/amortization";
@@ -68,7 +73,30 @@ export function isLoanOutstandingAt(
   // A future agreement is not a source-year closing obligation.
   if (startDate.getTime() > fye.getTime()) return false;
 
-  const result = calculateAmortization(
+  if (loan.leaseEndingTerms && loan.leaseEndingTerms.status !== "reviewed") {
+    throw new Error("Resolve and review lease ending terms before roll-forward.");
+  }
+  if (loan.leaseEndingTerms) {
+    const issue = leaseScheduleSupportIssue({ ...loan, activeEvents });
+    if (issue) throw new Error(issue);
+  }
+  const ending = loan.leaseEndingTerms as unknown as LeaseEndingTerms | null;
+  if (ending && !loan.isCapitalLease && loan.termMonths != null && loan.monthlyPayment != null) {
+    // No settlement evidence exists here: never assume the guaranteed/required
+    // end value was discharged merely because rentals or the due date passed.
+    const lastRental = lastLeaseRentalDate(startDate, loan.firstPaymentDate ? asDate(loan.firstPaymentDate) : null,
+      loan.termMonths, loan.paymentTiming === "beginning");
+    return lesseeEndingAmount(ending) > 0 || lastRental.getTime() > fye.getTime();
+  }
+  const result = ending && loan.isCapitalLease ? calculateLeaseSchedule({
+    monthlyPayment: Number(loan.paymentOverride ?? loan.monthlyPayment),
+    termMonths: loan.termMonths ?? Math.round(loan.termYears * 12),
+    paymentAtBeginning: loan.paymentTiming === "beginning", downPayment: Number(loan.downPayment),
+    firstPaymentAmount: loan.firstPaymentAmount == null ? null : Number(loan.firstPaymentAmount),
+    annualRate: ending.discountRate ?? Number(loan.interestRate),
+    openingAmount: Number(loan.principal) - Number(loan.downPayment),
+    ending, startDate,
+  }) : calculateAmortization(
     Number(loan.principal) - Number(loan.downPayment),
     Number(loan.interestRate),
     loan.amortizationYears,
@@ -84,6 +112,7 @@ export function isLoanOutstandingAt(
     loan.graceMonths,
     loan.graceInterestTreatment === "none" ? "none" : "capitalized",
     {
+      interestMethod: loan.interestMethod,
       paymentTiming: loan.paymentTiming === "beginning" ? "beginning" : "end",
       firstPaymentAmount: loan.firstPaymentAmount == null ? null : Number(loan.firstPaymentAmount),
       graceTermMode: loan.graceTermMode === "added" ? "added" : "included",

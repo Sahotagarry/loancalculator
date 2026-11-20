@@ -2,8 +2,10 @@ import { isAfter, addMonths, subDays, parseISO, format } from "date-fns";
 import { calculateAmortization, calculateFairValueSchedule, calculateProspectiveModificationSchedule, isValidFvRate, type AmortizationRow, type Frequency, type PrincipalPaymentEvent, type RateResetEvent } from "@workspace/amortization";
 import { calculateStraightLineLease, buildYearlyStraightLine } from "./straight-line";
 import { getFiscalYear, getFyEndParts } from "./fiscal";
+import { calculateLeaseSchedule, leaseScheduleSupportIssue, lesseeEndingAmount, type LeaseEndingTerms } from "@workspace/amortization";
 
 export interface BookedScheduleInput {
+  leaseEndingTerms?: Record<string, unknown> | LeaseEndingTerms | null;
   principal: number | string;
   downPayment?: number | string | null;
   interestRate: number | string;
@@ -23,6 +25,7 @@ export interface BookedScheduleInput {
   fvRate?: number | string | null;
   paymentOverride?: number | string | null;
   /** Contractual first installment when it differs from the regular payment. */
+  interestMethod?: import("@workspace/amortization").InterestMethod | null;
   firstPaymentAmount?: number | string | null;
   graceMonths?: number | null;
   graceInterestTreatment?: string | null;
@@ -321,6 +324,28 @@ function calculateStandaloneBookedSchedule(loan: BookedScheduleInput): {
   evidenceMetadata?: Record<string, unknown>;
 } {
   const frequency = (loan.paymentFrequency ?? "monthly") as Frequency;
+  if (loan.isCapitalLease && loan.leaseEndingTerms) {
+    const ending = loan.leaseEndingTerms as unknown as LeaseEndingTerms;
+    const supportIssue = leaseScheduleSupportIssue(loan);
+    if (ending.status !== "reviewed" || supportIssue) return {
+      monthlyPayment: 0, totalInterest: 0, totalPayment: 0, schedule: [],
+      fairValue: null, usedFairValue: false,
+      evidenceMetadata: { accountingUnavailable: true, reason: supportIssue ?? "Lease ending terms require review. Draft figures are excluded from accounting reports." },
+    };
+    const result = calculateLeaseSchedule({
+      monthlyPayment: Number(loan.paymentOverride ?? loan.monthlyPayment),
+      firstPaymentAmount: loan.firstPaymentAmount == null ? null : Number(loan.firstPaymentAmount),
+      termMonths: loan.termMonths ?? Math.round(loan.termYears * 12),
+      paymentAtBeginning: loan.paymentTiming === "beginning",
+      downPayment: Number(loan.downPayment ?? 0),
+      openingAmount: Number(loan.principal) - Number(loan.downPayment ?? 0),
+      annualRate: Number(ending.incrementalBorrowingRate != null && ending.implicitRate != null
+        ? Math.min(ending.incrementalBorrowingRate, ending.implicitRate)
+        : ending.incrementalBorrowingRate ?? ending.implicitRate ?? ending.discountRate ?? loan.interestRate),
+      ending, startDate: parseISO(loan.startDate),
+    });
+    return { ...result, fairValue: null, usedFairValue: false };
+  }
   const contractual = calculateAmortization(
     Number(loan.principal) - Number(loan.downPayment ?? 0),
     Number(loan.interestRate),
@@ -338,6 +363,7 @@ function calculateStandaloneBookedSchedule(loan: BookedScheduleInput): {
       paymentTiming: loan.paymentTiming ?? "end",
       graceTermMode: loan.graceTermMode ?? "included",
       firstPaymentDate: loan.firstPaymentDate ? parseISO(loan.firstPaymentDate) : undefined,
+      interestMethod: loan.interestMethod,
       firstPaymentAmount: loan.firstPaymentAmount != null ? Number(loan.firstPaymentAmount) : null,
       semiMonthlyDueDays:
         loan.semiMonthlyFirstDueDay != null && loan.semiMonthlySecondDueDay != null
@@ -366,6 +392,7 @@ function calculateStandaloneBookedSchedule(loan: BookedScheduleInput): {
           loan.graceMonths ?? 0, loan.graceInterestTreatment === "none" ? "none" : "capitalized",
           { paymentTiming: loan.paymentTiming ?? "end", graceTermMode: loan.graceTermMode ?? "included",
             firstPaymentDate: loan.firstPaymentDate ? parseISO(loan.firstPaymentDate) : undefined,
+            interestMethod: loan.interestMethod,
             firstPaymentAmount: loan.firstPaymentAmount != null ? Number(loan.firstPaymentAmount) : null,
             semiMonthlyDueDays: loan.semiMonthlyFirstDueDay != null && loan.semiMonthlySecondDueDay != null ? [loan.semiMonthlyFirstDueDay, loan.semiMonthlySecondDueDay] : undefined,
             principalEvents: toPrincipalPaymentEvents(loan), rateResetEvents: frozenRateEvents,
@@ -1373,6 +1400,7 @@ export function buildLoanSummary(
   loan: {
     id: string;
     name: string;
+    leaseEndingTerms?: Record<string, unknown> | LeaseEndingTerms | null;
     counterparty?: string | null;
     principal: number | string;
     downPayment?: number | string | null;
@@ -1392,7 +1420,8 @@ export function buildLoanSummary(
     isCapitalLease?: boolean | null;
     monthlyPayment?: number | string | null;
     paymentOverride?: number | string | null;
-    firstPaymentAmount?: number | string | null;
+    interestMethod?: import("@workspace/amortization").InterestMethod | null;
+  firstPaymentAmount?: number | string | null;
     graceMonths?: number | null;
     graceInterestTreatment?: string | null;
     termMonths?: number | null;
@@ -1441,6 +1470,8 @@ export function buildLoanSummary(
   reportYearEnd: Date,
   fyEndDate: string
 ): LoanSummary | CapitalLeaseSummary | OperatingLeaseSummary | null {
+  if (loan.leaseEndingTerms && loan.leaseEndingTerms.status !== "reviewed") return null;
+  if (loan.leaseEndingTerms && leaseScheduleSupportIssue(loan)) return null;
   if (!loan.startDate || !fyEndDate) return null;
   const { month: fyEndMonth, day: fyEndDay } = getFyEndParts(fyEndDate);
   // Financed amount actually amortized: face principal net of any down payment.
@@ -1648,11 +1679,24 @@ export function buildLoanSummary(
         : `${opNarrativeBase} This agreement replaces its linked predecessor effective ${loan.modificationEffectiveDate}; the predecessor is reported through that date and this lease afterward.`
       : opNarrativeBase;
 
+    const ending = loan.leaseEndingTerms as unknown as LeaseEndingTerms | null;
+    const endingAmount = ending ? lesseeEndingAmount(ending) : 0;
+    if (ending && endingAmount > 0) {
+      const date = addMonths(startDate, ending.settlementMonth!);
+      totalCommitment += endingAmount;
+      if (isAfter(date, reportYearEnd)) {
+        const fy = getFiscalYear(date, fyEndMonth, fyEndDay);
+        const existing = yearlyPayments.find(item => item.fiscalYear === fy);
+        if (existing) existing.amount += endingAmount;
+        else yearlyPayments.push({ fiscalYear: fy, label: String(fy), amount: endingAmount });
+        yearlyPayments.sort((a, b) => a.fiscalYear - b.fiscalYear);
+      }
+    }
     return {
       id: loan.id,
       name: loan.name,
       counterparty: opCp,
-      description: opNarrative,
+      description: opNarrative + (ending ? ` Ending arrangement: ${ending.kind.replaceAll("_", " ")}; supported value $${Number(ending.amount).toFixed(2)} at month ${ending.settlementMonth}. A guarantee is not an assumed purchase.` : ""),
       monthlyPayment,
       termMonths,
       startDate: loan.startDate,
@@ -1697,6 +1741,12 @@ export function buildLoanSummary(
   // within one year and belongs in the current portion.
   if (residualBalloon > 0.01 && lastRow && !isAfter(lastRow.date, currentPeriodEnd)) {
     currentPortion += residualBalloon;
+  }
+  // Explicit endings remain unpaid in this model until separate settlement
+  // evidence exists. A passed due date makes the retained liability current,
+  // not long-term and not zero.
+  if (loan.leaseEndingTerms && lastRow && !isAfter(lastRow.date, reportYearEnd) && lastRow.balance > 0.01) {
+    currentPortion = balanceAtYearEnd;
   }
 
   let longTermPortion = Math.max(0, balanceAtYearEnd - currentPortion);
@@ -1749,7 +1799,10 @@ export function buildLoanSummary(
       ? ` This agreement is a new lease commencing under ASPE 3065 effective ${loan.modificationEffectiveDate}; any predecessor lease is terminated or derecognized at that date and this lease is reported thereafter.`
       : ` This agreement replaces its linked predecessor effective ${loan.modificationEffectiveDate} and is accounted for as a ${loan.modificationAssessment.conclusion.accountingTreatment}; predecessor activity is retained through the effective date and successor activity thereafter.`
     : "";
-  const narrative = `${leadIn}. The ${isCapital ? "lease" : "loan"} matures on ${formatDate(maturityDate)}${securityText}${transitionDisclosure}`;
+  const endingDisclosure = loan.leaseEndingTerms
+    ? ` Ending arrangement: ${String(loan.leaseEndingTerms.kind).replaceAll("_", " ")}; supported value $${Number(loan.leaseEndingTerms.amount ?? 0).toFixed(2)}, settlement month ${loan.leaseEndingTerms.settlementMonth}. ${loan.leaseEndingTerms.kind === "guaranteed_residual" ? "Return/sale shortfall guarantee; not an assumed purchase." : ""}`
+    : "";
+  const narrative = `${leadIn}. The ${isCapital ? "lease" : "loan"} matures on ${formatDate(maturityDate)}${securityText}${transitionDisclosure}${endingDisclosure}`;
 
   // Year-by-year principal repayments (future years only, for the repayment-terms disclosure)
   // and principal repaid during the current reporting fiscal year (for the cash flow statement).
@@ -2014,7 +2067,8 @@ export function buildFileSummary(
     isCapitalLease?: boolean | null;
     monthlyPayment?: number | string | null;
     paymentOverride?: number | string | null;
-    firstPaymentAmount?: number | string | null;
+    interestMethod?: import("@workspace/amortization").InterestMethod | null;
+  firstPaymentAmount?: number | string | null;
     graceMonths?: number | null;
     graceInterestTreatment?: string | null;
     termMonths?: number | null;

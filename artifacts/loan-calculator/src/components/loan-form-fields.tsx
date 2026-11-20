@@ -1,4 +1,7 @@
+import { DEFAULT_LOAN_INTEREST_METHOD, isDaily, type InterestMethod } from "@workspace/amortization";
+import { InterestMethodField } from "./interest-method-field";
 import { useState, type Dispatch, type SetStateAction } from "react";
+import { LeaseEndingFields } from "./lease-ending-fields";
 import { addDays, addMonths, format, parseISO } from "date-fns";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,6 +18,9 @@ import { CounterpartyCombobox } from "@/components/counterparty-combobox";
 import { SecurityCollateralFields } from "@/components/security-collateral-fields";
 
 export interface LoanFormState {
+  interestMethod?: InterestMethod;
+  importedInterestNote?: string;
+  leaseEndingTerms?: import("@workspace/amortization").LeaseEndingTerms | null;
   name: string;
   description: string;
   counterparty: string | null;
@@ -182,7 +188,15 @@ interface LoanFormFieldsProps {
   mode?: LoanFormMode;
 }
 
-export function LoanFormFields({ form, setForm, mode = "loan" }: LoanFormFieldsProps) {
+export function LoanFormFields({ form, setForm: persistForm, mode = "loan" }: LoanFormFieldsProps) {
+  const setForm: Dispatch<SetStateAction<LoanFormState>> = action => persistForm(prev => {
+    const next = typeof action === "function" ? action(prev) : action;
+    const financialFields: Array<keyof LoanFormState> = ["principal", "downPayment", "interestRate", "amortizationYears", "termYears", "termMonths", "startDate", "paymentFrequency", "paymentTiming", "firstPaymentDate", "firstPaymentAmount", "monthlyPayment", "paymentOverride", "balloonPayment", "fairValue", "ioMonths", "graceMonths"];
+    if (next.leaseEndingTerms && next.leaseEndingTerms === prev.leaseEndingTerms && financialFields.some(key => next[key] !== prev[key])) {
+      return { ...next, leaseEndingTerms: { ...next.leaseEndingTerms, status: "draft" } };
+    }
+    return next;
+  });
   const isOperating = mode === "operating_lease";
   const isDebt = !isOperating;
   const periodsPerYear =
@@ -202,12 +216,12 @@ export function LoanFormFields({ form, setForm, mode = "loan" }: LoanFormFieldsP
     form.graceMonths,
     form.graceTermMode,
   );
-  const previewDate =
-    form.firstPaymentDate && !isNaN(parseISO(form.firstPaymentDate).getTime())
-      ? format(parseISO(form.firstPaymentDate), "MMMM d, yyyy")
-      : form.startDate && !isNaN(parseISO(form.startDate).getTime())
-        ? format(parseISO(form.startDate), "MMMM d, yyyy")
-        : "Enter an inception date";
+  const dailyLoan = mode === "loan" && !form.isCapitalLease && isDaily(form.interestMethod);
+  const previewIso = form.firstPaymentDate || (dailyLoan
+    ? deriveFirstPaymentDate(form.startDate, form.paymentTiming, form.graceMonths, form.paymentFrequency, form.semiMonthlyFirstDueDay, form.semiMonthlySecondDueDay)
+    : form.startDate);
+  const previewDate = previewIso && !isNaN(parseISO(previewIso).getTime())
+    ? format(parseISO(previewIso), "MMMM d, yyyy") : "Not set";
   const setDerivedFirstDate = (patch: Partial<LoanFormState>) => {
     const next = { ...form, ...patch };
     return {
@@ -277,6 +291,8 @@ export function LoanFormFields({ form, setForm, mode = "loan" }: LoanFormFieldsP
 
   return (
     <div className="space-y-6 py-4">
+      {form.leaseEndingTerms?.status === "draft" && <p className="text-sm text-amber-800">Draft ending terms: saving is allowed, but accounting reports remain unavailable until the financial inputs and ending evidence are reviewed. The existing balloon is the prior reviewed amount, not a new conclusion.</p>}
+      {(mode !== "loan" || form.isCapitalLease || form.leaseEndingTerms) && <LeaseEndingFields value={form.leaseEndingTerms} months={form.termMonths ?? Math.round(form.termYears * 12)} onChange={leaseEndingTerms => setForm({ ...form, leaseEndingTerms })} />}
       <div className="space-y-2">
         <Label htmlFor="loanName">
           Name <Req />
@@ -337,6 +353,8 @@ export function LoanFormFields({ form, setForm, mode = "loan" }: LoanFormFieldsP
             </div>
           </div>
 
+          {mode === "loan" && !form.isCapitalLease && <InterestMethodField value={form.interestMethod ?? DEFAULT_LOAN_INTEREST_METHOD}
+            note={form.importedInterestNote} onChange={interestMethod => setForm({ ...form, interestMethod, importedInterestNote: form.importedInterestNote ? "Manually selected after document review." : undefined })} />}
           {form.rateType === "fixed" && (
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
@@ -717,7 +735,7 @@ export function LoanFormFields({ form, setForm, mode = "loan" }: LoanFormFieldsP
             </div>
           )}
           <p className="text-xs text-muted-foreground" data-testid="text-payment-timing-preview">
-            Actual first contractual payment: <strong>{previewDate}</strong>{form.firstPaymentDateDerived ? " (derived from inception, grace, and timing)" : form.firstPaymentDate ? "" : " (legacy inception-date anchor retained)"}. Repayment term: <strong>{repaymentMonths} months</strong>. Total contractual term: <strong>{totalContractualMonths} months</strong>.
+            Actual first contractual payment: <strong>{previewDate}</strong>{form.firstPaymentDateDerived ? " (derived from inception, grace, and timing)" : form.firstPaymentDate ? "" : isDaily(form.interestMethod) && mode === "loan" && !form.isCapitalLease ? " (derived)" : " (legacy inception-date anchor retained)"}. Repayment term: <strong>{repaymentMonths} months</strong>. Total contractual term: <strong>{totalContractualMonths} months</strong>.
             {form.graceMonths > 0 && ` For example, 60 repayment months + 13 months of added grace = 73 total months; when grace is included, 13 grace months within a 60-month term leave 47 repayment months.`}
           </p>
         </div>

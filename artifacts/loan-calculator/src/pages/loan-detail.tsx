@@ -1,3 +1,4 @@
+import { DEFAULT_LOAN_INTEREST_METHOD, interestMethods, isDaily } from "@workspace/amortization";
 import { useAuth } from "@/hooks/use-auth";
 import { useState, useMemo } from "react";
 import { useRoute } from "wouter";
@@ -140,6 +141,7 @@ export default function LoanDetail() {
     termYears: 0,
     startDate: "",
     paymentFrequency: "monthly",
+    interestMethod: DEFAULT_LOAN_INTEREST_METHOD,
     paymentTiming: "end",
     graceTermMode: "included",
     firstPaymentDate: "",
@@ -714,6 +716,7 @@ export default function LoanDetail() {
       termYears: loan.termYears,
       startDate: loan.startDate.split("T")[0],
       paymentFrequency: loan.paymentFrequency as any,
+      interestMethod: loan.interestMethod ?? "periodic",
       paymentTiming: loan.paymentTiming ?? "end",
       graceTermMode: loan.graceTermMode ?? "included",
       firstPaymentDate: loan.firstPaymentDate ? loan.firstPaymentDate.split("T")[0] : "",
@@ -737,6 +740,7 @@ export default function LoanDetail() {
       monthlyPayment: loan.monthlyPayment != null ? Number(loan.monthlyPayment) : undefined,
       paymentOverride: loan.paymentOverride != null ? Number(loan.paymentOverride) : undefined,
       firstPaymentAmount: loan.firstPaymentAmount != null ? Number(loan.firstPaymentAmount) : undefined,
+      leaseEndingTerms: loan.leaseEndingTerms as unknown as import("@workspace/amortization").LeaseEndingTerms | null,
       termMonths: loan.termMonths ?? undefined,
       isOfficeProperty: loan.isOfficeProperty ?? false,
       freeRentMonths: loan.freeRentMonths ?? 0,
@@ -797,6 +801,7 @@ export default function LoanDetail() {
 
   return (
     <div className="min-h-screen bg-background">
+      {loan.leaseEndingTerms && (loan.leaseEndingTerms.status !== "reviewed" || contractualResult?.evidenceMetadata?.accountingUnavailable === true) && <div role="alert" className="border border-amber-400 bg-amber-50 text-amber-950 p-4">Draft lease: ending terms require review. Accounting schedules and reports are unavailable; displayed draft inputs are not reviewed balances. {String(contractualResult?.evidenceMetadata?.reason ?? "Open Reevaluate Lease to resolve the evidence.")}</div>}
       <PageHeader
         backHref={`/client/${clientId}/file/${fileId}`}
         breadcrumb={
@@ -1167,7 +1172,8 @@ export default function LoanDetail() {
                                   <span>
                                     {format(
                                       (() => {
-                                        // Down payment is made one payment period before the first scheduled payment.
+                                        if (isDaily(loan.interestMethod)) return parseISO(loan.startDate);
+                                        // Legacy convention: one period before the first scheduled payment.
                                         const firstPayment = result.schedule[0]?.date ?? parseISO(loan.startDate);
                                         switch (loan.paymentFrequency) {
                                           case "weekly": return subDays(firstPayment, 7);
@@ -1637,6 +1643,7 @@ export default function LoanDetail() {
                         <span className="text-muted-foreground">Payment Frequency</span>
                         <span className="font-semibold">{loan.paymentFrequency}</span>
                       </div>
+                      {editMode === "loan" && <div className="flex justify-between gap-4"><span className="text-muted-foreground">Interest calculation</span><span className="font-semibold">{interestMethods[loan.interestMethod ?? "periodic"].label}</span></div>}
                       {loan.assetDescription && (
                         <>
                           <div className="border-t pt-2" />
@@ -2587,7 +2594,8 @@ export default function LoanDetail() {
                       termYears: editForm.termYears,
                       startDate: editForm.startDate,
                       paymentFrequency: editForm.paymentFrequency,
-                      paymentTiming: editForm.paymentTiming,
+                      interestMethod: editMode === "loan" && !editForm.isCapitalLease ? editForm.interestMethod : undefined,
+                        paymentTiming: editForm.paymentTiming,
                       graceTermMode: editForm.graceTermMode,
                       firstPaymentDate: editForm.firstPaymentDate || null,
                       semiMonthlyFirstDueDay: editForm.semiMonthlyFirstDueDay ?? null,
@@ -2609,6 +2617,7 @@ export default function LoanDetail() {
                       monthlyPayment: editForm.monthlyPayment,
                       paymentOverride: editForm.paymentOverride ?? null,
                       firstPaymentAmount: editForm.firstPaymentAmount ?? null,
+                      leaseEndingTerms: editForm.leaseEndingTerms ? { ...editForm.leaseEndingTerms } : undefined,
                       termMonths: editForm.termMonths,
                       isOfficeProperty: editForm.isOfficeProperty,
                       freeRentMonths: editForm.freeRentMonths,
@@ -2661,11 +2670,13 @@ export default function LoanDetail() {
           monthlyPayment: loan.monthlyPayment != null ? Number(loan.monthlyPayment) : 0,
           downPayment: Number(loan.downPayment ?? 0),
           interestRate: Number(loan.interestRate),
-          paymentAtBeginning: false,
+          paymentAtBeginning: loan.paymentTiming === "beginning",
           paymentIncludesTax: false,
           taxType: "none",
           taxRate: 0,
           buyoutForImplicitRate: 0,
+          leaseEndingTerms: loan.leaseEndingTerms as unknown as import("@workspace/amortization").LeaseEndingTerms | null,
+          firstPaymentAmount: loan.firstPaymentAmount == null ? null : Number(loan.firstPaymentAmount),
         };
         return (
           <CapitalLeaseAssessment
@@ -2700,6 +2711,9 @@ export default function LoanDetail() {
                   assetDescription: formatAssetType(result.answers.assetType) || undefined,
                   assetUsefulLife: result.answers.economicLife || undefined,
                   monthlyPayment: result.answers.monthlyPayment,
+                  paymentOverride: result.answers.monthlyPayment,
+                  paymentTiming: result.answers.paymentAtBeginning ? "beginning" : "end",
+                  leaseEndingTerms: result.answers.leaseEndingTerms ? { ...result.answers.leaseEndingTerms } : undefined,
                   termMonths: result.answers.termMonths,
                   interestRate: result.answers.interestRate,
                   downPayment: result.isCapitalLease ? result.answers.downPayment : 0,

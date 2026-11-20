@@ -1,4 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from "react";
+import { leasePresentValue, leaseImplicitRate, normalizeLeaseEnding, type LeaseEndingTerms } from "@workspace/amortization";
+import { LeaseEndingFields } from "./lease-ending-fields";
 import {
   Dialog,
   DialogContent,
@@ -35,6 +37,8 @@ import {
 } from "@/components/ui/select";
 
 export type AssessmentAnswers = {
+  leaseEndingTerms?: LeaseEndingTerms | null;
+  firstPaymentAmount?: number | null;
   transferOfOwnership: boolean;
   bargainPurchaseOption: boolean;
   leaseTermPct: number;
@@ -85,13 +89,40 @@ export type AssessmentResult = {
  * (ASPE 3065). When the entered payment includes GST/HST/PST, strip it
  * before discounting. */
 export function preTaxMonthlyPayment(a: AssessmentAnswers): number {
+  if (a.leaseEndingTerms) {
+    if (a.leaseEndingTerms.paymentComponentsApplied) return a.monthlyPayment;
+    const services = a.leaseEndingTerms.servicesMonthly ?? 0;
+    const gross = a.leaseEndingTerms.grossMonthlyPayment ?? a.monthlyPayment;
+    const taxRate = a.leaseEndingTerms.taxRate ?? a.taxRate;
+    const payment = a.leaseEndingTerms.taxTreatment === "recoverable" && taxRate > 0
+      ? gross / (1 + taxRate / 100) : gross;
+    return Math.round(Math.max(0, payment - services) * 100) / 100;
+  }
   if (a.paymentIncludesTax && a.taxRate > 0) {
     return a.monthlyPayment / (1 + a.taxRate / 100);
   }
   return a.monthlyPayment;
 }
 
+export function financingFirstPayment(a: AssessmentAnswers): number | null {
+  if (a.firstPaymentAmount == null) return null;
+  const ending = a.leaseEndingTerms;
+  if (!ending || ending.firstPaymentComponentsApplied) return a.firstPaymentAmount;
+  const gross = ending.grossFirstPaymentAmount ?? a.firstPaymentAmount;
+  const rate = ending.taxRate ?? a.taxRate;
+  return Math.round(100 * ((ending.taxTreatment === "recoverable" && rate > 0 ? gross / (1 + rate / 100) : gross) - (ending.servicesMonthly ?? 0))) / 100;
+}
+
 export function calculatePVFromAnswers(a: AssessmentAnswers): number {
+  if (a.leaseEndingTerms) {
+    try {
+      const ending = normalizeLeaseEnding(a.leaseEndingTerms, a.termMonths);
+      const rate = ending.incrementalBorrowingRate != null && ending.implicitRate != null
+        ? Math.min(ending.incrementalBorrowingRate, ending.implicitRate)
+        : ending.incrementalBorrowingRate ?? ending.implicitRate ?? a.interestRate;
+      return Math.round(leasePresentValue({ ...a, monthlyPayment: preTaxMonthlyPayment(a), firstPaymentAmount: financingFirstPayment(a), ending }, rate) * 100) / 100;
+    } catch { return 0; } // Draft values are not an accounting conclusion.
+  }
   if (a.monthlyPayment <= 0 || a.interestRate <= 0 || a.termMonths <= 0) return 0;
   const r = a.interestRate / 100 / 12;
   const n = a.termMonths;
@@ -302,7 +333,7 @@ const CRITERIA: Criterion[] = [
     guide: "From the lessee's point of view: check if the lease gives the lessee an option to purchase the asset at lease-end. Compare the option price to the expected fair value of the asset at that date. If the option price is significantly lower (say, $1,000 to buy a $50,000 machine), it's a bargain.",
     documentHint: "Look for a 'Purchase Option' or 'Buyout' clause in the lease agreement. Ask the lessor or an appraiser for the asset's expected fair value at lease-end.",
     example: "Example (lessee perspective): The lessee has a 5-year lease on manufacturing equipment, and the contract includes a clause allowing the lessee to buy the equipment for $5,000 at lease-end. The equipment is expected to be worth $40,000 then. Because the lessee will almost certainly exercise this bargain option, this is a capital lease — answer Yes.",
-    quickTip: "From the lessee's view: if the buyout price is 10% or less of expected fair value, it is almost certainly a bargain option.",
+    quickTip: "Compare the exercise price with expected fair value at exercise; no fixed percentage of original cost establishes a bargain.",
     isYesNo: true,
   },
   {
@@ -377,6 +408,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
     taxType: "none",
     taxRate: 0,
     buyoutForImplicitRate: 0,
+    leaseEndingTerms: { version: 1, kind: "unresolved", amount: null, basis: "stated", source: "", settlementMonth: null, issues: [], status: "draft" },
   };
 
   const defaultStraightLine: StraightLineAnswers = {
@@ -464,7 +496,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
     if (answers.bargainPurchaseOption) met.push("Bargain purchase option");
     if (answers.leaseTermPct >= 75) met.push("Lease term >= 75% of useful life");
     if (answers.pvPctFairValue >= 90) met.push("PV >= 90% of fair value");
-    if (answers.specializedAsset) met.push("Specialized asset");
+    // Specialized use is supporting risks-and-rewards evidence, not a separate ASPE bright line.
 
     const isCapitalLease = met.length > 0;
 
@@ -478,7 +510,15 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
     }
 
     const pvValue = calculatePVFromAnswers(answers);
-    return { isCapitalLease, metCriteria: met, rationale, answers, pvValue, straightLine: isCapitalLease ? null : straightLine, isOfficeProperty: answers.assetType === "office_commercial" };
+    const ending = answers.leaseEndingTerms;
+    const rate = ending ? (ending.incrementalBorrowingRate != null && ending.implicitRate != null
+      ? Math.min(ending.incrementalBorrowingRate, ending.implicitRate)
+      : ending.incrementalBorrowingRate ?? ending.implicitRate ?? answers.interestRate) : answers.interestRate;
+    const finalAnswers = ending ? { ...answers, interestRate: rate, monthlyPayment: preTaxMonthlyPayment(answers), firstPaymentAmount: financingFirstPayment(answers), paymentIncludesTax: false,
+      leaseEndingTerms: { ...ending, discountRate: rate, paymentComponentsApplied: true,
+        ...(answers.firstPaymentAmount == null ? {} : { grossFirstPaymentAmount: ending.grossFirstPaymentAmount ?? answers.firstPaymentAmount, firstPaymentComponentsApplied: true }),
+        grossMonthlyPayment: ending.grossMonthlyPayment ?? answers.monthlyPayment, taxRate: ending.taxRate ?? answers.taxRate } } : answers;
+    return { isCapitalLease, metCriteria: met, rationale, answers: finalAnswers, pvValue, straightLine: isCapitalLease ? null : straightLine, isOfficeProperty: answers.assetType === "office_commercial" };
   }, [answers, straightLine, usedFastTrack]);
 
   const totalSteps = 8;
@@ -490,6 +530,10 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
   const calculatePV = useCallback((a: AssessmentAnswers) => calculatePVFromAnswers(a), []);
 
   const calculateImplicitRate = useCallback((a: AssessmentAnswers) => {
+    if (a.leaseEndingTerms) {
+      try { return leaseImplicitRate({ ...a, monthlyPayment: preTaxMonthlyPayment(a), firstPaymentAmount: financingFirstPayment(a), ending: normalizeLeaseEnding(a.leaseEndingTerms, a.termMonths) }, a.fairValue) ?? 0; }
+      catch { return 0; }
+    }
     if (a.fairValue <= 0 || a.monthlyPayment <= 0 || a.termMonths <= 0) return 0;
     const fv = a.fairValue;
     const pmt = preTaxMonthlyPayment(a);
@@ -528,7 +572,8 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
 
   const updateNumber = (key: "leaseTermPct" | "pvPctFairValue" | "fairValue" | "economicLife" | "termMonths" | "monthlyPayment" | "downPayment" | "interestRate" | "buyoutAmount" | "taxRate" | "buyoutForImplicitRate", value: number) => {
     setAnswers((prev) => {
-      const next = { ...prev, [key]: value };
+      const next = { ...prev, [key]: value,
+        ...(prev.leaseEndingTerms ? { leaseEndingTerms: { ...prev.leaseEndingTerms, status: "draft" as const } } : {}) };
       // Auto-calculate leaseTermPct when termMonths or economicLife changes
       if ((key === "termMonths" || key === "economicLife") && next.termMonths > 0 && next.economicLife > 0) {
         next.leaseTermPct = Math.round((next.termMonths / (next.economicLife * 12)) * 1000) / 10;
@@ -1201,14 +1246,13 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                             <div className="p-3 rounded-lg bg-red-50 border border-red-200 space-y-2">
                               <div className="flex items-center gap-2">
                                 <AlertTriangle className="h-4 w-4 text-red-600 flex-shrink-0" />
-                                <p className="text-sm font-semibold text-red-900">Do NOT Include the Buyout / Residual</p>
+                                <p className="text-sm font-semibold text-red-900">Distinguish ending obligations from optional purchases</p>
                               </div>
                               <p className="text-xs text-red-800 leading-relaxed">
-                                The present value calculation must include only <strong>mandatory</strong> lease payments. A buyout (residual) payment at lease-end is <strong>optional</strong> — the lessee can walk away and return the asset. Including it inflates the PV and can incorrectly push the ratio over 90%.
+                                Include required final payments, lessee-guaranteed residuals and qualifying bargain purchase prices. A return/sale shortfall guarantee is not an optional purchase. Exclude ordinary purchase options and unguaranteed lessor residuals from the lessee liability.
                               </p>
                               <p className="text-xs text-red-800">
-                                <strong>Correct:</strong> Include only regular monthly payments for the lease term.<br/>
-                                <strong>Incorrect:</strong> Adding a $10,000 buyout to a $50,000 PV makes it $60,000 — artificially meeting the 90% threshold.
+                                Use the ending-terms review below. A reserve table alone does not establish a lessee guarantee; check the operative clauses.
                               </p>
                             </div>
 
@@ -1297,14 +1341,13 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                             <div className="p-3 rounded-lg bg-red-50 border border-red-200 space-y-2">
                               <div className="flex items-center gap-2">
                                 <AlertTriangle className="h-4 w-4 text-red-600 flex-shrink-0" />
-                                <p className="text-sm font-semibold text-red-900">Do NOT Include the Buyout / Residual</p>
+                                <p className="text-sm font-semibold text-red-900">Distinguish ending obligations from optional purchases</p>
                               </div>
                               <p className="text-xs text-red-800 leading-relaxed">
-                                The present value calculation must include only <strong>mandatory</strong> lease payments. A buyout (residual) payment at lease-end is <strong>optional</strong> — the lessee can walk away and return the asset. Including it inflates the PV and can incorrectly push the ratio over 90%.
+                                Include required final payments, lessee-guaranteed residuals and qualifying bargain purchase prices. Exclude ordinary purchase options and unguaranteed lessor residuals from the lessee liability. Do not count alternative settlements twice.
                               </p>
                               <p className="text-xs text-red-800">
-                                <strong>Correct:</strong> Include only regular monthly payments for the lease term.<br/>
-                                <strong>Incorrect:</strong> Adding a $10,000 buyout to a $50,000 PV makes it $60,000 — artificially meeting the 90% threshold.
+                                The absence of a purchase clause is not evidence that no residual guarantee exists.
                               </p>
                             </div>
 
@@ -1643,6 +1686,10 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
           </div>
         )}
 
+        {(step === 4 || step === 6 || step === 7) && <LeaseEndingFields value={answers.leaseEndingTerms} months={answers.termMonths} readOnly={readOnly} onChange={leaseEndingTerms => setAnswers(prev => {
+          const next = { ...prev, leaseEndingTerms };
+          return { ...next, pvPctFairValue: next.fairValue > 0 ? calculatePVFromAnswers(next) / next.fairValue * 100 : 0 };
+        })} />}
         <DialogFooter className="flex-col sm:flex-row gap-2">
           <div className="flex gap-2 w-full sm:w-auto">
             {step > 0 && (
@@ -1679,7 +1726,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                 className="gap-2"
               >
                 <CheckCircle2 className="h-4 w-4" />
-                Confirm & Continue
+                {answers.leaseEndingTerms?.status === "draft" ? "Save Draft & Continue" : "Confirm & Continue"}
               </Button>
             )}
           </div>
@@ -1759,7 +1806,8 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                       className="w-full gap-2"
                       onClick={() => {
                         setAnswers((prev) => {
-                          const next = { ...prev, interestRate: rate };
+                          const next = { ...prev, interestRate: rate,
+                            ...(prev.leaseEndingTerms ? { leaseEndingTerms: { ...prev.leaseEndingTerms, implicitRate: rate, status: "draft" as const } } : {}) };
                           const pv = calculatePV(next);
                           if (pv > 0 && next.fairValue > 0) {
                             next.pvPctFairValue = Math.round((pv / next.fairValue) * 1000) / 10;

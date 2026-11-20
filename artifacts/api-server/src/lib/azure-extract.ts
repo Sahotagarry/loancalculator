@@ -1,4 +1,8 @@
+import { verifyInterestClause } from "./import-interest-method";
+import { INTEREST_METHODS } from "@workspace/amortization";
 import { z } from "zod";
+import { inferLeaseCommencement, normalizeLeaseEnding } from "@workspace/amortization";
+import { leaseEndingSchema, unresolvedLeaseEnding } from "./lease-ending";
 import { UserFacingError, type AzureSettings } from "./azure-settings";
 
 const LEGACY_API_VERSION = "2024-10-21";
@@ -9,6 +13,8 @@ const LEGACY_API_VERSION = "2024-10-21";
 // ---------------------------------------------------------------------------
 
 const loanFieldsSchema = z.object({
+  interestMethod: z.enum(INTEREST_METHODS).nullable().catch(null),
+  interestMethodQuote: z.string().max(700).nullable().catch(null),
   name: z.string().nullable().catch(null),
   lender: z.string().nullable().catch(null),
   principal: z.number().nullable().catch(null),
@@ -62,6 +68,8 @@ const leaseFieldsSchema = z.object({
   fairValue: z.number().nullable().catch(null),
   economicLifeYears: z.number().nullable().catch(null),
   buyoutAmount: z.number().nullable().catch(null),
+  leaseEndingTerms: leaseEndingSchema.nullable().catch(null),
+  expiryDate: z.string().nullable().catch(null),
   transferOfOwnership: z.boolean().nullable().catch(null),
   bargainPurchaseOption: z.boolean().nullable().catch(null),
   specializedAsset: z.boolean().nullable().catch(null),
@@ -170,13 +178,14 @@ Extraction rules — CRITICAL:
 - Do not compute values that are not stated, EXCEPT simple unit conversions (e.g. an amortization stated as "84 months" becomes amortizationYears 7), combining a stated prime rate with a stated spread (see interest rate rules), and per-square-foot math for real property leases (see office lease rules).
 - Read the ENTIRE document before answering. Key terms are often buried mid-document under headings like "Repayment", "Payments", "Interest", "Security", "Guarantees", or in a schedule/appendix — do not stop after the first page.
 - Dates must be in YYYY-MM-DD format. If only month/year is given, use the first of the month. If not stated, null.
-- startDate is the date the loan/lease commences or funds are advanced (often the agreement date). A separate "first payment date" is normal — it is usually one payment period AFTER the start date; do not use it as startDate. If both appear, mention the first payment date in reasoning.
+- startDate is the evidenced commencement/delivery or advance date. Never substitute a signature date for delivery. For a lease with only expiry and term, leave startDate null and extract expiryDate separately; code may suggest an unconfirmed date.
 - Interest rate rules:
   - interestRate is the annual percentage as a number (e.g. 6.25 for 6.25%).
   - If the rate is variable (e.g. "prime + 1.75%" or "prime plus 1.75%"), set primeSpread to the spread (1.75). If the document also states the prime rate in effect (e.g. "prime, currently 6.45%"), set statedPrimeRate to that number AND set interestRate to their sum (8.20). If the prime rate is not stated, leave interestRate and statedPrimeRate null — the app will look up prime automatically.
   - For a plain fixed rate, leave primeSpread and statedPrimeRate null.
 - paymentAmount is the periodic payment. Watch for synonyms: "blended payment", "blended payments of principal and interest", "instalment", "monthly payment of $X". A stated blended/instalment amount IS the paymentAmount.
 - suggestedEvents may contain clearly documented, dated lump-sum principal payments made after inception. Never include a down payment or maturity balloon. Set treatment or classification to null when the document is not explicit, and always set requiresConfirmation true; suggestions are never persisted automatically.
+- For a loan or each facility, read the ordinary contractual interest clause and return interestMethod plus a short VERBATIM contiguous interestMethodQuote. Use actual_365 for actual days with a fixed 365-day divisor; actual_year for 365/366 according to each calendar year; periodic for the nominal annual rate divided by the number of payment periods; semi_annual for a nominal rate compounded semi-annually not in advance. Do not infer the method from a bank, asset type, monthly payment, "daily" alone, overdue interest, or an APR disclosure. If absent, conflicting, unsupported or unclear return null; quote any relevant ambiguous wording. Never use a loan convention for leases.
 - firstPaymentDate is the explicitly stated date of the first scheduled payment. Keep it separate from startDate.
 - paymentTiming is "beginning" when payments are explicitly due at the beginning of each period, or "end" when due at the end of each period. Use null when unstated.
 - For semi-monthly payments, extract the two explicit calendar due days into semiMonthlyFirstDueDay and semiMonthlySecondDueDay (for example, the 1st and 15th). Do not infer days when unstated.
@@ -207,21 +216,31 @@ Extraction rules — CRITICAL:
   - EXCLUDE revolving operating lines / demand operating facilities from "facilities" (they are not term debt); mention them in "reasoning" instead.
   - Set "loan" and "lease" to null for a master agreement.
 - transferOfOwnership: true only if the lease clearly transfers title to the lessee at end of term.
-- bargainPurchaseOption: true only if there is a purchase option clearly below expected fair value (e.g. nominal buyout like $1 or ~10% or less of value). A fair-market-value buyout is false.
+- bargainPurchaseOption: true only with support that exercise price is sufficiently below expected value at exercise to make exercise reasonably assured. No fixed percentage of original cost establishes this.
 - specializedAsset: true only if the asset is clearly custom/specialized such that only the lessee can use it.
 - paymentAtBeginning: true if payments are due at the beginning of each period, false if at end, null if not stated.
 - In "reasoning", briefly explain the classification and note anything important the user should verify (2-4 sentences, plain language for an accountant).
 - For a lease, also fill "fieldNotes": an object mapping each NON-NULL extracted lease field name to a short note (max ~15 words) citing where/how you found it — quote the section or clause wording (e.g. "termMonths": "Section 2.1: term of five (5) years", "monthlyPayment": "$28.00/sf × 3,200 sf ÷ 12 (Section 4.1)"). Only include fields you actually extracted. Booleans you inferred as false because nothing was stated should NOT get a note.
 - For a lease, also fill "estimates": ONLY for economicLifeYears, fairValue, and interestRate that are NOT stated in the document, you may provide a reasonable professional ESTIMATE to help the accountant (e.g. typical economic life for the asset class, an approximate market financing rate). These are clearly labelled estimates, NOT extractions — never put them in the main lease fields. Set "reasoning" inside estimates to 1-2 sentences explaining the basis of each estimate. If you cannot estimate responsibly, use null.
 
-Respond with JSON only, matching exactly this shape:
+Lease ending terms — read all pages, schedules and operative return/sale provisions:
+- Also include leaseEndingTerms: {version:1, kind, amount, basis, source, baseAmount?, percentage?, reserves?, settlementMonth, issues:[], status:"draft", taxTreatment?}.
+- kind is mandatory_payment, guaranteed_residual (including return/sale shortfall borne by lessee), optional_purchase, bargain_purchase, lessor_residual, none or unresolved. Do not equate a reserve/residual with a buyout. Absence of a purchase option does NOT mean absence of a residual guarantee.
+- basis is stated, percentage, reserve, sum or unsupported. For percentage supply stated baseAmount and percentage; for reserve supply stated baseAmount and reserves:[{fromMonth,toMonth,monthlyAmount}]; for a supported additive formula supply sumAmounts (documented non-negative amounts in one currency, no alternatives or duplicates). Do not calculate the ending amount for formulas; leave amount null. Code computes it. A table alone may establish value but not a guarantee; use unresolved unless operative clauses support treatment.
+- source cites and briefly quotes BOTH the amount/table and operative obligation clause. Do not hardcode lenders or clause numbers. Missing appendices, conflicting clauses, incomplete documents, ambiguous units/formulas, or alternative settlements that risk double counting must be issues, not zero.
+- settlementMonth is months from commencement, separate from final rental timing. Do not silently assume it when unclear. none requires documentary support and amount:0. Unknown is unresolved, not none.
+- Tax treatment must distinguish recoverable, nonrecoverable, excluded and unresolved; do not infer recoverability or tax-inclusive asset value from province. Exclude documented services from financing and identify refundable deposits separately from down payments.
+- Only a financing rate belongs in lease interestRate. Default, overdue and penalty rates are not financing rates. A reserve table is not a confirmed implicit rate.
+- Estimates and inferred facts must not populate stated values. Never mark extracted terms reviewed.
+
+Respond with JSON only, matching this shape plus the lease ending fields above:
 {
   "classification": "loan" | "lease" | "master_agreement" | "other",
   "confidence": number between 0 and 1,
   "reasoning": string,
   "masterAgreement": { lender, description, facilityLimit, securityDescription, covenantDescription } or null if not a master agreement,
   "facilities": [ same shape as "loan", one per facility ] or null if not a master agreement,
-  "loan": { name, lender, principal, downPayment, interestRate, primeSpread, statedPrimeRate, amortizationYears, termYears, startDate, paymentFrequency ("monthly"|"semi-monthly"|"bi-weekly"|"weekly"), paymentTiming ("beginning"|"end"|null), graceTermMode ("included"|"added"|null), firstPaymentDate, semiMonthlyFirstDueDay, semiMonthlySecondDueDay, paymentAmount, interestOnlyMonths, graceMonths, graceInterestTreatment ("capitalized"|"none"|null), balloonPayment, securityDescription, suggestedEvents ([{kind:"principal_prepayment",effectiveDate,ordering,amount,treatment,classification,source,reason,requiresConfirmation:true}] or null) } or null if not a loan,
+  "loan": { name, lender, principal, downPayment, interestRate, primeSpread, statedPrimeRate, amortizationYears, termYears, startDate, interestMethod, interestMethodQuote, paymentFrequency ("monthly"|"semi-monthly"|"bi-weekly"|"weekly"), paymentTiming ("beginning"|"end"|null), graceTermMode ("included"|"added"|null), firstPaymentDate, semiMonthlyFirstDueDay, semiMonthlySecondDueDay, paymentAmount, interestOnlyMonths, graceMonths, graceInterestTreatment ("capitalized"|"none"|null), balloonPayment, securityDescription, suggestedEvents ([{kind:"principal_prepayment",effectiveDate,ordering,amount,treatment,classification,source,reason,requiresConfirmation:true}] or null) } or null if not a loan,
   "lease": { name, lessor, assetDescription, assetType ("vehicle"|"equipment"|"office_commercial"|"other"), startDate, termMonths, monthlyPayment, downPayment, interestRate, fairValue, economicLifeYears, buyoutAmount, transferOfOwnership, bargainPurchaseOption, specializedAsset, paymentAtBeginning, rentableSquareFeet, rentSteps ([{fromYear, toYear, monthlyRent, annualRatePerSquareFoot}] or null), tenantImprovementAllowance, freeRentMonths, camAnnualPerSquareFoot, camMonthly, percentageRentNote, fieldNotes ({fieldName: note} or null), estimates ({economicLifeYears, fairValue, interestRate, reasoning} or null) } or null if not a lease.
   "name" should be a short human label like "Truck Loan — TD Bank" based on the document.
 }`;
@@ -282,7 +301,11 @@ async function callChatCompletions(
 /** Ask Azure OpenAI to classify + extract fields from document text. */
 export async function extractLoanOrLease(settings: AzureSettings, documentText: string): Promise<ExtractionResult> {
   // Keep the request within a safe token budget.
-  const text = documentText.length > 60_000 ? documentText.slice(0, 60_000) : documentText;
+  // Never quietly discard operative clauses at the end of a complete agreement.
+  if (documentText.length > 240_000) {
+    throw new UserFacingError("This agreement is too long to analyze completely. Split it into complete related sections and review all ending clauses; no partial interpretation was saved.", 422);
+  }
+  const text = documentText;
 
   const res = await callChatCompletions(settings, [
     { role: "system", content: SYSTEM_PROMPT },
@@ -326,6 +349,18 @@ export async function extractLoanOrLease(settings: AzureSettings, documentText: 
   const validated = extractionSchema.safeParse(parsed);
   if (!validated.success) {
     throw new UserFacingError("The AI response was missing required information. Try again.", 502);
+  }
+  for (const loan of [validated.data.loan, ...(validated.data.facilities ?? [])]) {
+    if (loan) Object.assign(loan, verifyInterestClause(loan.interestMethod, loan.interestMethodQuote, documentText));
+  }
+  if (validated.data.lease) {
+    const lease = validated.data.lease;
+    const ending = lease.leaseEndingTerms ?? unresolvedLeaseEnding("Ending terms were not reliably extracted. Review all schedules and return clauses.", lease.termMonths);
+    ending.status = "draft";
+    if (!lease.startDate && lease.expiryDate && lease.termMonths) {
+      ending.commencement = inferLeaseCommencement(lease.expiryDate, lease.termMonths) ?? undefined;
+    }
+    lease.leaseEndingTerms = normalizeLeaseEnding(ending, lease.termMonths ?? 0);
   }
   return validated.data;
 }

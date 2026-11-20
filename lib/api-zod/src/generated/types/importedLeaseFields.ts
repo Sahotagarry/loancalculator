@@ -7,6 +7,7 @@
  */
 import type { ImportedLeaseFieldsAssetType } from './importedLeaseFieldsAssetType';
 import type { ImportedLeaseFieldsFieldNotes } from './importedLeaseFieldsFieldNotes';
+import type { LeaseEndingTerms } from './leaseEndingTerms';
 import type { LeaseEstimates } from './leaseEstimates';
 import type { RentStep } from './rentStep';
 
@@ -23,6 +24,7 @@ export interface ImportedLeaseFields {
   fairValue?: number | null;
   economicLifeYears?: number | null;
   buyoutAmount?: number | null;
+  leaseEndingTerms?: LeaseEndingTerms | null;
   transferOfOwnership?: boolean | null;
   bargainPurchaseOption?: boolean | null;
   specializedAsset?: boolean | null;

@@ -230,6 +230,9 @@ export async function validateEventSetContext(
     .where(eq(loansTable.id, loanId))
     .limit(1);
   if (!loan) throw new EventTimelineError("Loan not found", 404);
+  if (loan.isCapitalLease && loan.leaseEndingTerms?.status === "reviewed" && input.events.length) {
+    throw new EventTimelineError("Dated events cannot be added to the explicit reviewed lease schedule. Return the ending assessment to draft first; no existing evidence will be deleted.", 409);
+  }
   if (loan.activeEventSetId) {
     await tx.execute(
       sql`select id from loan_event_sets where id = ${loan.activeEventSetId} for update`,

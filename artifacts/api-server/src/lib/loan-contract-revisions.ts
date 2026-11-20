@@ -30,6 +30,7 @@ export const SCHEDULE_DRIVING_FIELDS = new Set<keyof Loan>([
   "startDate",
   "fiscalYearEnd",
   "paymentFrequency",
+  "interestMethod",
   "paymentTiming",
   "graceTermMode",
   "firstPaymentDate",
@@ -49,6 +50,7 @@ export const SCHEDULE_DRIVING_FIELDS = new Set<keyof Loan>([
   "monthlyPayment",
   "paymentOverride",
   "firstPaymentAmount",
+  "leaseEndingTerms",
   "assetCost",
   "assetUsefulLife",
   "collateralDepreciableCost",
@@ -76,6 +78,9 @@ export function buildContractSnapshot(loan: Loan): Record<string, unknown> {
   return Object.fromEntries(
     [...SCHEDULE_DRIVING_FIELDS]
       .sort()
+      // Preserve historical fingerprints when the new opt-in contract is absent.
+      .filter((field) => field !== "leaseEndingTerms" || loan.leaseEndingTerms != null)
+      .filter((field) => field !== "interestMethod" || (loan.interestMethod != null && loan.interestMethod !== "periodic"))
       .map((field) => [field, loan[field] ?? null]),
   );
 }

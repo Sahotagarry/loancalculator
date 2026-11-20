@@ -122,6 +122,7 @@ export const loansTable = pgTable("loans", {
   fiscalYearEnd: date("fiscal_year_end", { mode: "string" }).notNull(),
   paymentFrequency: text("payment_frequency").notNull().default("monthly"),
   // Existing schedules pay at period end and include grace in the stated term.
+  interestMethod: text("interest_method").$type<"actual_365" | "actual_year" | "periodic" | "semi_annual">(),
   paymentTiming: text("payment_timing").notNull().default("end"), // 'beginning' | 'end'
   graceTermMode: text("grace_term_mode").notNull().default("included"), // 'included' | 'added'
   firstPaymentDate: date("first_payment_date", { mode: "string" }),
@@ -148,6 +149,7 @@ export const loansTable = pgTable("loans", {
   paymentOverride: numeric("payment_override", { precision: 15, scale: 2 }),
   firstPaymentAmount: numeric("first_payment_amount", { precision: 15, scale: 2 }),
   termMonths: integer("term_months"),
+  leaseEndingTerms: jsonb("lease_ending_terms").$type<Record<string, unknown>>(),
   // Asset tracking
   assetDescription: text("asset_description"),
   assetCost: numeric("asset_cost", { precision: 15, scale: 2 }),

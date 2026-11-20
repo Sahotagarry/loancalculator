@@ -1,4 +1,8 @@
 import { addMonths, getMonth, addDays } from "date-fns";
+import { accrualYears, isDaily, regularRate, type InterestMethod } from "./interest-method";
+export * from "./interest-method";
+export * from "./lease-ending";
+export * from "./lease-schedule";
 
 export interface AmortizationRow {
   month: number;
@@ -98,6 +102,7 @@ export interface AmortizationEvidenceMetadata {
  * start date used as the first period date, and approximate semi-monthly dates.
  */
 export interface AmortizationOptions {
+  interestMethod?: InterestMethod | null;
   paymentTiming?: PaymentTiming;
   graceTermMode?: GraceTermMode;
   firstPaymentDate?: Date;
@@ -166,7 +171,9 @@ function calculateAmortizationLegacy(
 
   const totalAmortizationPeriods = Math.round(amortizationYears * periodsPerYear);
   const baseTermPeriods = Math.round(termYears * periodsPerYear);
-  const periodicRate = annualInterestRate / 100 / periodsPerYear;
+  const method = options.interestMethod;
+  const daily = isDaily(method);
+  const periodicRate = regularRate(annualInterestRate, periodsPerYear, method);
   const paymentTiming = options.paymentTiming ?? "end";
   const graceTermMode = options.graceTermMode ?? "included";
 
@@ -178,7 +185,10 @@ function calculateAmortizationLegacy(
   const ioRatio = periodsPerYear / 12;
   const adjInterestOnlyPeriods = Math.round(interestOnlyMonths * ioRatio);
 
-  const paymentDateAnchor = options.firstPaymentDate ?? startDate;
+  const boundary = addMonths(startDate, Math.max(0, graceMonths));
+  const fallbackDue = !daily ? startDate : paymentTiming === "beginning" ? boundary :
+    frequency === "monthly" ? addMonths(boundary, 1) : addDays(boundary, frequency === "weekly" ? 7 : frequency === "bi-weekly" ? 14 : 15);
+  let paymentDateAnchor = options.firstPaymentDate ?? fallbackDue;
   const explicitSemiMonthlyDays = options.semiMonthlyDueDays;
   if (
     explicitSemiMonthlyDays &&
@@ -219,6 +229,9 @@ function calculateAmortizationLegacy(
   // Period dates use the first contractual payment as their anchor. Explicit
   // semi-monthly due days opt into calendar due dates; absence retains the
   // historical 365.25/24 approximation for existing loans.
+  if (daily && !options.firstPaymentDate && explicitSemiMonthlyDays && frequency === "semi-monthly") {
+    paymentDateAnchor = nextSemiMonthlyDate(boundary, paymentTiming === "beginning");
+  }
   const dateForPeriod = (i: number): Date => {
     if (frequency === "monthly") return addMonths(paymentDateAnchor, i - 1);
     if (frequency === "semi-monthly") {
@@ -330,6 +343,27 @@ function calculateAmortizationLegacy(
     standardPeriodicPayment = paymentOverride;
   }
 
+  // Daily rows settle interest earned since the previous cash flow. A payment
+  // on the funding date therefore has zero interest, even for payments in advance.
+  const dailyDate = (i: number): Date => i <= adjGracePeriods
+    ? new Date(Math.min(graceDateForPeriod(i + 1).getTime(), boundary.getTime()))
+    : dateForPeriod(i - adjGracePeriods);
+  const dailyRate = (i: number) => annualInterestRate / 100 * accrualYears(i === 1 ? startDate : dailyDate(i - 1), dailyDate(i), method!);
+  if (daily && !(paymentOverride != null && paymentOverride > 0)) {
+    // Solve closing balance = target balloon using the actual dated factors.
+    // Non-amortizing rows either capitalize interest or settle it in full.
+    let projected = principal, units = 0;
+    for (let i = 1; i <= adjGracePeriods + totalAmortizationPeriods; i++) {
+      const r = dailyRate(i);
+      const first = i === adjGracePeriods + 1 && Number(options.firstPaymentAmount) > 0;
+      if (i <= adjGracePeriods && graceInterestTreatment === "none") continue;
+      if (i > adjGracePeriods && !first && (i <= adjGracePeriods + adjInterestOnlyPeriods || interestOnlySpecificMonths.includes(getMonth(dailyDate(i))))) continue;
+      projected *= 1 + r; units *= 1 + r;
+      if (first) projected -= options.firstPaymentAmount!;
+      else if (i > adjGracePeriods) units++;
+    }
+    if (units > 0) standardPeriodicPayment = Math.max(0, (projected - balloonPayment) / units);
+  }
   const firstPaymentAmount = options.firstPaymentAmount;
   const useFirstPaymentAmount =
     firstPaymentAmount != null &&
@@ -338,7 +372,7 @@ function calculateAmortizationLegacy(
     adjGracePeriods < totalTermPeriods;
 
   for (let i = 1; i <= totalTermPeriods; i++) {
-    const currentDate =
+    const currentDate = daily ? dailyDate(i) :
       i <= syntheticGracePeriods
         ? graceDateForPeriod(i)
         : dateForPeriod(i - syntheticGracePeriods);
@@ -349,7 +383,8 @@ function calculateAmortizationLegacy(
     const isSpecificIO = !isGrace && interestOnlySpecificMonths.includes(monthOfYear);
     const isInterestOnly = isInitialIO || isSpecificIO;
 
-    let interestForPeriod = balance * periodicRate;
+    const rowRate = daily ? dailyRate(i) : periodicRate;
+    let interestForPeriod = balance * rowRate;
     let principalForPeriod = 0;
     let payment = 0;
 
@@ -372,27 +407,30 @@ function calculateAmortizationLegacy(
       // would otherwise be interest-only; principal is the remainder after
       // interest and any residual surfaces in the final adjustment.
       payment = firstPaymentAmount!;
-      if (paymentTiming === "beginning") {
-        interestForPeriod = (balance - payment) * periodicRate;
+      if (!daily && paymentTiming === "beginning") {
+        interestForPeriod = (balance - payment) * rowRate;
       }
       principalForPeriod = payment - interestForPeriod;
     } else if (isInterestOnly) {
       payment =
-        paymentTiming === "beginning"
-          ? (balance * periodicRate) / (1 + periodicRate)
+        !daily && paymentTiming === "beginning"
+          ? (balance * rowRate) / (1 + rowRate)
           : interestForPeriod;
-      if (paymentTiming === "beginning") {
-        interestForPeriod = (balance - payment) * periodicRate;
+      if (!daily && paymentTiming === "beginning") {
+        interestForPeriod = (balance - payment) * rowRate;
       }
       principalForPeriod = 0;
     } else {
       payment = standardPeriodicPayment;
-      if (paymentTiming === "beginning") {
-        interestForPeriod = (balance - payment) * periodicRate;
+      if (!daily && paymentTiming === "beginning") {
+        interestForPeriod = (balance - payment) * rowRate;
       }
       principalForPeriod = payment - interestForPeriod;
     }
 
+    if (daily && !isGrace && principalForPeriod > balance) {
+      principalForPeriod = balance; payment = balance + interestForPeriod;
+    }
     totalInterest += interestForPeriod;
     balance -= principalForPeriod;
 
@@ -548,7 +586,8 @@ export function calculateAmortization(
   else if (frequency === "weekly") periodsPerYear = 52;
   let currentAnnualRate = annualInterestRate;
   let currentRateResetEventId: string | undefined;
-  const periodicRate = (): number => currentAnnualRate / 100 / periodsPerYear;
+  const daily = isDaily(options.interestMethod);
+  const periodicRate = (): number => regularRate(currentAnnualRate, periodsPerYear, options.interestMethod);
   const paymentTiming = options.paymentTiming ?? "end";
   const targetResidual = legacy.schedule[legacy.schedule.length - 1].balance;
   let standardPayment = legacy.monthlyPayment;
@@ -587,7 +626,23 @@ export function calculateAmortization(
         ? balance
         : balance + accruedInterest;
     const rate = periodicRate();
-    if (rate === 0) {
+    if (daily) {
+      let projected = balance, units = 0;
+      const start = rowIndex + (includeCurrent ? 0 : 1);
+      for (let j = start; j < legacy.schedule.length; j++) {
+        const row = legacy.schedule[j];
+        const firstFixed = j === firstPaymentRowIndex;
+        if ((row.isInterestOnly && !firstFixed) || (row.isGrace && graceInterestTreatment === "none")) continue;
+        if (j === rowIndex && includeCurrent) projected += accruedInterest;
+        else {
+          const r = currentAnnualRate / 100 * accrualYears(j ? legacy.schedule[j-1].date : startDate, row.date, options.interestMethod!);
+          projected *= 1 + r; units *= 1 + r;
+        }
+        if (firstFixed) projected -= firstPaymentAmount!;
+        else if (!row.isGrace) units++;
+      }
+      if (units > 0) standardPayment = (projected - targetResidual) / units;
+    } else if (rate === 0) {
       standardPayment = (amountToAmortize - targetResidual) / count;
     } else if (paymentTiming === "end" && currentIsAmortizing) {
       // Interest already accrued in the current (possibly segmented) interval.
@@ -671,7 +726,7 @@ export function calculateAmortization(
     if (isGrace && graceInterestTreatment === "none") return;
     const periodLength = Math.max(DAY_MS, periodEnd - periodStart);
     const fraction = (to - from) / periodLength;
-    const interest = balance * periodicRate() * fraction;
+    const interest = daily ? balance * currentAnnualRate / 100 * accrualYears(new Date(from), new Date(to), options.interestMethod!) : balance * periodicRate() * fraction;
     accruedInterest += interest;
     periodRateSegments.push({
       from: new Date(from),
@@ -698,7 +753,7 @@ export function calculateAmortization(
     // Beginning-timing payments do not have a prior due date, so use
     // commencement solely as that leading event interval's lower boundary.
     const intervalStart =
-      i === 0 && paymentTiming === "beginning" ? startDate.getTime() : previousDue;
+      i === 0 && (daily || paymentTiming === "beginning") ? startDate.getTime() : previousDue;
     let cursor = intervalStart;
 
     // Events strictly inside the contractual interval accrue interest up to
@@ -712,8 +767,8 @@ export function calculateAmortization(
         applyDatedEvent(
           item,
           i,
-          paymentTiming === "end",
-          paymentTiming === "end",
+          daily || paymentTiming === "end",
+          daily || paymentTiming === "end",
         );
       }
       eventIndex++;

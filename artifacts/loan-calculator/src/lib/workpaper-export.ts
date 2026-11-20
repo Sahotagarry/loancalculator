@@ -5,6 +5,7 @@ import autoTable from "jspdf-autotable";
 import { format, parseISO, subYears, isAfter } from "date-fns";
 import { formatCurrency } from "@/lib/format";
 import { type AmortizationRow } from "@workspace/amortization";
+import { interestMethods, isDaily, leaseScheduleSupportIssue } from "@workspace/amortization";
 import {
   buildFairValueAccountingEntries,
   buildLoanSummary,
@@ -119,6 +120,9 @@ export function buildLoanWorkpaper(
   meta: WorkpaperMeta,
   master?: WorkpaperMasterInput | null,
 ): Workpaper | null {
+  if (loan.leaseEndingTerms && (loan.leaseEndingTerms.status !== "reviewed" || leaseScheduleSupportIssue(loan))) {
+    throw new Error(`${loan.name}: resolve and review lease ending terms before exporting accounting figures.`);
+  }
   if (!loan.startDate || !meta.fiscalYearEnd) return null;
   const reportYearEnd = parseISO(meta.fiscalYearEnd);
   const summary = buildLoanSummary(loan, reportYearEnd, meta.fiscalYearEnd);
@@ -137,6 +141,22 @@ export function buildLoanWorkpaper(
         master ?? null,
       );
   appendTransitionEvidence(workpaper, loan);
+  if (loan.leaseEndingTerms) {
+    const ending = loan.leaseEndingTerms;
+    workpaper.sections.push({
+      title: "Lease Ending Evidence",
+      head: ["Item", "Evidence / amount"],
+      rows: [
+        ["Treatment", String(ending.kind)],
+        ["Ending amount", typeof ending.amount === "number" ? ending.amount : "Unresolved"],
+        ["Settlement month", typeof ending.settlementMonth === "number" ? ending.settlementMonth : "Unresolved"],
+        ["Source", String(ending.source ?? "")],
+        ["Calculation", String(ending.explanation ?? "Stated amount")],
+        ["Review status", String(ending.status)],
+      ],
+      notes: ["A sale-shortfall guarantee is not an automatically exercised purchase. Lessor-retained values are excluded from the lessee liability."],
+    });
+  }
   return workpaper;
 }
 
@@ -266,10 +286,11 @@ function buildDebtWorkpaper(
         : `${loan.termYears} yr term / ${loan.amortizationYears} yr amortization`,
     ],
     ["Payment", `${money(summary.regularPayment)} ${summary.paymentFrequency}`],
+    ...(!isCapital ? [["Interest calculation", interestMethods[loan.interestMethod ?? "periodic"].label]] : []),
     ["Payment timing", loan.paymentTiming === "beginning" ? "Beginning of each payment period" : "End of each payment period"],
     [
       "First payment date",
-      loan.firstPaymentDate ? format(parseISO(loan.firstPaymentDate), "MMMM d, yyyy") : "Not specified — legacy inception-date schedule anchor retained",
+      loan.firstPaymentDate ? format(parseISO(loan.firstPaymentDate), "MMMM d, yyyy") : isDaily(loan.interestMethod) ? "Derived from inception, grace and payment timing" : "Not specified — legacy inception-date schedule anchor retained",
     ],
   ];
   if (downPayment > 0) {

@@ -1,4 +1,6 @@
+import { DEFAULT_LOAN_INTEREST_METHOD } from "@workspace/amortization";
 import { useAuth } from "@/hooks/use-auth";
+import { leaseScheduleSupportIssue, lesseeEndingAmount, type LeaseEndingTerms } from "@workspace/amortization";
 import { Fragment, useState } from "react";
 import { useQueries } from "@tanstack/react-query";
 import { useRoute, useLocation } from "wouter";
@@ -134,6 +136,7 @@ function makeBlankLoanForm(): LoanFormState {
     termYears: 0,
     startDate: "",
     paymentFrequency: "monthly",
+    interestMethod: DEFAULT_LOAN_INTEREST_METHOD,
     paymentTiming: "end",
     graceTermMode: "included",
     firstPaymentDate: "",
@@ -328,6 +331,7 @@ export default function FileDetail() {
       termYears: loan.termYears,
       startDate: loan.startDate.split("T")[0],
       paymentFrequency: loan.paymentFrequency as any,
+      interestMethod: loan.interestMethod ?? "periodic",
       paymentTiming: loan.paymentTiming ?? "end",
       graceTermMode: loan.graceTermMode ?? "included",
       firstPaymentDate: loan.firstPaymentDate ? loan.firstPaymentDate.split("T")[0] : "",
@@ -351,6 +355,7 @@ export default function FileDetail() {
       monthlyPayment: loan.monthlyPayment != null ? Number(loan.monthlyPayment) : undefined,
       paymentOverride: loan.paymentOverride != null ? Number(loan.paymentOverride) : undefined,
       firstPaymentAmount: loan.firstPaymentAmount != null ? Number(loan.firstPaymentAmount) : undefined,
+      leaseEndingTerms: loan.leaseEndingTerms as LeaseEndingTerms | null,
       termMonths: loan.termMonths ?? undefined,
       isOfficeProperty: loan.isOfficeProperty ?? false,
       freeRentMonths: loan.freeRentMonths ?? 0,
@@ -412,6 +417,8 @@ export default function FileDetail() {
       termYears: f?.termYears ?? f?.amortizationYears ?? 0,
       startDate: f?.startDate ?? "",
       paymentFrequency: freq,
+      interestMethod: f?.interestMethod ?? DEFAULT_LOAN_INTEREST_METHOD,
+      importedInterestNote: f?.interestMethod && f.interestMethodQuote ? `Document: “${f.interestMethodQuote}”` : `Default used. ${f?.interestMethodQuote ? `Check the clause: “${f.interestMethodQuote}”` : "No clear interest calculation was found in the document."}`,
       paymentTiming: f?.paymentTiming ?? "end",
       graceTermMode: f?.graceTermMode ?? "included",
       firstPaymentDate: f?.firstPaymentDate ?? deriveFirstPaymentDate(f?.startDate ?? "", f?.paymentTiming ?? "end", f?.graceMonths ?? 0, freq, f?.semiMonthlyFirstDueDay ?? undefined, f?.semiMonthlySecondDueDay ?? undefined),
@@ -458,6 +465,7 @@ export default function FileDetail() {
       taxType: "none",
       taxRate: 0,
       buyoutForImplicitRate: f?.buyoutAmount ?? 0,
+      leaseEndingTerms: f?.leaseEndingTerms as unknown as LeaseEndingTerms | null,
     };
     const pv = calculatePVFromAnswers(answers);
     if (pv > 0 && answers.fairValue > 0) {
@@ -773,6 +781,7 @@ export default function FileDetail() {
                   startDate: f.startDate ?? file?.fiscalYearEnd ?? "",
                   fiscalYearEnd: file?.fiscalYearEnd ?? "",
                   paymentFrequency: freq,
+                  interestMethod: f.interestMethod ?? DEFAULT_LOAN_INTEREST_METHOD,
                   paymentTiming: f.paymentTiming ?? "end",
                   graceTermMode: f.graceTermMode ?? "included",
                   firstPaymentDate: f.firstPaymentDate ?? (deriveFirstPaymentDate(f.startDate ?? file?.fiscalYearEnd ?? "", f.paymentTiming ?? "end", f.graceMonths ?? 0, freq, f.semiMonthlyFirstDueDay ?? undefined, f.semiMonthlySecondDueDay ?? undefined) || null),
@@ -977,6 +986,7 @@ export default function FileDetail() {
 
   return (
     <div className="min-h-screen bg-background">
+      {loans?.some(loan => loan.leaseEndingTerms && (loan.leaseEndingTerms.status !== "reviewed" || leaseScheduleSupportIssue(loan))) && <div role="alert" className="border border-amber-400 bg-amber-50 text-amber-950 p-4">This Year-End File contains draft or unsupported lease ending terms. These leases are excluded from totals; totals are incomplete until review. Resolve the ending evidence and calendar before exporting.</div>}
       <PageHeader
         backHref={`/client/${clientId}`}
         breadcrumb={
@@ -1010,7 +1020,7 @@ export default function FileDetail() {
               <Tooltip>
                 <TooltipTrigger asChild>
                   <DropdownMenuTrigger asChild>
-                    <Button variant="outline" size="sm" className="gap-2" disabled={!loans || loans.length === 0 || !reportingTransitionsReady}>
+                    <Button variant="outline" size="sm" className="gap-2" disabled={!loans || loans.length === 0 || !reportingTransitionsReady || loans.some(loan => loan.leaseEndingTerms && (loan.leaseEndingTerms.status !== "reviewed" || leaseScheduleSupportIssue(loan)))}>
                       <TableIcon className="h-4 w-4" />
                       Consolidated Lead Sheet
                       <ChevronDown className="h-3.5 w-3.5" />
@@ -1054,7 +1064,7 @@ export default function FileDetail() {
               <Tooltip>
                 <TooltipTrigger asChild>
                   <DropdownMenuTrigger asChild>
-                    <Button variant="outline" size="sm" className="gap-2" disabled={!loans || loans.length === 0 || !reportingTransitionsReady}>
+                    <Button variant="outline" size="sm" className="gap-2" disabled={!loans || loans.length === 0 || !reportingTransitionsReady || loans.some(loan => loan.leaseEndingTerms && (loan.leaseEndingTerms.status !== "reviewed" || leaseScheduleSupportIssue(loan)))}>
                       <FileSpreadsheet className="h-4 w-4" />
                       Supporting Workpapers
                       <ChevronDown className="h-3.5 w-3.5" />
@@ -2897,6 +2907,7 @@ export default function FileDetail() {
                         termYears: form.termYears,
                         startDate: form.startDate,
                         paymentFrequency: form.paymentFrequency,
+                        interestMethod: formMode === "loan" && !form.isCapitalLease ? form.interestMethod : undefined,
                         paymentTiming: form.paymentTiming,
                         graceTermMode: form.graceTermMode,
                         firstPaymentDate: form.firstPaymentDate || null,
@@ -2919,6 +2930,7 @@ export default function FileDetail() {
                         monthlyPayment: form.monthlyPayment,
                         paymentOverride: form.paymentOverride ?? null,
                         firstPaymentAmount: form.firstPaymentAmount ?? null,
+                        leaseEndingTerms: form.leaseEndingTerms ? { ...form.leaseEndingTerms } : undefined,
                         termMonths: form.termMonths,
                         isOfficeProperty: form.isOfficeProperty,
                         freeRentMonths: form.freeRentMonths,
@@ -2969,6 +2981,7 @@ export default function FileDetail() {
                         startDate: form.startDate,
                         fiscalYearEnd: file?.fiscalYearEnd ?? form.startDate,
                         paymentFrequency: form.paymentFrequency,
+                        interestMethod: formMode === "loan" && !form.isCapitalLease ? form.interestMethod : undefined,
                         paymentTiming: form.paymentTiming,
                         graceTermMode: form.graceTermMode,
                         firstPaymentDate: form.firstPaymentDate || null,
@@ -2991,6 +3004,7 @@ export default function FileDetail() {
                         monthlyPayment: form.monthlyPayment,
                         paymentOverride: form.paymentOverride ?? null,
                         firstPaymentAmount: form.firstPaymentAmount ?? null,
+                        leaseEndingTerms: form.leaseEndingTerms ? { ...form.leaseEndingTerms } : undefined,
                         termMonths: form.termMonths,
                         isOfficeProperty: form.isOfficeProperty,
                         freeRentMonths: form.freeRentMonths,
@@ -3153,19 +3167,19 @@ export default function FileDetail() {
         onConfirm={(result) => {
           setAssessmentResult(result);
           if (result.isCapitalLease) {
-            const termYears = Math.ceil(result.answers.termMonths / 12);
+            const termYears = result.answers.termMonths / 12;
             setForm({
               ...makeBlankLoanForm(),
               name: importedLeaseMeta?.name ?? "",
               description: "",
               counterparty: importedLeaseMeta?.lessor ?? null,
               isCapitalLease: true,
-              principal: result.pvValue > 0 ? result.pvValue : result.answers.fairValue,
+              principal: result.pvValue > 0 ? Math.min(result.pvValue, result.answers.fairValue || Infinity) : result.answers.fairValue,
               downPayment: result.answers.downPayment,
               interestRate: result.answers.interestRate,
               amortizationYears: result.answers.assetType ? Math.min(termYears, Math.max(3, Math.ceil(result.answers.economicLife))) : termYears,
               termYears: termYears,
-              startDate: importedLeaseMeta?.startDate ?? "",
+              startDate: result.answers.leaseEndingTerms?.commencement?.confirmed ? result.answers.leaseEndingTerms.commencement.date : importedLeaseMeta?.startDate ?? "",
               paymentFrequency: "monthly",
               paymentTiming: result.answers.paymentAtBeginning ? "beginning" : "end",
               graceTermMode: "included",
@@ -3176,7 +3190,8 @@ export default function FileDetail() {
               ioMonths: 0,
               graceMonths: 0,
               graceInterestTreatment: "capitalized",
-              balloonPayment: 0,
+              balloonPayment: result.answers.leaseEndingTerms?.status === "reviewed" ? lesseeEndingAmount(result.answers.leaseEndingTerms) : 0,
+              leaseEndingTerms: result.answers.leaseEndingTerms,
               transferOfOwnership: result.answers.transferOfOwnership,
               bargainPurchaseOption: result.answers.bargainPurchaseOption,
               leaseTermPct: result.answers.leaseTermPct,
@@ -3187,10 +3202,10 @@ export default function FileDetail() {
               assetCost: result.answers.fairValue || 0,
               assetUsefulLife: result.answers.economicLife || 0,
               capitalLeaseRationale: result.rationale,
-              monthlyPayment: undefined,
-              paymentOverride: undefined,
-              firstPaymentAmount: undefined,
-              termMonths: undefined,
+              monthlyPayment: result.answers.monthlyPayment,
+              paymentOverride: result.answers.monthlyPayment,
+              firstPaymentAmount: result.answers.firstPaymentAmount ?? undefined,
+              termMonths: result.answers.termMonths,
               isOfficeProperty: false,
               freeRentMonths: 0,
               rentEscalationRate: 0,
@@ -3587,6 +3602,7 @@ export default function FileDetail() {
                     fairValue: r.answers.fairValue || undefined,
                     specializedAsset: r.answers.specializedAsset,
                     capitalLeaseRationale: r.rationale,
+                    leaseEndingTerms: r.answers.leaseEndingTerms ? { ...r.answers.leaseEndingTerms } : undefined,
                     monthlyPayment: r.answers.monthlyPayment,
                     termMonths: r.answers.termMonths,
                     isOfficeProperty: r.isOfficeProperty,

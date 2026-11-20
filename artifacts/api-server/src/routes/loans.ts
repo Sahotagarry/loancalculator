@@ -1,5 +1,6 @@
 import { Router, type IRouter } from "express";
-import { and, asc, desc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
+import { leaseAccountingProjection, validateLeaseEnding } from "../lib/lease-ending";
+import { and, asc, desc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import { db, loansTable, filesTable, clientMembershipsTable, clientsTable, loanContractRevisionsTable, loanEventsTable, loanEventSetsTable, masterAgreementsTable, type AgreementModificationAssessment } from "@workspace/db";
 import {
   CreateLoanBody,
@@ -23,7 +24,7 @@ import {
   ConfirmFvDecisionParams,
   ConfirmFvDecisionBody,
 } from "@workspace/api-zod";
-import { calculateAmortization, type PrincipalPaymentEvent } from "@workspace/amortization";
+import { DEFAULT_LOAN_INTEREST_METHOD, calculateAmortization, type PrincipalPaymentEvent } from "@workspace/amortization";
 import {
   fetchPrimeRate,
   confirmFvDecision as persistFvDecisionConfirmation,
@@ -418,6 +419,7 @@ const previewMetrics = (
     loan.graceMonths,
     loan.graceInterestTreatment === "none" ? "none" : "capitalized",
     {
+      interestMethod: loan.interestMethod,
       paymentTiming: loan.paymentTiming === "beginning" ? "beginning" : "end",
       firstPaymentAmount: loan.firstPaymentAmount == null ? null : Number(loan.firstPaymentAmount),
       graceTermMode: loan.graceTermMode === "added" ? "added" : "included",
@@ -555,6 +557,17 @@ router.post("/files/:id/loans", async (req, res): Promise<void> => {
   }
 
   const rentStepsError = validateRentSteps(data.rentSteps);
+  let leaseProjection: Record<string, unknown> = {};
+  if (data.leaseEndingTerms != null) {
+    try {
+      const ending = validateLeaseEnding(data.leaseEndingTerms, data.termMonths ?? Math.round(data.termYears * 12));
+      data.leaseEndingTerms = { ...ending };
+      leaseProjection = leaseAccountingProjection({ ...data, paymentFrequency: data.paymentFrequency ?? "monthly" }, ending);
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : "Invalid lease ending evidence" });
+      return;
+    }
+  }
   if (rentStepsError) {
     res.status(400).json({ error: rentStepsError });
     return;
@@ -615,6 +628,8 @@ router.post("/files/:id/loans", async (req, res): Promise<void> => {
     );
   }
 
+  const isNewLoan = agreementKind({ isCapitalLease: data.isCapitalLease ?? false, interestRate: data.interestRate, monthlyPayment: data.monthlyPayment ?? null, termMonths: data.termMonths ?? null }) === "loan";
+  if (!isNewLoan && data.interestMethod != null) { res.status(400).json({ error: "Loan interest methods do not apply to leases" }); return; }
   let loan: typeof loansTable.$inferSelect;
   try {
     loan = await db.transaction(async (tx) => {
@@ -641,6 +656,7 @@ router.post("/files/:id/loans", async (req, res): Promise<void> => {
       startDate: data.startDate.toISOString().split("T")[0],
       fiscalYearEnd: data.fiscalYearEnd.toISOString().split("T")[0],
       paymentFrequency: data.paymentFrequency ?? "monthly",
+      interestMethod: isNewLoan ? (data.interestMethod ?? DEFAULT_LOAN_INTEREST_METHOD) : null,
       paymentTiming: data.paymentTiming ?? "end",
       graceTermMode: data.graceTermMode ?? "included",
       firstPaymentDate:
@@ -684,6 +700,7 @@ router.post("/files/:id/loans", async (req, res): Promise<void> => {
       monthlyPayment: data.monthlyPayment != null ? data.monthlyPayment.toString() : null,
       paymentOverride: data.paymentOverride != null ? data.paymentOverride.toString() : null,
       firstPaymentAmount: data.firstPaymentAmount != null ? data.firstPaymentAmount.toString() : null,
+      leaseEndingTerms: data.leaseEndingTerms ?? null,
       termMonths: data.termMonths ?? null,
       isOfficeProperty: data.isOfficeProperty ?? false,
       freeRentMonths: data.freeRentMonths ?? 0,
@@ -706,6 +723,7 @@ router.post("/files/:id/loans", async (req, res): Promise<void> => {
       modificationEffectiveDate:
         data.modificationEffectiveDate?.toISOString().slice(0, 10) ?? null,
       modificationAssessment: persistedAssessment ?? null,
+      ...leaseProjection,
     }).returning();
     const projected = await appendContractRevision(
       tx,
@@ -1030,6 +1048,7 @@ router.patch("/loans/:id", async (req, res): Promise<void> => {
   const data = parsed.data;
   const [calendarCurrent] = await db
     .select({
+      interestMethod: loansTable.interestMethod,
       paymentFrequency: loansTable.paymentFrequency,
       semiMonthlyFirstDueDay: loansTable.semiMonthlyFirstDueDay,
       semiMonthlySecondDueDay: loansTable.semiMonthlySecondDueDay,
@@ -1037,6 +1056,7 @@ router.patch("/loans/:id", async (req, res): Promise<void> => {
       firstPaymentDate: loansTable.firstPaymentDate,
       termYears: loansTable.termYears,
       termMonths: loansTable.termMonths,
+      leaseEndingTerms: loansTable.leaseEndingTerms,
       graceMonths: loansTable.graceMonths,
       graceTermMode: loansTable.graceTermMode,
       rateType: loansTable.rateType,
@@ -1234,6 +1254,20 @@ router.patch("/loans/:id", async (req, res): Promise<void> => {
   }
 
   const updates: Record<string, unknown> = {};
+  if (data.leaseEndingTerms !== undefined) {
+    if (data.leaseEndingTerms === null && calendarCurrent.leaseEndingTerms != null) {
+      res.status(409).json({ error: "Ending evidence cannot be removed to restore legacy calculations. Save a revised interpretation instead." });
+      return;
+    }
+    try {
+      updates.leaseEndingTerms = data.leaseEndingTerms == null ? null : {
+        ...validateLeaseEnding(data.leaseEndingTerms, data.termMonths ?? calendarCurrent.termMonths ?? Math.round((data.termYears ?? calendarCurrent.termYears) * 12)),
+      };
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : "Invalid lease ending evidence" });
+      return;
+    }
+  }
   if (data.name != null) updates.name = data.name;
   if (data.description != null) updates.description = data.description;
   if (data.counterparty !== undefined) updates.counterparty = data.counterparty;
@@ -1265,6 +1299,9 @@ router.patch("/loans/:id", async (req, res): Promise<void> => {
     updates.semiMonthlyFirstDueDay = null;
     updates.semiMonthlySecondDueDay = null;
   }
+  const nextIsLease = agreementKind({ isCapitalLease: data.isCapitalLease ?? calendarCurrent.isCapitalLease, interestRate: data.interestRate ?? calendarCurrent.interestRate, monthlyPayment: data.monthlyPayment === undefined ? calendarCurrent.monthlyPayment : data.monthlyPayment, termMonths: data.termMonths === undefined ? calendarCurrent.termMonths : data.termMonths }) === "lease";
+  if (nextIsLease && data.interestMethod != null) { res.status(400).json({ error: "Loan interest methods do not apply to leases" }); return; }
+  if ((nextIsLease && calendarCurrent.interestMethod != null) || data.interestMethod !== undefined) updates.interestMethod = nextIsLease ? null : data.interestMethod;
   if (data.paymentTiming != null) updates.paymentTiming = data.paymentTiming;
   if (data.graceTermMode != null) updates.graceTermMode = data.graceTermMode;
   if (data.firstPaymentDate !== undefined)
@@ -1386,10 +1423,43 @@ router.patch("/loans/:id", async (req, res): Promise<void> => {
   if (data.modificationAssessment !== undefined)
     updates.modificationAssessment = nextAssessment;
 
+  if (calendarCurrent.leaseEndingTerms || updates.leaseEndingTerms) {
+    const [current] = await db.select().from(loansTable)
+      .where(and(eq(loansTable.id, params.data.id), isNull(loansTable.deletedAt)));
+    if (!current) { res.status(404).json({ error: "Loan not found" }); return; }
+    try {
+      const eventSets = await loadActiveEvents([current]);
+      const currentEvents = eventSets.get(current.id);
+      const next = { ...current, ...updates,
+        activeEvents: currentEvents?.principal ?? [],
+        rateTimelineEvents: currentEvents?.rates ?? [],
+      };
+      const ending = validateLeaseEnding(next.leaseEndingTerms, Number(next.termMonths ?? next.termYears * 12));
+      const changed = Object.keys(updates).some(key => key !== "leaseEndingTerms" && SCHEDULE_DRIVING_FIELDS.has(key as keyof typeof loansTable.$inferSelect) && String(current[key as keyof typeof current]) !== String(updates[key]));
+      if (changed && data.leaseEndingTerms === undefined) ending.status = "draft";
+      updates.leaseEndingTerms = { ...ending };
+      Object.assign(updates, leaseAccountingProjection(next, ending));
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : "Invalid ending accounting" });
+      return;
+    }
+  }
   const scheduleChanged = Object.keys(updates).some((field) =>
     SCHEDULE_DRIVING_FIELDS.has(field as keyof typeof loansTable.$inferSelect),
   );
   const loan = await db.transaction(async (tx) => {
+    // Share the event-writer row lock so review cannot race a newly saved event.
+    await tx.execute(sql`select id from loans where id = ${params.data.id} for update`);
+    const [locked] = await tx.select().from(loansTable)
+      .where(and(eq(loansTable.id, params.data.id), isNull(loansTable.deletedAt)));
+    if (locked && updates.leaseEndingTerms && (updates.leaseEndingTerms as { status?: string }).status === "reviewed") {
+      const events = locked.activeEventSetId
+        ? await tx.select().from(loanEventsTable).where(eq(loanEventsTable.setId, locked.activeEventSetId))
+        : [];
+      const next = { ...locked, ...updates, activeEvents: events };
+      const ending = validateLeaseEnding(next.leaseEndingTerms, Number(next.termMonths ?? next.termYears * 12));
+      Object.assign(updates, leaseAccountingProjection(next, ending));
+    }
     const [updated] = await tx
       .update(loansTable)
       .set(updates)
@@ -1579,6 +1649,7 @@ router.post("/loans/:id/rollforward", async (req, res): Promise<void> => {
     startDate: original.startDate,
     fiscalYearEnd: parsed.data.newFiscalYearEnd.toISOString().split("T")[0],
     paymentFrequency: original.paymentFrequency,
+    interestMethod: original.interestMethod,
     paymentTiming: original.paymentTiming,
     graceTermMode: original.graceTermMode,
     firstPaymentDate: original.firstPaymentDate,
@@ -1612,6 +1683,7 @@ router.post("/loans/:id/rollforward", async (req, res): Promise<void> => {
     monthlyPayment: original.monthlyPayment,
     paymentOverride: original.paymentOverride,
     firstPaymentAmount: original.firstPaymentAmount,
+    leaseEndingTerms: original.leaseEndingTerms,
     termMonths: original.termMonths,
     isOfficeProperty: original.isOfficeProperty,
     freeRentMonths: original.freeRentMonths,

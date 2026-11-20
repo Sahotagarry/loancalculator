@@ -10,12 +10,14 @@ import type { CreateLoanFvDecision } from './createLoanFvDecision';
 import type { CreateLoanGraceInterestTreatment } from './createLoanGraceInterestTreatment';
 import type { CreateLoanGraceTermMode } from './createLoanGraceTermMode';
 import type { CreateLoanInitialFvRateAssumption } from './createLoanInitialFvRateAssumption';
+import type { CreateLoanInterestMethod } from './createLoanInterestMethod';
 import type { CreateLoanPaymentTiming } from './createLoanPaymentTiming';
 import type { CreateLoanRateBenchmark } from './createLoanRateBenchmark';
 import type { CreateLoanRateEffectiveConvention } from './createLoanRateEffectiveConvention';
 import type { CreateLoanRatePaymentTreatment } from './createLoanRatePaymentTreatment';
 import type { CreateLoanRateResetFrequency } from './createLoanRateResetFrequency';
 import type { CreateLoanRateType } from './createLoanRateType';
+import type { LeaseEndingTerms } from './leaseEndingTerms';
 import type { LoanEventInput } from './loanEventInput';
 import type { RentStep } from './rentStep';
 
@@ -48,6 +50,8 @@ export interface CreateLoan {
   startDate: Date;
   fiscalYearEnd: Date;
   paymentFrequency?: string;
+  /** Contractual loan interest calculation; null on a stored loan preserves equal-period legacy schedules. */
+  interestMethod?: CreateLoanInterestMethod;
   paymentTiming?: CreateLoanPaymentTiming;
   graceTermMode?: CreateLoanGraceTermMode;
   firstPaymentDate?: Date | null;
@@ -90,6 +94,7 @@ export interface CreateLoan {
   paymentOverride?: number | null;
   /** Contractual first installment when it differs from the regular payment. */
   firstPaymentAmount?: number | null;
+  leaseEndingTerms?: LeaseEndingTerms | null;
   termMonths?: number;
   isOfficeProperty?: boolean;
   freeRentMonths?: number;

@@ -1412,6 +1412,11 @@ components:
             type: string
           nullable: true
 
+    LeaseEndingTerms:
+      type: [object, "null"]
+      description: Versioned lease ending evidence. Null retains legacy accounting; non-null is validated deterministically.
+      additionalProperties: true
+
     Loan:
       type: object
       properties:
@@ -1483,6 +1488,11 @@ components:
           format: date
         paymentFrequency:
           type: string
+        interestMethod:
+          type: string
+          enum: [actual_365, actual_year, periodic, semi_annual]
+          nullable: true
+          description: Contractual loan interest calculation; null on a stored loan preserves equal-period legacy schedules.
         paymentTiming:
           type: string
           enum: [beginning, end]
@@ -1578,6 +1588,8 @@ components:
           type: string
           nullable: true
           description: Contractual first installment when it differs from the regular payment.
+        leaseEndingTerms:
+          $ref: "#/components/schemas/LeaseEndingTerms"
         termMonths:
           type: integer
         isOfficeProperty:
@@ -1778,6 +1790,11 @@ components:
           format: date
         paymentFrequency:
           type: string
+        interestMethod:
+          type: string
+          enum: [actual_365, actual_year, periodic, semi_annual]
+          nullable: true
+          description: Contractual loan interest calculation; null on a stored loan preserves equal-period legacy schedules.
         paymentTiming:
           type: string
           enum: [beginning, end]
@@ -1873,6 +1890,8 @@ components:
           type: number
           nullable: true
           description: Contractual first installment when it differs from the regular payment.
+        leaseEndingTerms:
+          $ref: "#/components/schemas/LeaseEndingTerms"
         termMonths:
           type: integer
         isOfficeProperty:
@@ -2004,6 +2023,11 @@ components:
           format: date
         paymentFrequency:
           type: string
+        interestMethod:
+          type: string
+          enum: [actual_365, actual_year, periodic, semi_annual]
+          nullable: true
+          description: Contractual loan interest calculation; null on a stored loan preserves equal-period legacy schedules.
         paymentTiming:
           type: string
           enum: [beginning, end]
@@ -2102,6 +2126,8 @@ components:
           type: number
           nullable: true
           description: Contractual first installment when it differs from the regular payment.
+        leaseEndingTerms:
+          $ref: "#/components/schemas/LeaseEndingTerms"
         termMonths:
           type: integer
         isOfficeProperty:
@@ -2610,6 +2636,11 @@ components:
           type: string
           enum: [monthly, semi-monthly, bi-weekly, weekly]
           nullable: true
+        interestMethod:
+          type: string
+          enum: [actual_365, actual_year, periodic, semi_annual]
+          nullable: true
+          description: Contractual loan interest calculation; null on a stored loan preserves equal-period legacy schedules.
         paymentTiming:
           type: string
           enum: [beginning, end]
@@ -2632,6 +2663,10 @@ components:
           minimum: 1
           maximum: 31
           nullable: true
+        interestMethodQuote:
+          type: string
+          nullable: true
+          description: Verbatim agreement wording, separate from the app default.
         paymentAmount:
           type: number
           nullable: true
@@ -2697,6 +2732,8 @@ components:
         buyoutAmount:
           type: number
           nullable: true
+        leaseEndingTerms:
+          $ref: "#/components/schemas/LeaseEndingTerms"
         transferOfOwnership:
           type: boolean
           nullable: true
