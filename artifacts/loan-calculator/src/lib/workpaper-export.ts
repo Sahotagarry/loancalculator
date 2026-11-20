@@ -1,4 +1,5 @@
 import * as XLSX from "xlsx";
+import { saveAs } from "file-saver";
 import { applyExcelNumberTypes } from "./excel-numbers";
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
@@ -819,25 +820,13 @@ function scheduleSheet(schedule: AmortizationRow[]): XLSX.WorkSheet {
   );
 }
 
-export function exportLoanWorkpaperXlsx(wp: Workpaper): void {
-  const wb = XLSX.utils.book_new();
-  const used = new Set<string>();
-  for (const section of wp.sections) {
-    const ws = XLSX.utils.aoa_to_sheet([
-      [`${wp.loanName} — ${section.title}`],
-      [],
-      section.head,
-      ...section.rows,
-      ...(section.notes ? [[], ...section.notes.map((n) => [n])] : []),
-    ]);
-    ws["!cols"] = [{ wch: 50 }, { wch: 30 }];
-    XLSX.utils.book_append_sheet(wb, ws, usedSheetNameSafe(section.title, used));
-  }
-  if (wp.schedule && wp.schedule.length > 0) {
-    XLSX.utils.book_append_sheet(wb, scheduleSheet(wp.schedule), usedSheetNameSafe("Schedule", used));
-  }
-  applyExcelNumberTypes(wb);
-  XLSX.writeFile(wb, `${wp.loanName}_Workpaper.xlsx`);
+export async function exportLoanWorkpaperXlsx(wp: Workpaper): Promise<void> {
+  // The table-aware writer is only loaded when downloading an individual workpaper.
+  const { buildAgreementWorkbook } = await import("./agreement-workbook");
+  const buffer = await buildAgreementWorkbook(wp).xlsx.writeBuffer();
+  saveAs(new Blob([new Uint8Array(buffer)], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  }), `${wp.loanName}_Workpaper.xlsx`);
 }
 
 /* ── Combined file (lead sheet) exports ──────────────────────── */

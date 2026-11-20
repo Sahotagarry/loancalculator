@@ -13,6 +13,15 @@ import type { ImportedLoanFieldsPaymentTiming } from './importedLoanFieldsPaymen
 import type { SuggestedLoanEvent } from './suggestedLoanEvent';
 
 export interface ImportedLoanFields {
+  /** @nullable */
+  termMonths?: number | null;
+  /** @nullable */
+  amortizationMonths?: number | null;
+  /** @nullable */
+  termQuote?: string | null;
+  /** @nullable */
+  amortizationQuote?: string | null;
+  durationWarnings?: string[];
   name?: string | null;
   lender?: string | null;
   principal?: number | null;

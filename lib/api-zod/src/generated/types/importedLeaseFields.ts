@@ -12,6 +12,9 @@ import type { LeaseEstimates } from './leaseEstimates';
 import type { RentStep } from './rentStep';
 
 export interface ImportedLeaseFields {
+  /** @nullable */
+  termQuote?: string | null;
+  durationWarnings?: string[];
   name?: string | null;
   lessor?: string | null;
   assetDescription?: string | null;

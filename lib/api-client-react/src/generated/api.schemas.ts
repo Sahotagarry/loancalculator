@@ -1354,6 +1354,15 @@ export interface SuggestedLoanEvent {
 }
 
 export interface ImportedLoanFields {
+  /** @nullable */
+  termMonths?: number | null;
+  /** @nullable */
+  amortizationMonths?: number | null;
+  /** @nullable */
+  termQuote?: string | null;
+  /** @nullable */
+  amortizationQuote?: string | null;
+  durationWarnings?: string[];
   name?: string | null;
   lender?: string | null;
   principal?: number | null;
@@ -1411,6 +1420,9 @@ export interface LeaseEstimates {
 }
 
 export interface ImportedLeaseFields {
+  /** @nullable */
+  termQuote?: string | null;
+  durationWarnings?: string[];
   name?: string | null;
   lessor?: string | null;
   assetDescription?: string | null;

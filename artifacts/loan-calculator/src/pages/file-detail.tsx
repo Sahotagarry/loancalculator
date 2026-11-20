@@ -75,6 +75,7 @@ import {
 } from "@/lib/aspe-utils";
 import CapitalLeaseAssessment, { calculatePVFromAnswers, formatAssetType, parseAssetType, type AssessmentResult, type StraightLineAnswers, type AssessmentAnswers, type ImportedEstimates } from "@/components/capital-lease-assessment";
 import ImportDocumentDialog from "@/components/import-document-dialog";
+import { importedLoanDurations, validImportMonths } from "@/lib/import-durations";
 import type { DocumentImportResult, DocumentImportResultUnresolvedRateFindingsItem } from "@workspace/api-client-react";
 import { FileUp } from "lucide-react";
 import { importedEventsToInputs, type ConfirmedImportEvent } from "@/lib/import-events";
@@ -413,8 +414,7 @@ export default function FileDetail() {
       rateEffectiveConvention: null,
       ratePaymentTreatment: null,
       initialFvRateAssumption: null,
-      amortizationYears: f?.amortizationYears ?? f?.termYears ?? 0,
-      termYears: f?.termYears ?? f?.amortizationYears ?? 0,
+      ...importedLoanDurations(f),
       startDate: f?.startDate ?? "",
       paymentFrequency: freq,
       interestMethod: f?.interestMethod ?? DEFAULT_LOAN_INTEREST_METHOD,
@@ -726,6 +726,11 @@ export default function FileDetail() {
 
   // Import flow: create the master agreement plus its selected facilities in one go.
   const handleImportedMaster = (result: DocumentImportResult, facilityIndexes: number[]) => {
+    const selected = (result.facilities ?? []).filter((_, i) => facilityIndexes.includes(i));
+    if (selected.some(f => !validImportMonths(f.termMonths) || !validImportMonths(f.amortizationMonths))) {
+      toast({ title: "Review each selected facility’s term and amortization before creating it.", variant: "destructive" });
+      return;
+    }
     const m = result.masterAgreement;
     createMaster.mutate(
       {
@@ -776,8 +781,8 @@ export default function FileDetail() {
                    rateEffectiveConvention: null,
                    ratePaymentTreatment: null,
                    initialFvRateAssumption: null,
-                  amortizationYears: f.amortizationYears ?? f.termYears ?? 0,
-                  termYears: f.termYears ?? f.amortizationYears ?? 0,
+                  amortizationYears: f.amortizationMonths! / 12,
+                  termYears: f.termMonths! / 12,
                   startDate: f.startDate ?? file?.fiscalYearEnd ?? "",
                   fiscalYearEnd: file?.fiscalYearEnd ?? "",
                   paymentFrequency: freq,
@@ -2834,7 +2839,7 @@ export default function FileDetail() {
               </p>
             </div>
           )}
-          <LoanFormFields form={form} setForm={setForm} mode={formMode} />
+          <LoanFormFields key={form.importedDurationMonths ? "import" : "standard"} form={form} setForm={setForm} mode={formMode} />
           <ModificationAssessment
             key={`${editingLoanId ?? "new"}-${modification.predecessorAgreementId ?? "none"}`}
             agreements={[...(loans ?? []), ...(priorLoans ?? [])].filter((item, index, all) => all.findIndex((other) => other.id === item.id) === index)}
@@ -3174,6 +3179,7 @@ export default function FileDetail() {
               description: "",
               counterparty: importedLeaseMeta?.lessor ?? null,
               isCapitalLease: true,
+              importedDurationMonths: !!importedLeaseMeta,
               principal: result.pvValue > 0 ? Math.min(result.pvValue, result.answers.fairValue || Infinity) : result.answers.fairValue,
               downPayment: result.answers.downPayment,
               interestRate: result.answers.interestRate,

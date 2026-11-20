@@ -1,4 +1,5 @@
 import { verifyInterestClause } from "./import-interest-method";
+import { verifyDurations } from "./import-durations";
 import { INTEREST_METHODS } from "@workspace/amortization";
 import { z } from "zod";
 import { inferLeaseCommencement, normalizeLeaseEnding } from "@workspace/amortization";
@@ -13,6 +14,9 @@ const LEGACY_API_VERSION = "2024-10-21";
 // ---------------------------------------------------------------------------
 
 const loanFieldsSchema = z.object({
+  termQuote: z.string().max(600).nullish().catch(null),
+  amortizationQuote: z.string().max(600).nullish().catch(null),
+  paymentScheduleQuote: z.string().max(600).nullish().catch(null),
   interestMethod: z.enum(INTEREST_METHODS).nullable().catch(null),
   interestMethodQuote: z.string().max(700).nullable().catch(null),
   name: z.string().nullable().catch(null),
@@ -56,6 +60,8 @@ const loanFieldsSchema = z.object({
 });
 
 const leaseFieldsSchema = z.object({
+  termQuote: z.string().max(600).nullish().catch(null),
+  paymentScheduleQuote: z.string().max(600).nullish().catch(null),
   name: z.string().nullable().catch(null),
   lessor: z.string().nullable().catch(null),
   assetDescription: z.string().nullable().catch(null),
@@ -190,6 +196,7 @@ Extraction rules — CRITICAL:
 - paymentTiming is "beginning" when payments are explicitly due at the beginning of each period, or "end" when due at the end of each period. Use null when unstated.
 - For semi-monthly payments, extract the two explicit calendar due days into semiMonthlyFirstDueDay and semiMonthlySecondDueDay (for example, the 1st and 15th). Do not infer days when unstated.
 - All money amounts are plain numbers without currency symbols or thousands separators.
+- For every loan, lease or individual facility, return termQuote and paymentScheduleQuote; for loans/facilities also return amortizationQuote. These are short verbatim contiguous quotes with the field label, value and original unit, or null. For facilities, quote only that facility's clauses. An instalment count does not by itself establish amortization. Do not copy term to amortization or vice versa. Distinguish an optional renewal from the initial committed term. The application verifies and converts durations from the document text, rather than trusting your arithmetic.
 - amortizationYears / termYears may be fractional (e.g. 2.5). If stated in months, divide by 12.
 - For a loan, "termYears" is the length of the committed term; "amortizationYears" is the amortization period (often longer — e.g. a 5-year term amortized over 84 months means termYears 5, amortizationYears 7). If only one is stated, set the other to null.
 - Payment deferral / grace period rules — distinguish THREE different arrangements carefully:
@@ -240,8 +247,8 @@ Respond with JSON only, matching this shape plus the lease ending fields above:
   "reasoning": string,
   "masterAgreement": { lender, description, facilityLimit, securityDescription, covenantDescription } or null if not a master agreement,
   "facilities": [ same shape as "loan", one per facility ] or null if not a master agreement,
-  "loan": { name, lender, principal, downPayment, interestRate, primeSpread, statedPrimeRate, amortizationYears, termYears, startDate, interestMethod, interestMethodQuote, paymentFrequency ("monthly"|"semi-monthly"|"bi-weekly"|"weekly"), paymentTiming ("beginning"|"end"|null), graceTermMode ("included"|"added"|null), firstPaymentDate, semiMonthlyFirstDueDay, semiMonthlySecondDueDay, paymentAmount, interestOnlyMonths, graceMonths, graceInterestTreatment ("capitalized"|"none"|null), balloonPayment, securityDescription, suggestedEvents ([{kind:"principal_prepayment",effectiveDate,ordering,amount,treatment,classification,source,reason,requiresConfirmation:true}] or null) } or null if not a loan,
-  "lease": { name, lessor, assetDescription, assetType ("vehicle"|"equipment"|"office_commercial"|"other"), startDate, termMonths, monthlyPayment, downPayment, interestRate, fairValue, economicLifeYears, buyoutAmount, transferOfOwnership, bargainPurchaseOption, specializedAsset, paymentAtBeginning, rentableSquareFeet, rentSteps ([{fromYear, toYear, monthlyRent, annualRatePerSquareFoot}] or null), tenantImprovementAllowance, freeRentMonths, camAnnualPerSquareFoot, camMonthly, percentageRentNote, fieldNotes ({fieldName: note} or null), estimates ({economicLifeYears, fairValue, interestRate, reasoning} or null) } or null if not a lease.
+  "loan": { termQuote, amortizationQuote, paymentScheduleQuote, name, lender, principal, downPayment, interestRate, primeSpread, statedPrimeRate, amortizationYears, termYears, startDate, interestMethod, interestMethodQuote, paymentFrequency ("monthly"|"semi-monthly"|"bi-weekly"|"weekly"), paymentTiming ("beginning"|"end"|null), graceTermMode ("included"|"added"|null), firstPaymentDate, semiMonthlyFirstDueDay, semiMonthlySecondDueDay, paymentAmount, interestOnlyMonths, graceMonths, graceInterestTreatment ("capitalized"|"none"|null), balloonPayment, securityDescription, suggestedEvents ([{kind:"principal_prepayment",effectiveDate,ordering,amount,treatment,classification,source,reason,requiresConfirmation:true}] or null) } or null if not a loan,
+  "lease": { termQuote, paymentScheduleQuote, name, lessor, assetDescription, assetType ("vehicle"|"equipment"|"office_commercial"|"other"), startDate, termMonths, monthlyPayment, downPayment, interestRate, fairValue, economicLifeYears, buyoutAmount, transferOfOwnership, bargainPurchaseOption, specializedAsset, paymentAtBeginning, rentableSquareFeet, rentSteps ([{fromYear, toYear, monthlyRent, annualRatePerSquareFoot}] or null), tenantImprovementAllowance, freeRentMonths, camAnnualPerSquareFoot, camMonthly, percentageRentNote, fieldNotes ({fieldName: note} or null), estimates ({economicLifeYears, fairValue, interestRate, reasoning} or null) } or null if not a lease.
   "name" should be a short human label like "Truck Loan — TD Bank" based on the document.
 }`;
 
@@ -351,10 +358,17 @@ export async function extractLoanOrLease(settings: AzureSettings, documentText: 
     throw new UserFacingError("The AI response was missing required information. Try again.", 502);
   }
   for (const loan of [validated.data.loan, ...(validated.data.facilities ?? [])]) {
-    if (loan) Object.assign(loan, verifyInterestClause(loan.interestMethod, loan.interestMethodQuote, documentText));
+    if (loan) Object.assign(loan, verifyInterestClause(loan.interestMethod, loan.interestMethodQuote, documentText),
+      verifyDurations(documentText, loan, loan === validated.data.loan ? "loan" : "facility"));
   }
   if (validated.data.lease) {
     const lease = validated.data.lease;
+    const duration = verifyDurations(documentText, lease, "lease");
+    Object.assign(lease, { termMonths: duration.termMonths, termQuote: duration.termQuote, durationWarnings: duration.durationWarnings });
+    const notes = { ...lease.fieldNotes };
+    delete notes.termMonths;
+    if (duration.termQuote) notes.termMonths = duration.termQuote;
+    lease.fieldNotes = notes;
     const ending = lease.leaseEndingTerms ?? unresolvedLeaseEnding("Ending terms were not reliably extracted. Review all schedules and return clauses.", lease.termMonths);
     ending.status = "draft";
     if (!lease.startDate && lease.expiryDate && lease.termMonths) {

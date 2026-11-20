@@ -2042,6 +2042,11 @@ export const ImportDocumentResponse = zod.object({
   "action": zod.string()
 })).optional(),
   "loan": zod.object({
+  "termMonths": zod.number().nullish(),
+  "amortizationMonths": zod.number().nullish(),
+  "termQuote": zod.string().nullish(),
+  "amortizationQuote": zod.string().nullish(),
+  "durationWarnings": zod.array(zod.string()).optional(),
   "name": zod.string().nullish(),
   "lender": zod.string().nullish(),
   "principal": zod.number().nullish(),
@@ -2079,6 +2084,8 @@ export const ImportDocumentResponse = zod.object({
 })).nullish()
 }).nullish(),
   "lease": zod.object({
+  "termQuote": zod.string().nullish(),
+  "durationWarnings": zod.array(zod.string()).optional(),
   "name": zod.string().nullish(),
   "lessor": zod.string().nullish(),
   "assetDescription": zod.string().nullish(),
@@ -2124,6 +2131,11 @@ export const ImportDocumentResponse = zod.object({
   "covenantDescription": zod.string().nullish()
 }).nullish(),
   "facilities": zod.array(zod.object({
+  "termMonths": zod.number().nullish(),
+  "amortizationMonths": zod.number().nullish(),
+  "termQuote": zod.string().nullish(),
+  "amortizationQuote": zod.string().nullish(),
+  "durationWarnings": zod.array(zod.string()).optional(),
   "name": zod.string().nullish(),
   "lender": zod.string().nullish(),
   "principal": zod.number().nullish(),

@@ -20,6 +20,7 @@ import { SecurityCollateralFields } from "@/components/security-collateral-field
 export interface LoanFormState {
   interestMethod?: InterestMethod;
   importedInterestNote?: string;
+  importedDurationMonths?: boolean;
   leaseEndingTerms?: import("@workspace/amortization").LeaseEndingTerms | null;
   name: string;
   description: string;
@@ -235,6 +236,7 @@ export function LoanFormFields({ form, setForm: persistForm, mode = "loan" }: Lo
   type DurationUnit = "years" | "months" | "periods";
 
   const initialUnit = (years: number): DurationUnit => {
+    if (form.importedDurationMonths) return "months";
     if (!(years > 0) || Number.isInteger(years)) return "years";
     if (Number.isInteger(Math.round(years * 12 * 1e6) / 1e6)) return "months";
     return offerPeriods ? "periods" : "months";
@@ -589,6 +591,9 @@ export function LoanFormFields({ form, setForm: persistForm, mode = "loan" }: Lo
                   = {form.amortizationYears.toFixed(2).replace(/\.00$/, "")} years
                 </p>
               ) : null}
+              {form.importedDurationMonths && !form.amortizationYears && (
+                <p className="text-xs text-amber-700">Confirm amortization separately; the contract term alone does not establish it.</p>
+              )}
             </div>
             <div className="space-y-2">
               <Label htmlFor="term">
@@ -622,6 +627,9 @@ export function LoanFormFields({ form, setForm: persistForm, mode = "loan" }: Lo
                   = {form.termYears.toFixed(2).replace(/\.00$/, "")} years
                 </p>
               ) : null}
+              {form.importedDurationMonths && !form.termYears && (
+                <p className="text-xs text-amber-700">Confirm the contract term and its unit in the agreement.</p>
+              )}
             </div>
           </div>
         </>

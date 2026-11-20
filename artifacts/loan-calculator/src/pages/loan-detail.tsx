@@ -104,6 +104,7 @@ export default function LoanDetail() {
 
   const [tab, setTab] = useState("schedule");
   const [fvTab, setFvTab] = useState("actual");
+  const [exportingWorkpaper, setExportingWorkpaper] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [reevaluateOpen, setReevaluateOpen] = useState(false);
   const [adjEntryYear, setAdjEntryYear] = useState<number | null>(null);
@@ -773,20 +774,27 @@ export default function LoanDetail() {
     setEditOpen(true);
   };
 
-  const downloadWorkpaper = (kind: "pdf" | "xlsx") => {
+  const downloadWorkpaper = async (kind: "pdf" | "xlsx") => {
     if (!loan || !file?.fiscalYearEnd) return;
-    // Pass the facility's master agreement so the workpaper carries the master
-    // reference and security/covenant fallback wording.
-    const master = loan.masterAgreementId
-      ? (masters?.find((m) => m.id === loan.masterAgreementId) ?? null)
-      : null;
-    const wp = buildLoanWorkpaper({ ...loan, predecessorAgreement: linkedPredecessor, fvDecisionHistory, fairValueAccountingEntries: fvAccounting } as any, {
-      clientName: client?.name ?? "Client",
-      fiscalYearEnd: file.fiscalYearEnd,
-    }, master);
-    if (!wp) return;
-    if (kind === "pdf") exportLoanWorkpaperPdf(wp);
-    else exportLoanWorkpaperXlsx(wp);
+    setExportingWorkpaper(true);
+    try {
+      // Pass the facility's master agreement so the workpaper carries the master
+      // reference and security/covenant fallback wording.
+      const master = loan.masterAgreementId
+        ? (masters?.find((m) => m.id === loan.masterAgreementId) ?? null)
+        : null;
+      const wp = buildLoanWorkpaper({ ...loan, predecessorAgreement: linkedPredecessor, fvDecisionHistory, fairValueAccountingEntries: fvAccounting } as any, {
+        clientName: client?.name ?? "Client",
+        fiscalYearEnd: file.fiscalYearEnd,
+      }, master);
+      if (!wp) return;
+      if (kind === "pdf") exportLoanWorkpaperPdf(wp);
+      else await exportLoanWorkpaperXlsx(wp);
+    } catch (err) {
+      toast({ title: "Couldn't export the workpaper", description: getErrorMessage(err), variant: "destructive" });
+    } finally {
+      setExportingWorkpaper(false);
+    }
   };
 
   if (!loan) {
@@ -883,11 +891,11 @@ export default function LoanDetail() {
                 <TooltipContent>Export engagement workpaper (terms, continuity, disclosures, schedule)</TooltipContent>
               </Tooltip>
               <DropdownMenuContent align="end">
-                <DropdownMenuItem onClick={() => downloadWorkpaper("xlsx")}>
+                <DropdownMenuItem disabled={exportingWorkpaper} onClick={() => downloadWorkpaper("xlsx")}>
                   <Download className="h-4 w-4 mr-2" />
                   Excel (.xlsx)
                 </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => downloadWorkpaper("pdf")}>
+                <DropdownMenuItem disabled={exportingWorkpaper} onClick={() => downloadWorkpaper("pdf")}>
                   <FileText className="h-4 w-4 mr-2" />
                   PDF
                 </DropdownMenuItem>

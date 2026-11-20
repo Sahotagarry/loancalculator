@@ -17,6 +17,8 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { FileUp, FileText, Loader2, Landmark, Receipt, HelpCircle, Settings, AlertTriangle, Layers } from "lucide-react";
 import { formatCurrency } from "@/lib/format";
 import { canPersistImportedEvents, type ConfirmedImportEvent } from "@/lib/import-events";
+import { durationLabel, validImportMonths } from "@/lib/import-durations";
+import { Input } from "@/components/ui/input";
 
 type FieldRow = { label: string; value: string | null; optional?: boolean };
 
@@ -42,8 +44,8 @@ function buildFieldRows(result: DocumentImportResult): FieldRow[] {
       { label: "Principal", value: fmtMoney(f?.principal) },
       { label: "Down payment", value: fmtMoney(f?.downPayment), optional: true },
       { label: "Interest rate", value: fmtNum(f?.interestRate, "%") },
-      { label: "Amortization", value: fmtNum(f?.amortizationYears, " years") },
-      { label: "Term", value: fmtNum(f?.termYears, " years") },
+      { label: "Amortization", value: durationLabel(f?.amortizationMonths, f?.amortizationQuote) },
+      { label: "Term", value: durationLabel(f?.termMonths, f?.termQuote) },
       { label: "Start date", value: fmtText(f?.startDate) },
       { label: "Payment frequency", value: fmtText(f?.paymentFrequency ?? null) },
       { label: "Payment timing", value: fmtText(f?.paymentTiming ?? null) },
@@ -84,7 +86,7 @@ function buildFieldRows(result: DocumentImportResult): FieldRow[] {
       { label: "Asset", value: fmtText(f?.assetDescription) },
       { label: "Asset type", value: fmtText(f?.assetType ?? null) },
       { label: "Start date", value: fmtText(f?.startDate) },
-      { label: "Term", value: fmtNum(f?.termMonths, " months") },
+      { label: "Term", value: durationLabel(f?.termMonths, f?.termQuote) },
       { label: "Monthly payment", value: fmtMoney(f?.monthlyPayment) },
       { label: "Down payment", value: fmtMoney(f?.downPayment), optional: true },
       { label: "Interest rate", value: fmtNum(f?.interestRate, "%") },
@@ -136,6 +138,10 @@ export default function ImportDocumentDialog({ open, onOpenChange, fileId, onUse
   const [result, setResult] = useState<DocumentImportResult | null>(null);
   const [settingsHint, setSettingsHint] = useState(false);
   const [selectedFacilities, setSelectedFacilities] = useState<Set<number>>(new Set());
+  const [facilityReview, setFacilityReview] = useState<Record<number, { termMonths?: number; amortizationMonths?: number }>>({});
+  const reviewedFacilities = (result?.facilities ?? []).map((f, i) => ({ ...f, ...facilityReview[i] }));
+  const durationsReady = reviewedFacilities.every((f, i) => !selectedFacilities.has(i) ||
+    (validImportMonths(f.termMonths) && validImportMonths(f.amortizationMonths)));
   const [timingConfirmed, setTimingConfirmed] = useState(false);
   const [eventsConfirmed, setEventsConfirmed] = useState(false);
   const [eventChoices, setEventChoices] = useState<ConfirmedImportEvent[]>([]);
@@ -144,6 +150,7 @@ export default function ImportDocumentDialog({ open, onOpenChange, fileId, onUse
     mutation: {
       onSuccess: (data) => {
         setResult(data);
+        setFacilityReview({});
         // Default to importing every facility found in a master agreement.
         setSelectedFacilities(new Set((data.facilities ?? []).map((_, i) => i)));
         setEventChoices((data.loan?.suggestedEvents ?? []).filter((e): e is ConfirmedImportEvent => !!e.treatment && !!e.classification).map((e) => ({ ...e })));
@@ -161,6 +168,7 @@ export default function ImportDocumentDialog({ open, onOpenChange, fileId, onUse
     setResult(null);
     setSettingsHint(false);
     setSelectedFacilities(new Set());
+    setFacilityReview({});
     setTimingConfirmed(false);
     setEventsConfirmed(false);
     setEventChoices([]);
@@ -317,6 +325,9 @@ export default function ImportDocumentDialog({ open, onOpenChange, fileId, onUse
                   <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
                     Extracted details — review before continuing
                   </p>
+                  {(result.loan?.durationWarnings ?? result.lease?.durationWarnings ?? []).map(w => (
+                    <p key={w} className="text-xs text-amber-800">{w}</p>
+                  ))}
                   <div className="rounded-lg border divide-y max-h-56 overflow-y-auto text-sm">
                     {rows.map((r) => (
                       <div key={r.label} className="flex items-center justify-between gap-3 px-3 py-1.5">
@@ -407,8 +418,9 @@ export default function ImportDocumentDialog({ open, onOpenChange, fileId, onUse
                 )}
                 <div className="rounded-lg border divide-y max-h-56 overflow-y-auto text-sm">
                   {(result.facilities ?? []).map((f, i) => (
-                    <label key={i} className="flex items-start gap-3 px-3 py-2 cursor-pointer hover:bg-muted/30">
+                    <div key={i} className="flex items-start gap-3 px-3 py-2 hover:bg-muted/30">
                       <Checkbox
+                        aria-label={`Select ${f.name ?? `Facility ${i + 1}`}`}
                         checked={selectedFacilities.has(i)}
                         onCheckedChange={(checked) => {
                           setSelectedFacilities((prev) => {
@@ -426,15 +438,27 @@ export default function ImportDocumentDialog({ open, onOpenChange, fileId, onUse
                           {[
                             f.principal != null ? formatCurrency(f.principal) : "Amount not stated",
                             f.interestRate != null ? `${f.interestRate}%` : null,
-                            f.amortizationYears != null ? `${f.amortizationYears} yr amortization` : null,
+                            f.termMonths != null ? `Term: ${durationLabel(f.termMonths, f.termQuote)}` : null,
+                            f.amortizationMonths != null ? `Amortization: ${durationLabel(f.amortizationMonths, f.amortizationQuote)}` : null,
                             f.startDate ?? null,
                             f.interestMethod ? `${interestMethods[f.interestMethod as InterestMethod].label}: “${f.interestMethodQuote}”` : "Daily · 365-day year (default, not confirmed)",
                           ]
                             .filter(Boolean)
                             .join(" · ")}
                         </span>
+                        {selectedFacilities.has(i) && (f.durationWarnings ?? []).map(w =>
+                          <span key={w} className="block text-xs text-amber-800">{w}</span>)}
+                        {selectedFacilities.has(i) && (["termMonths", "amortizationMonths"] as const).map(key =>
+                          f[key] == null && <label key={key} className="block mt-2 text-xs">
+                            {key === "termMonths" ? "Reviewed term" : "Reviewed amortization"} (months)
+                            <Input type="number" min={1} step={1} value={facilityReview[i]?.[key] ?? ""}
+                              onChange={e => {
+                                const v = e.target.value === "" ? undefined : Number(e.target.value);
+                                setFacilityReview(prev => ({ ...prev, [i]: { ...prev[i], [key]: v } }));
+                              }} />
+                          </label>)}
                       </span>
-                    </label>
+                    </div>
                   ))}
                 </div>
                 <p className="text-xs text-muted-foreground bg-muted/50 border rounded-lg p-2">
@@ -497,8 +521,9 @@ export default function ImportDocumentDialog({ open, onOpenChange, fileId, onUse
           {result?.classification === "master_agreement" && (
             <Button
               className="gap-2"
+              disabled={!durationsReady}
               onClick={() => {
-                onUseMasterAgreement(result, Array.from(selectedFacilities).sort((a, b) => a - b));
+                onUseMasterAgreement({ ...result, facilities: reviewedFacilities }, Array.from(selectedFacilities).sort((a, b) => a - b));
                 handleOpenChange(false);
               }}
             >

@@ -2602,6 +2602,13 @@ components:
     ImportedLoanFields:
       type: object
       properties:
+        termMonths: { type: ["number", "null"] }
+        amortizationMonths: { type: ["number", "null"] }
+        termQuote: { type: ["string", "null"] }
+        amortizationQuote: { type: ["string", "null"] }
+        durationWarnings:
+          type: array
+          items: { type: string }
         name:
           type: string
           nullable: true
@@ -2695,6 +2702,10 @@ components:
     ImportedLeaseFields:
       type: object
       properties:
+        termQuote: { type: ["string", "null"] }
+        durationWarnings:
+          type: array
+          items: { type: string }
         name:
           type: string
           nullable: true
