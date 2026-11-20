@@ -17,6 +17,7 @@ import {
   TooltipContent,
 } from "@/components/ui/tooltip";
 import { HelpCircle, Search, ArrowLeft, ChevronRight, MapPin, BookOpen, SearchX } from "lucide-react";
+import { notifyExcelError } from "@/lib/excel-download-error";
 import { HELP_TOPICS, getTopic, getDefaultTopicId, searchTopics, type HelpTopic } from "@/lib/help-content";
 
 function highlight(text: string, query: string) {
@@ -163,6 +164,17 @@ export function HelpDialog() {
                       </p>
                     ))}
                   </div>
+                  {activeTopic.id === "workpapers-exports" && (
+                    <section className="space-y-2 border-t pt-3">
+                      <h4 className="font-semibold text-sm">Illustrative Excel downloads</h4>
+                      <p className="text-sm text-muted-foreground">These examples use fictitious agreements, not client records.</p>
+                      <div className="flex flex-wrap gap-2">
+                        {([['Schedule', 'Schedule'], ['Annual', 'Annual breakdown'], ['Lead-Sheet', 'Lead Sheet'], ['Supporting-Workpapers', 'Supporting workpapers']] as const).map(([kind, label]) => (
+                          <Button key={kind} variant="outline" size="sm" onClick={() => import('@/lib/excel-examples').then(m => m.downloadExcelExample(kind)).catch(notifyExcelError)}>{label}</Button>
+                        ))}
+                      </div>
+                    </section>
+                  )}
                   {activeTopic.related.length > 0 && (
                     <div className="border-t pt-3 space-y-2">
                       <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">

@@ -1,8 +1,7 @@
-import * as XLSX from "xlsx";
 import { saveAs } from "file-saver";
-import { applyExcelNumberTypes } from "./excel-numbers";
-import { jsPDF } from "jspdf";
-import autoTable from "jspdf-autotable";
+import { PrintReport, type PrintTable, type Orientation } from "./print-report";
+import { printRateTimeline } from "./print-rate-evidence";
+import { printPayments, scheduleOrientation } from "./loan-print";
 import { format, parseISO, subYears, isAfter } from "date-fns";
 import { formatCurrency } from "@/lib/format";
 import { type AmortizationRow } from "@workspace/amortization";
@@ -94,12 +93,24 @@ export interface Workpaper {
   clientName: string;
   fyeLabel: string;
   sections: WpSection[];
+  printRateEvidence?: PrintTable;
   /** Full booked amortization schedule appendix (loans & capital leases). */
   schedule: AmortizationRow[] | null;
 }
 
 const money = (n: number) => formatCurrency(n);
-const pct = (n: number) => `${n.toFixed(2)}%`;
+// Excel can consume the same rows without first rounding them for print. Composite
+// descriptions always use the existing display formatters, including in Excel.
+interface ReportNumbers {
+  amount(value: number): number | string;
+  deduction(value: number): number | string;
+  rate(value: number, places?: number): number | string;
+}
+const displayNumbers: ReportNumbers = {
+  amount: money, deduction: n => `(${money(n)})`, rate: (n, places = 2) => `${n.toFixed(places)}%`,
+};
+export const excelNumbers: ReportNumbers = { amount: n => n, deduction: n => -n, rate: n => n / 100 };
+
 
 function fvDecisionLabel(d: string | null | undefined): string {
   switch (d) {
@@ -120,6 +131,7 @@ export function buildLoanWorkpaper(
   loan: WorkpaperLoanInput,
   meta: WorkpaperMeta,
   master?: WorkpaperMasterInput | null,
+  cells = displayNumbers,
 ): Workpaper | null {
   if (loan.leaseEndingTerms && (loan.leaseEndingTerms.status !== "reviewed" || leaseScheduleSupportIssue(loan))) {
     throw new Error(`${loan.name}: resolve and review lease ending terms before exporting accounting figures.`);
@@ -132,7 +144,7 @@ export function buildLoanWorkpaper(
   const fyeLabel = format(reportYearEnd, "MMMM d, yyyy");
 
   const workpaper = "monthlyStraightLineExpense" in summary
-    ? buildOperatingLeaseWorkpaper(loan, summary, meta, fyeLabel, reportYearEnd)
+    ? buildOperatingLeaseWorkpaper(loan, summary, meta, fyeLabel, reportYearEnd, cells)
     : buildDebtWorkpaper(
         loan,
         summary as LoanSummary | CapitalLeaseSummary,
@@ -140,8 +152,9 @@ export function buildLoanWorkpaper(
         fyeLabel,
         reportYearEnd,
         master ?? null,
+        cells,
       );
-  appendTransitionEvidence(workpaper, loan);
+  appendTransitionEvidence(workpaper, loan, cells);
   if (loan.leaseEndingTerms) {
     const ending = loan.leaseEndingTerms;
     workpaper.sections.push({
@@ -168,7 +181,7 @@ function agreementKind(loan: WorkpaperLoanInput): "loan" | "capital_lease" | "op
     : "loan";
 }
 
-function appendTransitionEvidence(workpaper: Workpaper, loan: WorkpaperLoanInput): void {
+function appendTransitionEvidence(workpaper: Workpaper, loan: WorkpaperLoanInput, cells: ReportNumbers): void {
   const assessment = loan.modificationAssessment;
   const predecessor = loan.predecessorAgreement as WorkpaperLoanInput | null | undefined;
   const effectiveDate = loan.modificationEffectiveDate;
@@ -185,13 +198,13 @@ function appendTransitionEvidence(workpaper: Workpaper, loan: WorkpaperLoanInput
       ["Rationale", assessment.conclusion.rationale],
       ["Confirmed", `${assessment.confirmedBy} · ${assessment.confirmedAt}`],
       ...(assessment.evidence.quantitativeTest ? [
-        ["Original effective rate", `${assessment.evidence.quantitativeTest.originalEffectiveRate.toFixed(4)}%`],
-        ["Carrying amount at effective date", money(assessment.evidence.quantitativeTest.carryingAmount)],
-        ["PV — original remaining cash flows", assessment.evidence.quantitativeTest.presentValueOfOriginalRemainingCashFlows == null ? "Not supplied" : money(assessment.evidence.quantitativeTest.presentValueOfOriginalRemainingCashFlows)],
-        ["PV — modified cash flows", assessment.evidence.quantitativeTest.presentValueOfModifiedCashFlows == null ? "Not supplied" : money(assessment.evidence.quantitativeTest.presentValueOfModifiedCashFlows)],
+        ["Original effective rate", cells.rate(assessment.evidence.quantitativeTest.originalEffectiveRate, 4)],
+        ["Carrying amount at effective date", cells.amount(assessment.evidence.quantitativeTest.carryingAmount)],
+        ["PV — original remaining cash flows", assessment.evidence.quantitativeTest.presentValueOfOriginalRemainingCashFlows == null ? "Not supplied" : cells.amount(assessment.evidence.quantitativeTest.presentValueOfOriginalRemainingCashFlows)],
+        ["PV — modified cash flows", assessment.evidence.quantitativeTest.presentValueOfModifiedCashFlows == null ? "Not supplied" : cells.amount(assessment.evidence.quantitativeTest.presentValueOfModifiedCashFlows)],
         ["PV difference / percentage", `${money(assessment.evidence.quantitativeTest.differenceAmount)} / ${assessment.evidence.quantitativeTest.differencePercent.toFixed(4)}%`],
         ["Retained / new fees and costs", `${money(assessment.evidence.quantitativeTest.retainedFeesAndCosts)} / ${money(assessment.evidence.quantitativeTest.newFeesAndCosts)}`],
-        ["Settlement consideration", assessment.evidence.quantitativeTest.settlementConsideration == null ? "Not applicable" : money(assessment.evidence.quantitativeTest.settlementConsideration)],
+        ["Settlement consideration", assessment.evidence.quantitativeTest.settlementConsideration == null ? "Not applicable" : cells.amount(assessment.evidence.quantitativeTest.settlementConsideration)],
         ["Quantitative recommendation", assessment.evidence.quantitativeTest.recommendation],
         ["Original remaining cash flows", assessment.evidence.quantitativeTest.originalRemainingCashFlows.map((flow) => `${flow.date} ${money(flow.amount)} (${flow.description}; ${flow.sourceReference})`).join("; ")],
         ["Modified cash flows", assessment.evidence.quantitativeTest.modifiedCashFlows.map((flow) => `${flow.date} ${money(flow.amount)} (${flow.description}; ${flow.sourceReference})`).join("; ")],
@@ -201,7 +214,7 @@ function appendTransitionEvidence(workpaper: Workpaper, loan: WorkpaperLoanInput
         ["Lease transition evidence", assessment.conclusion.leaseTransition.terminationEvidenceReference],
         ["Transition entry evidence", `${assessment.conclusion.leaseTransition.entryDate}: ${assessment.conclusion.leaseTransition.debitAccount} / ${assessment.conclusion.leaseTransition.creditAccount} ${money(assessment.conclusion.leaseTransition.amount)}; ${assessment.conclusion.leaseTransition.entryEvidenceReference}`],
         ["Predecessor lease balances", `Deferred rent asset ${money(assessment.conclusion.leaseTransition.predecessorDeferredRentAsset ?? 0)}; liability ${money(assessment.conclusion.leaseTransition.predecessorDeferredRentLiability ?? 0)}; asset cost ${money(assessment.conclusion.leaseTransition.predecessorAssetCost ?? 0)}; accumulated depreciation ${money(assessment.conclusion.leaseTransition.predecessorAccumulatedDepreciation ?? 0)}`],
-        ["Successor lease initial amount", money(assessment.conclusion.leaseTransition.successorInitialAmount)],
+        ["Successor lease initial amount", cells.amount(assessment.conclusion.leaseTransition.successorInitialAmount)],
       ] : []),
       ...assessment.evidence.contractualChanges.map((change) => [
         change.term,
@@ -235,8 +248,8 @@ function appendTransitionEvidence(workpaper: Workpaper, loan: WorkpaperLoanInput
       rows: entries.flatMap((entry) => entry.lines.map((line, index) => [
         index === 0 ? `${entry.date} — ${entry.memo}` : "",
         line.account,
-        line.debit ? money(line.debit) : "",
-        line.credit ? money(line.credit) : "",
+        line.debit ? cells.amount(line.debit) : "",
+        line.credit ? cells.amount(line.credit) : "",
       ])),
       notes: [
         assessment.conclusion.accountingTreatment === "continuation"
@@ -255,7 +268,8 @@ function buildDebtWorkpaper(
   meta: WorkpaperMeta,
   fyeLabel: string,
   reportYearEnd: Date,
-  master: WorkpaperMasterInput | null = null,
+  master: WorkpaperMasterInput | null,
+  cells: ReportNumbers,
 ): Workpaper {
   const isCapital = summary.isCapitalLease;
   const typeLabel = isCapital ? "Capital Lease" : "Loan";
@@ -276,8 +290,8 @@ function buildDebtWorkpaper(
   /* 1 — Terms */
   const termsRows: (string | number)[][] = [
     ["Counterparty", loan.counterparty?.trim() || "—"],
-    [isCapital ? "Capitalized amount" : "Principal", money(principal)],
-    ["Stated rate", pct(statedRate)],
+    [isCapital ? "Capitalized amount" : "Principal", cells.amount(principal)],
+    ["Stated rate", cells.rate(statedRate)],
     ["Start date", format(startDate, "MMMM d, yyyy")],
     ["Maturity date", summary.maturityDate],
     [
@@ -296,12 +310,12 @@ function buildDebtWorkpaper(
   ];
   if (downPayment > 0) {
     termsRows.splice(2, 0,
-      [isCapital ? "Down payment / first payment" : "Down payment", `(${money(downPayment)})`],
-      [isCapital ? "Obligation financed" : "Amount financed", money(financed)],
+      [isCapital ? "Down payment / first payment" : "Down payment", cells.deduction(downPayment)],
+      [isCapital ? "Obligation financed" : "Amount financed", cells.amount(financed)],
     );
   }
   if (Number(loan.balloonPayment ?? 0) > 0) {
-    termsRows.push(["Balloon payment", money(Number(loan.balloonPayment))]);
+    termsRows.push(["Balloon payment", cells.amount(Number(loan.balloonPayment))]);
   }
   if ((loan.ioMonths ?? 0) > 0) {
     termsRows.push(["Interest-only period", `${loan.ioMonths} months`]);
@@ -367,7 +381,7 @@ function buildDebtWorkpaper(
       head: ["Date", "Amount", "Order / treatment", "Classification & provenance"],
       rows: loan.activeEvents!.map((event) => [
         format(parseISO(event.effectiveDate), "MMMM d, yyyy"),
-        money(Number(event.amount)),
+        cells.amount(Number(event.amount)),
         `${event.ordering === "before_scheduled_payment" ? "Before scheduled payment" : "After scheduled payment"} · #${event.sequence} · ${event.treatment === "keep_maturity" ? "Keep maturity / recast" : "Keep payment / earlier payoff"}`,
         `${event.classification} · ${event.source} · ${event.reason}`,
       ]),
@@ -381,10 +395,10 @@ function buildDebtWorkpaper(
       ["Assessment", fvDecisionLabel(loan.fvDecision)],
     ];
     if (usesFairValue(loan)) {
-      fvRows.push(["Market (effective) rate", pct(Number(loan.fvRate))]);
+      fvRows.push(["Market (effective) rate", cells.rate(Number(loan.fvRate))]);
       if (booked.fairValue != null) {
-        fvRows.push(["Fair value at inception", money(booked.fairValue)]);
-        fvRows.push(["Day-one discount", money(financed - booked.fairValue)]);
+        fvRows.push(["Fair value at inception", cells.amount(booked.fairValue)]);
+        fvRows.push(["Day-one discount", cells.amount(financed - booked.fairValue)]);
       }
     }
     sections.push({
@@ -427,13 +441,13 @@ function buildDebtWorkpaper(
       head: ["Item", "Detail"],
       rows: [
         ["Classification", "Capital lease"],
-        ["Discount rate used", pct(summary.interestRate)],
+        ["Discount rate used", cells.rate(summary.interestRate)],
         [
           "Total minimum lease payments",
-          money((summary as CapitalLeaseSummary).totalMinimumPayments),
+          cells.amount((summary as CapitalLeaseSummary).totalMinimumPayments),
         ],
-        ["Implied interest", money((summary as CapitalLeaseSummary).impliedInterest)],
-        ["Obligation at year end (PV)", money((summary as CapitalLeaseSummary).obligations)],
+        ["Implied interest", cells.amount((summary as CapitalLeaseSummary).impliedInterest)],
+        ["Obligation at year end (PV)", cells.amount((summary as CapitalLeaseSummary).obligations)],
       ],
       notes: [
         "Classification support: document which ASPE 3065.06 criteria were met (transfer of ownership / bargain purchase option, lease term vs. economic life, PV of minimum payments vs. fair value of the asset).",
@@ -460,11 +474,11 @@ function buildDebtWorkpaper(
     title: `Continuity — Year Ended ${fyeLabel}`,
     head: ["Item", "Amount"],
     rows: [
-      ["Opening balance", money(openingBalance)],
-      ["Advances / additions during the year", money(advances)],
-      ["Principal repayments", `(${money(principalRepaidFY)})`],
-      ["Closing balance per schedule", money(closing)],
-      ["Interest expense for the year", money(interestExpenseFY)],
+      ["Opening balance", cells.amount(openingBalance)],
+      ["Advances / additions during the year", cells.amount(advances)],
+      ["Principal repayments", cells.deduction(principalRepaidFY)],
+      ["Closing balance per schedule", cells.amount(closing)],
+      ["Interest expense for the year", cells.amount(interestExpenseFY)],
     ],
     notes:
       Math.abs(continuityCheck - closing) > 0.02
@@ -480,16 +494,16 @@ function buildDebtWorkpaper(
     head: ["Item", "Amount"],
     rows: summary.covenantViolation
       ? [
-          ["Balance at year end", money(summary.balanceAtYearEnd)],
-          ["Current portion (entire balance — covenant violation)", money(summary.currentPortion)],
-          ["  Scheduled repayments due within one year", money(summary.scheduledWithinOneYear)],
-          ["  Scheduled repayments due beyond one year, callable", money(summary.scheduledBeyondOneYear)],
-          ["Long-term portion", money(summary.longTermPortion)],
+          ["Balance at year end", cells.amount(summary.balanceAtYearEnd)],
+          ["Current portion (entire balance — covenant violation)", cells.amount(summary.currentPortion)],
+          ["  Scheduled repayments due within one year", cells.amount(summary.scheduledWithinOneYear)],
+          ["  Scheduled repayments due beyond one year, callable", cells.amount(summary.scheduledBeyondOneYear)],
+          ["Long-term portion", cells.amount(summary.longTermPortion)],
         ]
       : [
-          ["Balance at year end", money(summary.balanceAtYearEnd)],
-          ["Current portion (due within 12 months)", money(summary.currentPortion)],
-          ["Long-term portion", money(summary.longTermPortion)],
+          ["Balance at year end", cells.amount(summary.balanceAtYearEnd)],
+          ["Current portion (due within 12 months)", cells.amount(summary.currentPortion)],
+          ["Long-term portion", cells.amount(summary.longTermPortion)],
         ],
     notes: summary.covenantViolation
       ? [
@@ -501,8 +515,8 @@ function buildDebtWorkpaper(
     title: "Principal Repayments — Next Five Years (Disclosure)",
     head: ["Fiscal year", "Principal"],
     rows: [
-      ...summary.yearlyPrincipal.map((y) => [y.label, money(y.amount)]),
-      ["Total", money(summary.yearlyPrincipal.reduce((s, y) => s + y.amount, 0))],
+      ...summary.yearlyPrincipal.map((y) => [y.label, cells.amount(y.amount)]),
+      ["Total", cells.amount(summary.yearlyPrincipal.reduce((s, y) => s + y.amount, 0))],
     ],
   });
   if (isCapital) {
@@ -511,10 +525,10 @@ function buildDebtWorkpaper(
       title: "Future Minimum Lease Payments (Disclosure)",
       head: ["Fiscal year", "Payment"],
       rows: [
-        ...cl.yearlyBlended.map((y) => [y.label, money(y.amount)]),
-        ["Total minimum lease payments", money(cl.totalMinimumPayments)],
-        ["Less: amount representing interest", `(${money(cl.impliedInterest)})`],
-        ["Obligation under capital lease", money(cl.obligations)],
+        ...cl.yearlyBlended.map((y) => [y.label, cells.amount(y.amount)]),
+        ["Total minimum lease payments", cells.amount(cl.totalMinimumPayments)],
+        ["Less: amount representing interest", cells.deduction(cl.impliedInterest)],
+        ["Obligation under capital lease", cells.amount(cl.obligations)],
       ],
     });
   }
@@ -533,8 +547,8 @@ function buildDebtWorkpaper(
         rows: accounting.dayOne.lines.map((line, index) => [
           index === 0 ? `${accounting.dayOne!.date} — ${accounting.dayOne!.label}` : "",
           line.account,
-          line.debit ? money(line.debit) : "",
-          line.credit ? money(line.credit) : "",
+          line.debit ? cells.amount(line.debit) : "",
+          line.credit ? cells.amount(line.credit) : "",
         ]),
         notes: ["Recognition-date measurement uses timing-aware, event-adjusted contractual cash flows. For prime-linked instruments, only the frozen approved recognition-date assumptions are used; realized resets are excluded."],
       });
@@ -545,8 +559,8 @@ function buildDebtWorkpaper(
       rows: accounting.annualEntries.flatMap((entry) => entry.lines.map((line, index) => [
         index === 0 ? `${entry.date} — ${entry.label}` : "",
         line.account,
-        line.debit ? money(line.debit) : "",
-        line.credit ? money(line.credit) : "",
+        line.debit ? cells.amount(line.debit) : "",
+        line.credit ? cells.amount(line.credit) : "",
       ])),
       notes: ["Each entry contains only that fiscal year's effective-interest activity less stated contractual interest. Opening retained earnings is not part of the recurring entry."],
     });
@@ -555,10 +569,10 @@ function buildDebtWorkpaper(
       head: ["Fiscal year", "Day one", "Prior years", "Current year", "Remaining discount"],
       rows: accounting.cumulativeSupport.map((item) => [
         String((item.evidence.fiscalYear as number | undefined) ?? item.date),
-        money(item.dayOneDifference),
-        money(item.priorYearsAccretion),
-        money(item.currentYearAccretion),
-        money(item.remainingDiscount),
+        cells.amount(item.dayOneDifference),
+        cells.amount(item.priorYearsAccretion),
+        cells.amount(item.currentYearAccretion),
+        cells.amount(item.remainingDiscount),
       ]),
       notes: ["Supporting cumulative catch-up only; do not post it in addition to the distinct day-one and annual entries."],
     });
@@ -569,7 +583,7 @@ function buildDebtWorkpaper(
   if (loan.collateralType) {
     collateralRows.push(["Collateral", loan.collateralDescription || loan.collateralType]);
     if (summary.collateralNbv != null) {
-      collateralRows.push(["Net book value at year end", money(summary.collateralNbv)]);
+      collateralRows.push(["Net book value at year end", cells.amount(summary.collateralNbv)]);
     }
   }
   if (loan.securityClauses && loan.securityClauses.length > 0) {
@@ -611,6 +625,7 @@ function buildDebtWorkpaper(
     fyeLabel,
     sections,
     schedule: booked.schedule,
+    printRateEvidence: printRateTimeline(loan),
   };
 }
 
@@ -620,6 +635,7 @@ function buildOperatingLeaseWorkpaper(
   meta: WorkpaperMeta,
   fyeLabel: string,
   reportYearEnd: Date,
+  cells: ReportNumbers,
 ): Workpaper {
   const { month: fyEndMonth, day: fyEndDay } = getFyEndParts(meta.fiscalYearEnd);
   const reportFY = getFiscalYear(reportYearEnd, fyEndMonth, fyEndDay);
@@ -627,16 +643,16 @@ function buildOperatingLeaseWorkpaper(
 
   const termsRows: (string | number)[][] = [
     ["Lessor", summary.counterparty ?? "—"],
-    ["Monthly payment", money(summary.monthlyPayment)],
+    ["Monthly payment", cells.amount(summary.monthlyPayment)],
     ["Start date", format(parseISO(summary.startDate), "MMMM d, yyyy")],
     ["Term", `${summary.termMonths} months`],
-    ["Total lease commitment", money(summary.totalCommitment)],
+    ["Total lease commitment", cells.amount(summary.totalCommitment)],
   ];
   if ((loan.freeRentMonths ?? 0) > 0) termsRows.push(["Free rent period", `${loan.freeRentMonths} months`]);
   if (Number(loan.tenantImprovementAllowance ?? 0) > 0)
-    termsRows.push(["Tenant improvement allowance", money(Number(loan.tenantImprovementAllowance))]);
+    termsRows.push(["Tenant improvement allowance", cells.amount(Number(loan.tenantImprovementAllowance))]);
   if (Number(loan.otherInducements ?? 0) > 0)
-    termsRows.push(["Other inducements", money(Number(loan.otherInducements))]);
+    termsRows.push(["Other inducements", cells.amount(Number(loan.otherInducements))]);
   sections.push({ title: "Terms", head: ["Item", "Detail"], rows: termsRows });
 
   sections.push({
@@ -656,13 +672,13 @@ function buildOperatingLeaseWorkpaper(
     title: `Rent Expense — Year Ended ${fyeLabel}`,
     head: ["Item", "Amount"],
     rows: [
-      ["Straight-line monthly expense", money(summary.monthlyStraightLineExpense)],
-      ["Straight-line rent expense for the year", money(slExpenseFY)],
-      ["Cash rent for the year", money(summary.yearlyCash.find((y) => y.fiscalYear === reportFY)?.amount ?? 0)],
-      ["Deferred rent (liability) at year end", money(summary.deferredRentAtYearEnd)],
-      ["Total inducements", money(summary.totalInducements)],
-      ["Inducement liability — current", money(summary.inducementLiabilityCurrent)],
-      ["Inducement liability — non-current", money(summary.inducementLiabilityNonCurrent)],
+      ["Straight-line monthly expense", cells.amount(summary.monthlyStraightLineExpense)],
+      ["Straight-line rent expense for the year", cells.amount(slExpenseFY)],
+      ["Cash rent for the year", cells.amount(summary.yearlyCash.find((y) => y.fiscalYear === reportFY)?.amount ?? 0)],
+      ["Deferred rent (liability) at year end", cells.amount(summary.deferredRentAtYearEnd)],
+      ["Total inducements", cells.amount(summary.totalInducements)],
+      ["Inducement liability — current", cells.amount(summary.inducementLiabilityCurrent)],
+      ["Inducement liability — non-current", cells.amount(summary.inducementLiabilityNonCurrent)],
     ],
     notes: [
       "Rent is recognized on a straight-line basis over the lease term; inducements are amortized as a reduction of rent expense (ASPE 3065.27).",
@@ -673,8 +689,8 @@ function buildOperatingLeaseWorkpaper(
     title: "Future Minimum Lease Payments (Disclosure)",
     head: ["Fiscal year", "Payment"],
     rows: [
-      ...summary.yearlyPayments.map((y) => [y.label, money(y.amount)]),
-      ["Total", money(summary.yearlyPayments.reduce((s, y) => s + y.amount, 0))],
+      ...summary.yearlyPayments.map((y) => [y.label, cells.amount(y.amount)]),
+      ["Total", cells.amount(summary.yearlyPayments.reduce((s, y) => s + y.amount, 0))],
     ],
   });
 
@@ -696,129 +712,42 @@ function buildOperatingLeaseWorkpaper(
 
 /* ── PDF rendering ───────────────────────────────────────────── */
 
-const HEAD_COLOR: [number, number, number] = [24, 95, 45];
+function workpaperIdentity(wp: Workpaper, inPackage: boolean) {
+  return { title: `${inPackage ? "Consolidated Workpapers  /  " : ""}${wp.typeLabel} Workpaper`,
+    subject: `${wp.loanName}\n${wp.clientName}`, period: `Year ended ${wp.fyeLabel}` };
+}
 
-function renderWorkpaperPdf(doc: jsPDF, wp: Workpaper, startNewPage: boolean): void {
-  if (startNewPage) doc.addPage();
-  doc.setFontSize(16);
-  doc.setTextColor(0);
-  doc.text(`${wp.loanName} — ${wp.typeLabel} Workpaper`, 14, 18);
-  doc.setFontSize(10);
-  doc.setTextColor(100);
-  doc.text(`${wp.clientName} · Year ended ${wp.fyeLabel}`, 14, 25);
-
-  let y = 32;
-  for (const section of wp.sections) {
-    const est = 10 + section.rows.length * 7 + (section.notes?.length ?? 0) * 8;
-    if (y + est > 275 && y > 40) {
-      doc.addPage();
-      y = 18;
-    }
-    doc.setFontSize(11);
-    doc.setTextColor(0);
-    doc.text(section.title, 14, y);
-    autoTable(doc, {
-      startY: y + 2,
-      head: [section.head],
-      body: section.rows.map((r) => r.map(String)),
-      theme: "grid",
-      headStyles: { fillColor: HEAD_COLOR, fontSize: 8 },
-      bodyStyles: { fontSize: 8 },
-      margin: { left: 14, right: 14 },
-    });
-    y = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 4;
-    if (section.notes) {
-      doc.setFontSize(7.5);
-      doc.setTextColor(100);
-      for (const note of section.notes) {
-        const lines = doc.splitTextToSize(note, 180) as string[];
-        const blockHeight = lines.length * 3.5 + 2;
-        if (y + blockHeight > 285) {
-          doc.addPage();
-          y = 18;
-          doc.setFontSize(7.5);
-          doc.setTextColor(100);
-        }
-        doc.text(lines, 14, y);
-        y += blockHeight;
-      }
-    }
-    y += 4;
+function renderWorkpaperPdf(report: PrintReport, wp: Workpaper, inPackage: boolean) {
+  const identity = workpaperIdentity(wp, inPackage);
+  if (inPackage) report.newPart(identity, "portrait");
+  // The paper review order is independent of the workbook's tab order.
+  const summaryFirst = (s: WpSection) => /^(Continuity|Rent Expense|Balance Sheet Presentation|Principal Repayments|Future Minimum Lease Payments)/.test(s.title) ? 0 : 1;
+  let orientation: Orientation = "portrait";
+  const sections = [...wp.sections];
+  if (wp.printRateEvidence) {
+    const i = sections.findIndex(s => s.title === wp.printRateEvidence!.title);
+    sections.splice(i < 0 ? sections.length : i, i < 0 ? 0 : 1, wp.printRateEvidence);
   }
-
-  if (wp.schedule && wp.schedule.length > 0) {
-    doc.addPage();
-    doc.setFontSize(11);
-    doc.setTextColor(0);
-    doc.text(`Appendix — Full Amortization Schedule (${wp.loanName})`, 14, 18);
-    autoTable(doc, {
-      startY: 22,
-      head: [["Period", "Date", "Payment", "Principal", "Interest", "Balance"]],
-      body: wp.schedule.map((r) => [
-        r.month,
-        format(r.date, "MMMM d, yyyy"),
-        money(r.payment),
-        money(r.principal),
-        money(r.interest),
-        money(r.balance),
-      ]),
-      theme: "striped",
-      headStyles: { fillColor: HEAD_COLOR, fontSize: 8 },
-      bodyStyles: { fontSize: 7 },
-      margin: { left: 14, right: 14 },
-    });
+  for (const section of sections.sort((a, b) => summaryFirst(a) - summaryFirst(b))) {
+    const wide = section.head.length >= 5 && section.head.includes("Origin / provenance");
+    const desired = wide ? "landscape" : "portrait";
+    if (desired !== orientation) { report.newPart(identity, desired); orientation = desired; }
+    const right = section.head.flatMap((h,i) => /^(amount|principal|payment|debit|credit|day one|prior years|current year|remaining discount)$/i.test(h) ? [i] : []);
+    report.table({ ...section, widths: section.head.length === 2 ? (right.includes(1) ? [65,35] : [30,70]) : wide ? wp.printRateEvidence?.widths : undefined, right });
+  }
+  if (wp.schedule?.length) {
+    report.newPart(identity, scheduleOrientation(wp.schedule));
+    printPayments(report, "Appendix — Full Amortization Schedule", wp.schedule);
   }
 }
 
 export function exportLoanWorkpaperPdf(wp: Workpaper): void {
-  const doc = new jsPDF();
-  renderWorkpaperPdf(doc, wp, false);
-  doc.save(`${wp.loanName}_Workpaper.pdf`);
+  const report = new PrintReport(workpaperIdentity(wp, false));
+  renderWorkpaperPdf(report, wp, false);
+  report.finish().save(`${wp.loanName}_Workpaper.pdf`);
 }
 
-/* ── Excel rendering ─────────────────────────────────────────── */
-
-function usedSheetNameSafe(base: string, used: Set<string>): string {
-  const safeBase = base.replace(/[\\/?*[\]:]/g, "").trim() || "Sheet";
-  let name = safeBase.slice(0, 31);
-  let i = 2;
-  while (used.has(name)) {
-    const suffix = ` (${i})`;
-    name = safeBase.slice(0, 31 - suffix.length) + suffix;
-    i++;
-  }
-  used.add(name);
-  return name;
-}
-
-function sectionsToAoa(wp: Workpaper): (string | number)[][] {
-  const aoa: (string | number)[][] = [
-    [`${wp.loanName} — ${wp.typeLabel} Workpaper`],
-    [`${wp.clientName} · Year ended ${wp.fyeLabel}`],
-    [],
-  ];
-  for (const section of wp.sections) {
-    aoa.push([section.title]);
-    aoa.push(section.head);
-    for (const row of section.rows) aoa.push(row);
-    if (section.notes) for (const note of section.notes) aoa.push([note]);
-    aoa.push([]);
-  }
-  return aoa;
-}
-
-function scheduleSheet(schedule: AmortizationRow[]): XLSX.WorkSheet {
-  return XLSX.utils.json_to_sheet(
-    schedule.map((r) => ({
-      Period: r.month,
-      Date: format(r.date, "MMMM d, yyyy"),
-      Payment: r.payment.toFixed(2),
-      Principal: r.principal.toFixed(2),
-      Interest: r.interest.toFixed(2),
-      Balance: r.balance.toFixed(2),
-    })),
-  );
-}
+/* ── Excel rendering ───────────────────────────────────────────── */
 
 export async function exportLoanWorkpaperXlsx(wp: Workpaper): Promise<void> {
   // The table-aware writer is only loaded when downloading an individual workpaper.
@@ -851,7 +780,7 @@ function orderByMaster(loans: WorkpaperLoanInput[], masters: WorkpaperMasterInpu
   return grouped;
 }
 
-interface LeadSheetData {
+export interface LeadSheetData {
   debtRows: (string | number)[][];
   debtTotals: (string | number)[];
   debtBreakdownRows: (string | number)[][];
@@ -861,7 +790,9 @@ interface LeadSheetData {
   fyeLabel: string;
 }
 
-function buildLeadSheet(input: FileWorkpaperInput, workpapers: Workpaper[]): LeadSheetData {
+export function buildLeadSheet(input: FileWorkpaperInput, workpapers: Workpaper[],
+  cells = displayNumbers,
+): LeadSheetData {
   const reportYearEnd = parseISO(input.fiscalYearEnd);
   const { month: fyEndMonth, day: fyEndDay } = getFyEndParts(input.fiscalYearEnd);
   const reportFY = getFiscalYear(reportYearEnd, fyEndMonth, fyEndDay);
@@ -895,10 +826,10 @@ function buildLeadSheet(input: FileWorkpaperInput, workpapers: Workpaper[]): Lea
       operatingRows.push([
         summary.name,
         summary.counterparty ?? "—",
-        money(summary.monthlyPayment),
-        money(sl),
-        money(summary.deferredRentAtYearEnd),
-        money(summary.totalCommitment),
+        cells.amount(summary.monthlyPayment),
+        cells.amount(sl),
+        cells.amount(summary.deferredRentAtYearEnd),
+        cells.amount(summary.totalCommitment),
       ]);
       tRent += sl;
       tCommit += summary.totalCommitment;
@@ -911,12 +842,12 @@ function buildLeadSheet(input: FileWorkpaperInput, workpapers: Workpaper[]): Lea
       debtRows.push([
         s.name,
         s.covenantViolation ? `${baseType} — covenant violation` : baseType,
-        pct(s.interestRate),
+        cells.rate(s.interestRate),
         s.maturityDate,
-        money(s.balanceAtYearEnd),
-        money(s.currentPortion),
-        money(s.longTermPortion),
-        money(interestFY),
+        cells.amount(s.balanceAtYearEnd),
+        cells.amount(s.currentPortion),
+        cells.amount(s.longTermPortion),
+        cells.amount(interestFY),
       ]);
       tBal += s.balanceAtYearEnd;
       tCur += s.currentPortion;
@@ -931,14 +862,14 @@ function buildLeadSheet(input: FileWorkpaperInput, workpapers: Workpaper[]): Lea
   const debtBreakdownRows: (string | number)[][] =
     tBeyond > 0
       ? [
-          ["  Scheduled repayments due within one year", "", "", "", "", money(tWithin), "", ""],
+          ["  Scheduled repayments due within one year", "", "", "", "", cells.amount(tWithin), "", ""],
           [
             "  Scheduled repayments due beyond one year, callable on covenant violation",
             "",
             "",
             "",
             "",
-            money(tBeyond),
+            cells.amount(tBeyond),
             "",
             "",
           ],
@@ -953,22 +884,22 @@ function buildLeadSheet(input: FileWorkpaperInput, workpapers: Workpaper[]): Lea
 
   return {
     debtRows,
-    debtTotals: ["Total", "", "", "", money(tBal), money(tCur), money(tLt), money(tInt)],
+    debtTotals: ["Total", "", "", "", cells.amount(tBal), cells.amount(tCur), cells.amount(tLt), cells.amount(tInt)],
     debtBreakdownRows,
     debtNotes,
     operatingRows,
     operatingTotals:
       operatingRows.length > 0
-        ? ["Total", "", "", money(tRent), "", money(tCommit)]
+        ? ["Total", "", "", cells.amount(tRent), "", cells.amount(tCommit)]
         : null,
     fyeLabel: workpapers[0]?.fyeLabel ?? format(reportYearEnd, "MMMM d, yyyy"),
   };
 }
 
-const DEBT_LEAD_HEAD = ["Name", "Type", "Rate", "Maturity", "Balance", "Current", "Long-term", "Interest exp."];
-const OP_LEAD_HEAD = ["Name", "Lessor", "Monthly", "SL rent exp.", "Deferred rent", "Commitment"];
+export const DEBT_LEAD_HEAD = ["Name", "Type", "Rate", "Maturity", "Balance", "Current", "Long-term", "Interest exp."];
+export const OP_LEAD_HEAD = ["Name", "Lessor", "Monthly", "SL rent exp.", "Deferred rent", "Commitment"];
 
-export function buildFileWorkpapers(input: FileWorkpaperInput): Workpaper[] {
+export function buildFileWorkpapers(input: FileWorkpaperInput, cells = displayNumbers): Workpaper[] {
   const meta: WorkpaperMeta = { clientName: input.clientName, fiscalYearEnd: input.fiscalYearEnd };
   const masterById = new Map((input.masters ?? []).map((m) => [m.id, m]));
   const loanById = new Map(input.loans.map((loan) => [loan.id, loan]));
@@ -990,142 +921,48 @@ export function buildFileWorkpapers(input: FileWorkpaperInput): Workpaper[] {
         },
         meta,
         loan.masterAgreementId ? (masterById.get(loan.masterAgreementId) ?? null) : null,
+        cells,
       ),
     )
     .filter((wp): wp is Workpaper => wp != null);
 }
 
-function renderLeadSheetPdf(doc: jsPDF, input: FileWorkpaperInput, lead: ReturnType<typeof buildLeadSheet>): void {
-  doc.setFontSize(16);
-  doc.text(`${input.clientName} — Debt & Lease Lead Sheet`, 14, 18);
-  doc.setFontSize(10);
-  doc.setTextColor(100);
-  doc.text(`Year ended ${lead.fyeLabel}`, 14, 25);
-  let y = 30;
-  if (lead.debtRows.length > 0) {
-    autoTable(doc, {
-      startY: y,
-      head: [DEBT_LEAD_HEAD],
-      body: lead.debtRows.map((r) => r.map(String)),
-      foot: [
-        lead.debtTotals.map(String),
-        ...lead.debtBreakdownRows.map((r) => r.map(String)),
-      ],
-      theme: "grid",
-      headStyles: { fillColor: HEAD_COLOR, fontSize: 8 },
-      bodyStyles: { fontSize: 8 },
-      footStyles: { fontSize: 8 },
-      margin: { left: 14, right: 14 },
-    });
-    y = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 8;
-    for (const note of lead.debtNotes) {
-      doc.setFontSize(8);
-      doc.setTextColor(150, 30, 30);
-      const wrapped = doc.splitTextToSize(note, 268);
-      doc.text(wrapped, 14, y);
-      y += wrapped.length * 4 + 4;
-      doc.setTextColor(0);
-    }
+function renderLeadSheetPdf(input: FileWorkpaperInput, lead: LeadSheetData, inPackage: boolean) {
+  const report = new PrintReport({ title: inPackage ? "Consolidated Workpapers  /  Lead Sheet" : "Debt & Lease Lead Sheet",
+    subject: input.clientName, period: `Year ended ${lead.fyeLabel}` }, "landscape");
+  if (lead.debtRows.length) {
+    report.table({ title: "Loans and capital leases", head: ["Agreement", "Type", "Rate", "Maturity", "Balance", "Current", "Long-term", "Interest expense"], rows: lead.debtRows,
+      foot: [lead.debtTotals], widths: [20, 13, 7, 12, 12, 12, 12, 12], right: [2, 4, 5, 6, 7] });
+    if (lead.debtBreakdownRows.length) report.table({ title: "Scheduled repayments and callable debt", head: ["Classification", "Amount"],
+      rows: lead.debtBreakdownRows.map(r => [String(r[0]).trim(), r[5]]), widths: [75,25], right: [1] });
+    lead.debtNotes.forEach(note => report.paragraph(note, 9.5));
   }
-  if (lead.operatingRows.length > 0) {
-    doc.setFontSize(11);
-    doc.setTextColor(0);
-    doc.text("Operating Leases", 14, y);
-    autoTable(doc, {
-      startY: y + 2,
-      head: [OP_LEAD_HEAD],
-      body: lead.operatingRows.map((r) => r.map(String)),
-      foot: lead.operatingTotals ? [lead.operatingTotals.map(String)] : undefined,
-      theme: "grid",
-      headStyles: { fillColor: HEAD_COLOR, fontSize: 8 },
-      bodyStyles: { fontSize: 8 },
-      margin: { left: 14, right: 14 },
-    });
-  }
+  if (lead.operatingRows.length) report.table({ title: "Operating leases", head: ["Agreement", "Lessor", "Monthly payment", "Straight-line rent expense", "Deferred rent", "Commitment"], rows: lead.operatingRows,
+    foot: lead.operatingTotals ? [lead.operatingTotals] : undefined, widths: [24,20,14,14,14,14], right: [2,3,4,5] });
+  return report;
 }
 
 export function exportFileWorkpapersPdf(input: FileWorkpaperInput): void {
   const workpapers = buildFileWorkpapers(input);
-  if (workpapers.length === 0) return;
-  const lead = buildLeadSheet(input, workpapers);
-  const doc = new jsPDF({ orientation: "landscape" });
-  renderLeadSheetPdf(doc, input, lead);
-
-  // Individual workpapers follow in portrait-equivalent layout on new pages.
-  for (const wp of workpapers) {
-    renderWorkpaperPdf(doc, wp, true);
-  }
-
-  doc.save(`${input.clientName}_Debt_Lease_Workpapers.pdf`);
+  if (!workpapers.length) return;
+  const report = renderLeadSheetPdf(input, buildLeadSheet(input, workpapers), true);
+  for (const wp of workpapers) renderWorkpaperPdf(report, wp, true);
+  report.finish().save(`${input.clientName}_Debt_Lease_Workpapers.pdf`);
 }
 
 export function exportFileLeadSheetPdf(input: FileWorkpaperInput): void {
   const workpapers = buildFileWorkpapers(input);
-  if (workpapers.length === 0) return;
-  const lead = buildLeadSheet(input, workpapers);
-  const doc = new jsPDF({ orientation: "landscape" });
-  renderLeadSheetPdf(doc, input, lead);
-  doc.save(`${input.clientName}_Debt_Lease_Summary.pdf`);
+  if (!workpapers.length) return;
+  renderLeadSheetPdf(input, buildLeadSheet(input, workpapers), false).finish().save(`${input.clientName}_Debt_Lease_Summary.pdf`);
 }
 
-function buildLeadSheetWs(input: FileWorkpaperInput, lead: ReturnType<typeof buildLeadSheet>): XLSX.WorkSheet {
-  const leadAoa: (string | number)[][] = [
-    [`${input.clientName} — Debt & Lease Lead Sheet`],
-    [`Year ended ${lead.fyeLabel}`],
-    [],
-  ];
-  if (lead.debtRows.length > 0) {
-    leadAoa.push(
-      ["Loans & Capital Leases"],
-      DEBT_LEAD_HEAD,
-      ...lead.debtRows,
-      lead.debtTotals,
-      ...lead.debtBreakdownRows,
-      ...lead.debtNotes.map((n) => [n]),
-      [],
-    );
-  }
-  if (lead.operatingRows.length > 0) {
-    leadAoa.push(["Operating Leases"], OP_LEAD_HEAD, ...lead.operatingRows);
-    if (lead.operatingTotals) leadAoa.push(lead.operatingTotals);
-  }
-  const leadWs = XLSX.utils.aoa_to_sheet(leadAoa);
-  leadWs["!cols"] = [{ wch: 28 }, { wch: 16 }, { wch: 10 }, { wch: 20 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }];
-  return leadWs;
+async function downloadFileWorkbook(input: FileWorkpaperInput, includeDetails: boolean) {
+  const { buildFileWorkbook } = await import('./file-report-workbook');
+  const { saveWorkbook } = await import('./excel-report-style');
+  const workbook = buildFileWorkbook(input, includeDetails);
+  if (!workbook) throw new Error('No reportable agreements were found in this Year-End File.');
+  await saveWorkbook(workbook, `${input.clientName}_Debt_Lease_${includeDetails ? "Workpapers" : "Summary"}.xlsx`);
 }
 
-export function exportFileWorkpapersXlsx(input: FileWorkpaperInput): void {
-  const workpapers = buildFileWorkpapers(input);
-  if (workpapers.length === 0) return;
-  const lead = buildLeadSheet(input, workpapers);
-  const wb = XLSX.utils.book_new();
-  const used = new Set<string>();
-  XLSX.utils.book_append_sheet(wb, buildLeadSheetWs(input, lead), usedSheetNameSafe("Lead Sheet", used));
-
-  for (const wp of workpapers) {
-    const ws = XLSX.utils.aoa_to_sheet(sectionsToAoa(wp));
-    ws["!cols"] = [{ wch: 50 }, { wch: 30 }];
-    XLSX.utils.book_append_sheet(wb, ws, usedSheetNameSafe(wp.loanName, used));
-    if (wp.schedule && wp.schedule.length > 0) {
-      XLSX.utils.book_append_sheet(
-        wb,
-        scheduleSheet(wp.schedule),
-        usedSheetNameSafe(`${wp.loanName} Sched`, used),
-      );
-    }
-  }
-
-  applyExcelNumberTypes(wb);
-  XLSX.writeFile(wb, `${input.clientName}_Debt_Lease_Workpapers.xlsx`);
-}
-
-export function exportFileLeadSheetXlsx(input: FileWorkpaperInput): void {
-  const workpapers = buildFileWorkpapers(input);
-  if (workpapers.length === 0) return;
-  const lead = buildLeadSheet(input, workpapers);
-  const wb = XLSX.utils.book_new();
-  const used = new Set<string>();
-  XLSX.utils.book_append_sheet(wb, buildLeadSheetWs(input, lead), usedSheetNameSafe("Lead Sheet", used));
-  applyExcelNumberTypes(wb);
-  XLSX.writeFile(wb, `${input.clientName}_Debt_Lease_Summary.xlsx`);
-}
+export const exportFileWorkpapersXlsx = (input: FileWorkpaperInput) => downloadFileWorkbook(input, true);
+export const exportFileLeadSheetXlsx = (input: FileWorkpaperInput) => downloadFileWorkbook(input, false);

@@ -75,6 +75,7 @@ import CapitalLeaseAssessment, { formatAssetType, parseAssetType, type Assessmen
 import { PageHeader } from "@/components/page-header";
 import { calculateStraightLineLease, buildYearlyStraightLine } from "@/lib/straight-line";
 import { formatCurrency } from "@/lib/format";
+import { notifyExcelError } from "@/lib/excel-download-error";
 import { toast } from "@/hooks/use-toast";
 import { getErrorMessage } from "@/lib/errors";
 import { format, addYears, isAfter, addMonths, parseISO, subMonths, subDays } from "date-fns";
@@ -644,6 +645,8 @@ export default function LoanDetail() {
 
   const exportEvidence = loan ? {
     ...loan,
+    clientName: client?.name,
+    fiscalYearEnd: file?.fiscalYearEnd ?? loan.fiscalYearEnd,
     ...({ predecessorAgreement: linkedPredecessor } as any),
     principal: Number(loan.principal),
     interestRate: Number(loan.interestRate),
@@ -654,7 +657,7 @@ export default function LoanDetail() {
 
   const downloadExcel = () => {
     if (!result) return;
-    exportScheduleXlsx(loan?.name ?? "Loan", result.schedule, exportEvidence);
+    exportScheduleXlsx(loan?.name ?? "Loan", result.schedule, exportEvidence).catch(notifyExcelError);
   };
 
   const downloadPDF = () => {
@@ -664,7 +667,7 @@ export default function LoanDetail() {
 
   const downloadAnnualExcel = () => {
     if (!yearlyTotals.length) return;
-    exportAnnualXlsx(loan?.name ?? "Loan", yearlyTotals, exportEvidence);
+    exportAnnualXlsx(loan?.name ?? "Loan", yearlyTotals, exportEvidence).catch(notifyExcelError);
   };
 
   const downloadAnnualPDF = () => {

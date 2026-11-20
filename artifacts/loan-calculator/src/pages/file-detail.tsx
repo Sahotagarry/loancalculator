@@ -57,6 +57,7 @@ import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuIte
 import { runFileDiagnostics } from "@/lib/diagnostics";
 import { FindingsList } from "@/components/review-findings";
 import { formatCurrency } from "@/lib/format";
+import { notifyExcelError } from "@/lib/excel-download-error";
 import { toast } from "@/hooks/use-toast";
 import { getErrorMessage } from "@/lib/errors";
 import { format, addYears, addMonths, isAfter, parseISO } from "date-fns";
@@ -1043,7 +1044,7 @@ export default function FileDetail() {
                       fiscalYearEnd: file.fiscalYearEnd,
                       loans: reportingLoans,
                       masters,
-                    });
+                    }).catch(notifyExcelError);
                   }}
                 >
                   <FileSpreadsheet className="h-4 w-4 mr-2" />
@@ -1087,7 +1088,7 @@ export default function FileDetail() {
                       fiscalYearEnd: file.fiscalYearEnd,
                        loans: reportingLoans,
                       masters,
-                    });
+                    }).catch(notifyExcelError);
                   }}
                 >
                   <FileSpreadsheet className="h-4 w-4 mr-2" />

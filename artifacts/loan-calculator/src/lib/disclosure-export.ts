@@ -11,8 +11,8 @@ import {
   WidthType,
 } from "docx";
 import { saveAs } from "file-saver";
-import { jsPDF } from "jspdf";
-import autoTable from "jspdf-autotable";
+import type { jsPDF } from "jspdf";
+import { PrintReport } from "./print-report";
 import type { DisclosureAmount, DisclosureModel } from "./disclosure-model";
 
 export interface DisclosureRenderSection {
@@ -171,33 +171,22 @@ export async function downloadPresentationDisclosureDocx(model: DisclosureModel)
 
 export function renderPresentationDisclosurePdf(model: DisclosureModel): jsPDF {
   const plan = buildPresentationDisclosurePdfPlan(model);
-  const doc = new jsPDF();
-  doc.setFontSize(16);
-  doc.text(plan.title, 14, 18);
-  doc.setFontSize(9);
-  doc.text(doc.splitTextToSize(plan.subtitle, 180), 14, 25);
-  doc.setFontSize(7);
-  doc.text(doc.splitTextToSize(plan.evidenceLine, 180), 14, 34);
-  let startY = 44;
+  const report = new PrintReport({ title: "Presentation & Disclosure", subject: model.clientName, period: `Reporting year-end: ${model.reportingFiscalYearEnd}` });
+  report.paragraph(plan.subtitle);
   for (const section of plan.sections) {
-    autoTable(doc, {
-      startY,
-      head: [[section.title], section.columns],
-      body: section.rows,
-      theme: "grid",
-      headStyles: { fillColor: [24, 95, 45] },
-      didDrawPage: () => undefined,
-    });
-    const finalY = (doc as jsPDF & { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? startY;
-    if (section.notes?.length) {
-      doc.setFontSize(7);
-      doc.text(doc.splitTextToSize(section.notes.join(" "), 180), 14, finalY + 4);
-      startY = finalY + 10;
+    // Legal text reads better down the page than in four narrow prose columns.
+    if (section.title === "Security & Covenants" && section.rows.length) {
+      for (const row of section.rows) report.table({ title: section.title, head: ["Item", "Disclosure"], widths: [23,77],
+        rows: section.columns.map((label, i) => [label, row[i]]) });
     } else {
-      startY = finalY + 6;
+      const numeric = section.columns[0] === "Item" || section.title === "Contractual Maturities";
+      report.table({ title: section.title, head: section.columns, rows: section.rows, notes: section.notes,
+        widths: section.columns[0] === "Item" ? (section.columns.length === 2 ? [70,30] : [52,24,24]) : undefined,
+        right: numeric ? section.columns.slice(1).map((_,i) => i+1) : [] });
     }
   }
-  return doc;
+  report.table({ title: "Calculation evidence", head: ["Source and fingerprints"], rows: [[plan.evidenceLine]] });
+  return report.finish();
 }
 
 export function downloadPresentationDisclosurePdf(model: DisclosureModel): void {

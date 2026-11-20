@@ -44,9 +44,9 @@ import {
   endOfYear,
   addMonths,
 } from "date-fns";
-import * as XLSX from "xlsx";
-import { jsPDF } from "jspdf";
-import autoTable from "jspdf-autotable";
+import { exportScheduleXlsx, exportAnnualXlsx } from "@/lib/loan-export";
+import { notifyExcelError } from "@/lib/excel-download-error";
+import { renderSchedulePdf, renderAnnualPdf } from "@/lib/loan-print";
 import {
   Document,
   Packer,
@@ -191,140 +191,19 @@ export function LoanCalculator() {
       }));
   }, [result.schedule]);
 
-  const downloadExcel = () => {
-    const worksheetData = result.schedule.map((row) => ({
-      Month: row.month,
-      Date: format(row.date, "MMMM d, yyyy"),
-      Payment: row.payment.toFixed(2),
-      Principal: row.principal.toFixed(2),
-      Interest: row.interest.toFixed(2),
-      "Total Interest": row.totalInterest.toFixed(2),
-      Balance: row.balance.toFixed(2),
-      Type: row.isInterestOnly ? "Interest Only" : "Standard",
-    }));
+  const downloadExcel = () =>
+    exportScheduleXlsx("", result.schedule, undefined, `Amortization_Schedule_${format(new Date(), "yyyy-MM-dd")}.xlsx`).catch(notifyExcelError);
 
-    const worksheet = XLSX.utils.json_to_sheet(worksheetData);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Amortization Schedule");
-
-    // Auto-size columns
-    const max_width = worksheetData.reduce(
-      (w, r) => Math.max(w, r.Date.length),
-      10,
-    );
-    worksheet["!cols"] = [
-      { wch: 8 },
-      { wch: max_width + 5 },
-      { wch: 12 },
-      { wch: 12 },
-      { wch: 12 },
-      { wch: 15 },
-      { wch: 15 },
-      { wch: 15 },
-    ];
-
-    XLSX.writeFile(
-      workbook,
-      `Amortization_Schedule_${format(new Date(), "yyyy-MM-dd")}.xlsx`,
-    );
-  };
-
+  const quickPrintMeta = { name: "Quick loan calculator", principal, interestRate, termYears, amortizationYears, fiscalYearEnd: yearEndDateStr };
   const downloadAmortizationPDF = () => {
-    const doc = new jsPDF();
-    doc.setFontSize(18);
-    doc.text("Loan Amortization Schedule", 14, 22);
-    doc.setFontSize(11);
-    doc.setTextColor(100);
-    doc.text(
-      `Principal: ${formatCurrency(principal)} | Interest: ${interestRate}% | Term: ${termYears} yrs | Amortization: ${amortizationYears} yrs`,
-      14,
-      30,
-    );
-
-    const tableData = result.schedule.map((row) => [
-      row.month,
-      format(row.date, "MMM d, yyyy"),
-      formatCurrency(row.payment),
-      formatCurrency(row.principal),
-      formatCurrency(row.interest),
-      formatCurrency(row.balance),
-    ]);
-
-    autoTable(doc, {
-      startY: 40,
-      head: [["Period", "Date", "Payment", "Principal", "Interest", "Balance"]],
-      body: tableData,
-      foot: [
-        [
-          "",
-          "Total",
-          formatCurrency(
-            result.schedule.reduce((sum, r) => sum + r.payment, 0),
-          ),
-          formatCurrency(
-            result.schedule.reduce((sum, r) => sum + r.principal, 0),
-          ),
-          formatCurrency(
-            result.schedule.reduce((sum, r) => sum + r.interest, 0),
-          ),
-          "-",
-        ],
-      ],
-      theme: "striped",
-      headStyles: { fillColor: [24, 95, 45] },
-    });
-
-    doc.save(`Amortization_Schedule_${format(new Date(), "yyyy-MM-dd")}.pdf`);
+    renderSchedulePdf(quickPrintMeta, result.schedule, true).save(`Amortization_Schedule_${format(new Date(), "yyyy-MM-dd")}.pdf`);
   };
 
-  const downloadAnnualExcel = () => {
-    const worksheetData = yearlyTotals.map((row) => ({
-      "Fiscal Year": row.label,
-      Principal: row.principal.toFixed(2),
-      Interest: row.interest.toFixed(2),
-      Total: (row.principal + row.interest).toFixed(2),
-    }));
-
-    const worksheet = XLSX.utils.json_to_sheet(worksheetData);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Annual Breakdown");
-    XLSX.writeFile(
-      workbook,
-      `Annual_Breakdown_${format(new Date(), "yyyy-MM-dd")}.xlsx`,
-    );
-  };
+  const downloadAnnualExcel = () =>
+    exportAnnualXlsx("", yearlyTotals, undefined, `Annual_Breakdown_${format(new Date(), "yyyy-MM-dd")}.xlsx`).catch(notifyExcelError);
 
   const downloadAnnualPDF = () => {
-    const doc = new jsPDF();
-    doc.setFontSize(18);
-    doc.text("Annual Loan Breakdown", 14, 22);
-
-    const tableData = yearlyTotals.map((row) => [
-      row.label,
-      formatCurrency(row.principal),
-      formatCurrency(row.interest),
-      formatCurrency(row.principal + row.interest),
-    ]);
-
-    autoTable(doc, {
-      startY: 40,
-      head: [["Fiscal Year", "Principal", "Interest", "Total"]],
-      body: tableData,
-      foot: [
-        [
-          "Total",
-          formatCurrency(yearlyTotals.reduce((sum, r) => sum + r.principal, 0)),
-          formatCurrency(yearlyTotals.reduce((sum, r) => sum + r.interest, 0)),
-          formatCurrency(
-            yearlyTotals.reduce((sum, r) => sum + r.principal + r.interest, 0),
-          ),
-        ],
-      ],
-      theme: "grid",
-      headStyles: { fillColor: [24, 95, 45] },
-    });
-
-    doc.save(`Annual_Breakdown_${format(new Date(), "yyyy-MM-dd")}.pdf`);
+    renderAnnualPdf(quickPrintMeta.name, yearlyTotals, quickPrintMeta, true).save(`Annual_Breakdown_${format(new Date(), "yyyy-MM-dd")}.pdf`);
   };
 
   const downloadASPEDisclosure = async () => {

@@ -1,9 +1,10 @@
 import ExcelJS, { type Cell, type Worksheet } from "exceljs";
 import type { Workpaper } from "./workpaper-export";
 
+import { font, tableStyle } from "./excel-report-style";
+
 type Section = Workpaper["sections"][number];
-const font = { name: "Calibri", size: 12 };
-const tableStyle = { theme: "TableStyleMedium9" as const, showRowStripes: true };
+
 const currency = '"$"#,##0.00;-"$"#,##0.00';
 const negativeCurrency = '"$"#,##0.00;("$"#,##0.00)';
 const decimal = "#,##0.00";
