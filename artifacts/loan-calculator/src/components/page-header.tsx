@@ -10,6 +10,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import logoWhite from "../assets/clearline-logo-white.png";
+import { formatBuildTime } from "@/lib/build-time";
 
 interface PageHeaderProps {
   backHref?: string;
@@ -70,7 +71,7 @@ export function PageHeader({ backHref, breadcrumb, title, meta, actions }: PageH
                 </button>
               </TooltipTrigger>
               <TooltipContent side="bottom" data-testid="tooltip-app-build">
-                Built: {__APP_BUILD_TIME__.replace("T", " ").replace(/\.\d+Z$/, " UTC")}
+                Built: {formatBuildTime(__APP_BUILD_TIME__)} (Vancouver)
               </TooltipContent>
             </Tooltip>
           </div>
