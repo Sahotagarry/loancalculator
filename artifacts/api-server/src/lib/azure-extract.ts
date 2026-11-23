@@ -2,7 +2,9 @@ import { verifyInterestClause } from "./import-interest-method";
 import { verifyDurations } from "./import-durations";
 import { INTEREST_METHODS } from "@workspace/amortization";
 import { z } from "zod";
-import { inferLeaseCommencement, normalizeLeaseEnding } from "@workspace/amortization";
+import { normalizeLeaseEnding } from "@workspace/amortization";
+import { suggestLeaseCommencement } from "./import-lease-commencement";
+import { addLeaseEndingSuggestion } from "./import-lease-suggestion";
 import { leaseEndingSchema, unresolvedLeaseEnding } from "./lease-ending";
 import { UserFacingError, type AzureSettings } from "./azure-settings";
 
@@ -182,6 +184,7 @@ Classification rules:
 
 Extraction rules — CRITICAL:
 - NEVER guess or invent values. If a value is not clearly stated in the document, use null.
+- Do provide your best-supported interpretation in leaseEndingTerms.suggestedTreatment when an ending obligation is not confirmed but available evidence supports a likely answer. Distinguish this inference from extracted facts: keep kind unresolved, explain the evidence and uncertainty in plain language, and leave accepted false. Do not invent amounts, dates, clauses or a purchase option.
 - Do not compute values that are not stated, EXCEPT simple unit conversions (e.g. an amortization stated as "84 months" becomes amortizationYears 7), combining a stated prime rate with a stated spread (see interest rate rules), and per-square-foot math for real property leases (see office lease rules).
 - Read the ENTIRE document before answering. Key terms are often buried mid-document under headings like "Repayment", "Payments", "Interest", "Security", "Guarantees", or in a schedule/appendix — do not stop after the first page.
 - Dates must be in YYYY-MM-DD format. If only month/year is given, use the first of the month. If not stated, null.
@@ -236,10 +239,11 @@ Lease rentals:
 - When the duration appears only in a monthly rental table, put the exact monthly-rental heading and all populated month ranges and amounts in paymentScheduleQuote (including trailing blank ranges where present). A contiguous schedule starting at month 1 can support a duration; a depreciation-reserve table alone cannot. Keep the rental table quote separate from the reserve table.
 
 Lease ending terms — read all pages, schedules and operative return/sale provisions:
-- Also include leaseEndingTerms: {version:1, kind, amount, basis, source, baseAmount?, percentage?, reserves?, settlementMonth, issues:[], status:"draft", taxTreatment?}.
+- Also include leaseEndingTerms: {version:1, kind, amount, basis, source, baseAmount?, percentage?, reserves?, settlementMonth, issues:[], status:"draft", taxTreatment?, suggestedTreatment?:{kind,reason,accepted:false}}.
 - kind is mandatory_payment, guaranteed_residual (including return/sale shortfall borne by lessee), optional_purchase, bargain_purchase, lessor_residual, none or unresolved. Do not equate a reserve/residual with a buyout. Absence of a purchase option does NOT mean absence of a residual guarantee.
 - basis is stated, percentage, reserve, sum or unsupported. For percentage supply stated baseAmount and percentage; for reserve supply stated baseAmount and reserves:[{fromMonth,toMonth,monthlyAmount}]; for a supported additive formula supply sumAmounts (documented non-negative amounts in one currency, no alternatives or duplicates). Do not calculate the ending amount for formulas; leave amount null. Code computes it. A table alone may establish value but not a guarantee; use unresolved unless operative clauses support treatment.
 - A heading such as "Monthly Depreciation Reserve" is reserve evidence even if it never uses the word residual, guarantee or buyout. Extract each populated range and its monthly amount, with the stated vehicle/asset cost as baseAmount. Read the return/sale and final-settlement clauses separately: an obligation to pay the difference when net sale proceeds are below the agreed ending value supports guaranteed_residual, not a fixed purchase. If that clause is absent, retain the reserve operands with kind unresolved rather than discarding the table.
+- For missing settlement wording, do not stop at "unresolved" if a useful best assessment is possible: return suggestedTreatment with a likely kind and a concise reason naming both the supporting clues and what is unconfirmed. A declining agreed-value/reserve arrangement may suggest guaranteed_residual, but is not proof. Never infer solely from a lender name or another customer's agreement; explicit contrary clauses take priority, and conflicting evidence must be explained rather than hidden. suggestedTreatment cannot be none or unresolved; omit it when operative clauses already establish kind or there is no responsible recommendation.
 - source cites and briefly quotes BOTH the amount/table and operative obligation clause. Do not hardcode lenders or clause numbers. Missing appendices, conflicting clauses, incomplete documents, ambiguous units/formulas, or alternative settlements that risk double counting must be issues, not zero.
 - settlementMonth is months from commencement, separate from final rental timing. Do not silently assume it when unclear. none requires documentary support and amount:0. Unknown is unresolved, not none.
 - Tax treatment must distinguish recoverable, nonrecoverable, excluded and unresolved; do not infer recoverability or tax-inclusive asset value from province. Exclude documented services from financing and identify refundable deposits separately from down payments.
@@ -254,7 +258,7 @@ Respond with JSON only, matching this shape plus the lease ending fields above:
   "masterAgreement": { lender, description, facilityLimit, securityDescription, covenantDescription } or null if not a master agreement,
   "facilities": [ same shape as "loan", one per facility ] or null if not a master agreement,
   "loan": { termQuote, amortizationQuote, paymentScheduleQuote, name, lender, principal, downPayment, interestRate, primeSpread, statedPrimeRate, amortizationYears, termYears, startDate, interestMethod, interestMethodQuote, paymentFrequency ("monthly"|"semi-monthly"|"bi-weekly"|"weekly"), paymentTiming ("beginning"|"end"|null), graceTermMode ("included"|"added"|null), firstPaymentDate, semiMonthlyFirstDueDay, semiMonthlySecondDueDay, paymentAmount, interestOnlyMonths, graceMonths, graceInterestTreatment ("capitalized"|"none"|null), balloonPayment, securityDescription, suggestedEvents ([{kind:"principal_prepayment",effectiveDate,ordering,amount,treatment,classification,source,reason,requiresConfirmation:true}] or null) } or null if not a loan,
-  "lease": { termQuote, paymentScheduleQuote, name, lessor, assetDescription, assetType ("vehicle"|"equipment"|"office_commercial"|"other"), startDate, expiryDate, termMonths, monthlyPayment, firstPaymentAmount, downPayment, interestRate, fairValue, economicLifeYears, buyoutAmount, leaseEndingTerms: {version:1, kind, amount, basis, source, baseAmount, percentage, reserves:[{fromMonth,toMonth,monthlyAmount}], sumAmounts, settlementMonth, issues:[], status:"draft", taxTreatment}, transferOfOwnership, bargainPurchaseOption, specializedAsset, paymentAtBeginning, rentableSquareFeet, rentSteps ([{fromYear, toYear, monthlyRent, annualRatePerSquareFoot}] or null), tenantImprovementAllowance, freeRentMonths, camAnnualPerSquareFoot, camMonthly, percentageRentNote, fieldNotes ({fieldName: note} or null), estimates ({economicLifeYears, fairValue, interestRate, reasoning} or null) } or null if not a lease.
+  "lease": { termQuote, paymentScheduleQuote, name, lessor, assetDescription, assetType ("vehicle"|"equipment"|"office_commercial"|"other"), startDate, expiryDate, termMonths, monthlyPayment, firstPaymentAmount, downPayment, interestRate, fairValue, economicLifeYears, buyoutAmount, leaseEndingTerms: {version:1, kind, amount, basis, source, baseAmount, percentage, reserves:[{fromMonth,toMonth,monthlyAmount}], sumAmounts, settlementMonth, issues:[], status:"draft", taxTreatment, suggestedTreatment:{kind,reason,accepted:false}}, transferOfOwnership, bargainPurchaseOption, specializedAsset, paymentAtBeginning, rentableSquareFeet, rentSteps ([{fromYear, toYear, monthlyRent, annualRatePerSquareFoot}] or null), tenantImprovementAllowance, freeRentMonths, camAnnualPerSquareFoot, camMonthly, percentageRentNote, fieldNotes ({fieldName: note} or null), estimates ({economicLifeYears, fairValue, interestRate, reasoning} or null) } or null if not a lease.
   Include leaseEndingTerms for every lease. Omit inapplicable optional formula operands; do not emit null for arrays. Set startDate to null when only the signature date is known; expiryDate is the documented end date, not the signature date.
   "name" should be a short human label like "Truck Loan — TD Bank" based on the document.
 }`;
@@ -378,10 +382,14 @@ export async function extractLoanOrLease(settings: AzureSettings, documentText: 
     lease.fieldNotes = notes;
     const ending = lease.leaseEndingTerms ?? unresolvedLeaseEnding("Ending terms were not reliably extracted. Review all schedules and return clauses.", lease.termMonths);
     ending.status = "draft";
-    if (!lease.startDate && lease.expiryDate && lease.termMonths) {
-      ending.commencement = inferLeaseCommencement(lease.expiryDate, lease.termMonths) ?? undefined;
+    if (ending.suggestedTreatment) {
+      ending.kind = "unresolved";
+      ending.suggestedTreatment.accepted = false;
     }
-    lease.leaseEndingTerms = normalizeLeaseEnding(ending, lease.termMonths ?? 0);
+    if (!lease.startDate) {
+      ending.commencement = suggestLeaseCommencement(documentText, lease.expiryDate, lease.termMonths) ?? undefined;
+    }
+    lease.leaseEndingTerms = addLeaseEndingSuggestion(normalizeLeaseEnding(ending, lease.termMonths ?? 0), documentText);
   }
   return validated.data;
 }

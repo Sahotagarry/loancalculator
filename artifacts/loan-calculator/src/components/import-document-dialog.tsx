@@ -1,4 +1,4 @@
-import { interestMethods, type InterestMethod } from "@workspace/amortization";
+import { interestMethods, leaseEndingTreatmentLabel, type InterestMethod, type LeaseEndingTerms } from "@workspace/amortization";
 import { useRef, useState } from "react";
 import { useImportDocument, type DocumentImportResult } from "@workspace/api-client-react";
 import {
@@ -82,12 +82,17 @@ function buildFieldRows(result: DocumentImportResult): FieldRow[] {
   }
   if (result.classification === "lease") {
     const f = result.lease;
+    const commencement = (f?.leaseEndingTerms as LeaseEndingTerms | undefined)?.commencement;
+    const ending = f?.leaseEndingTerms as LeaseEndingTerms | undefined;
     return [
       { label: "Lease name", value: fmtText(f?.name) },
       { label: "Lessor", value: fmtText(f?.lessor) },
       { label: "Asset", value: fmtText(f?.assetDescription) },
       { label: "Asset type", value: fmtText(f?.assetType ?? null) },
       { label: "Start date", value: fmtText(f?.startDate) },
+      ...(commencement?.basis === "inferred" ? [
+        { label: "Suggested start date — confirm", value: `${commencement.date}. ${commencement.source}` },
+      ] : []),
       { label: "Term", value: durationLabel(f?.termMonths, f?.termQuote) },
       { label: "Monthly payment", value: fmtMoney(f?.monthlyPayment) },
       { label: "Down payment", value: fmtMoney(f?.downPayment), optional: true },
@@ -95,7 +100,11 @@ function buildFieldRows(result: DocumentImportResult): FieldRow[] {
       { label: "Fair value", value: fmtMoney(f?.fairValue) },
       { label: "Economic life", value: fmtNum(f?.economicLifeYears, " years") },
       { label: "Buyout amount", value: fmtMoney(f?.buyoutAmount), optional: true },
-      { label: "Ending terms to review", value: fmtText((f?.leaseEndingTerms?.kind as string | undefined)?.replaceAll("_", " ")) },
+      ...(ending?.suggestedTreatment ? [{
+        label: "Best assessment — confirm",
+        value: `Likely: ${leaseEndingTreatmentLabel(ending.suggestedTreatment.kind)}. ${ending.suggestedTreatment.reason}`,
+      }] : []),
+      { label: ending?.suggestedTreatment ? "Confirmed ending terms" : "Ending terms to review", value: ending ? leaseEndingTreatmentLabel(ending.kind) : null },
       { label: "Ending value", value: fmtMoney(f?.leaseEndingTerms?.amount as number | null) },
       { label: "Ending evidence", value: fmtText(f?.leaseEndingTerms?.source as string | null) },
       { label: "Calculated basis", value: fmtText(f?.leaseEndingTerms?.explanation as string | null), optional: true },

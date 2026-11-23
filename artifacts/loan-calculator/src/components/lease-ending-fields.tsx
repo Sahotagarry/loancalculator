@@ -1,10 +1,11 @@
 import { useId } from "react";
-import { normalizeLeaseEnding, type LeaseEndingTerms } from "@workspace/amortization";
+import { acceptSuggestedLeaseTreatment, leaseEndingTreatmentLabel, normalizeLeaseEnding, type LeaseEndingTerms } from "@workspace/amortization";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { LeaseReviewDetails } from "./lease-review-details";
+import { changeLeaseCommencement, validLeaseStartDate } from "@/lib/lease-import-calendar";
 
 const kinds: Array<[LeaseEndingTerms["kind"], string]> = [
   ["unresolved", "Not yet established"], ["mandatory_payment", "Client must make a final payment / purchase"],
@@ -26,10 +27,18 @@ export function LeaseEndingFields({ value, months, onChange, readOnly }: {
   </div>;
   const checked = normalizeLeaseEnding(value, months);
   const update = (patch: Partial<LeaseEndingTerms>) => onChange({ ...value, ...patch,
+    ...(patch.kind && value.suggestedTreatment ? { suggestedTreatment: { ...value.suggestedTreatment, accepted: false } } : {}),
     ...(patch.paymentComponentsApplied === false ? { firstPaymentComponentsApplied: false } : {}), status: "draft" });
   const needsReview = value.status !== "reviewed" || checked.issues.length > 0;
   return <fieldset disabled={readOnly} className="space-y-3 min-w-0">
     <legend className="mb-2 text-sm font-semibold">Review details</legend>
+    {value.suggestedTreatment && <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 space-y-2">
+      <p className="font-semibold">{value.suggestedTreatment.accepted && value.kind === value.suggestedTreatment.kind ? "Accepted assessment — based on available information" : "Best assessment — confirm or change"}</p>
+      <p>{leaseEndingTreatmentLabel(value.suggestedTreatment.kind)}.</p>
+      <p>{value.suggestedTreatment.reason}</p>
+      {!value.suggestedTreatment.accepted && (value.kind === "unresolved" || value.kind === value.suggestedTreatment.kind) && <Button type="button" variant="outline" size="sm" disabled={readOnly} onClick={() => onChange(acceptSuggestedLeaseTreatment(value))}>Use this assessment</Button>}
+      <p className="text-xs">Accepting records your assessment, not confirmation that the missing clause was found. Review the supporting explanation before approval.</p>
+    </div>}
     {checked.issues.length > 0 && <div role="alert" className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
       <p className="font-semibold">Resolve before approval</p>
       <ul className="list-disc pl-5">{checked.issues.map((issue, i) => <li key={i}>{issue}</li>)}</ul>
@@ -59,8 +68,10 @@ export function LeaseEndingFields({ value, months, onChange, readOnly }: {
     </LeaseReviewDetails>
     {needsReview && <div className="space-y-1"><Label htmlFor={`${id}-issues`}>Evidence still missing or conflicting</Label><Textarea id={`${id}-issues`} name="leaseEndingIssues" value={value.issues.join("\n")} onChange={e => update({ issues: e.target.value.split("\n").filter(Boolean) })} placeholder="Missing appendix, conflicting terms, unsupported formula… Clear only after documenting the resolution in your explanation." /></div>}
     {value.commencement && <div className="rounded-lg border p-3 text-sm space-y-2">
-      <p>{value.commencement.basis === "inferred" ? "Estimated start date — verify before use" : "Start date from the document"}: {value.commencement.date}. {value.commencement.source}</p>
-      <label className="flex items-start gap-2"><input name="leaseCommencementConfirmed" type="checkbox" className="mt-1" checked={value.commencement.confirmed} onChange={e => update({ commencement: { ...value.commencement!, confirmed: e.target.checked } })} /> I checked the start date against the agreement or delivery evidence.</label>
+      <Label htmlFor={`${id}-commencement`}>{value.commencement.basis === "inferred" ? "Suggested start date — confirm or change" : "Start date from the document"}</Label>
+      <Input id={`${id}-commencement`} name="leaseSuggestedStartDate" type="date" value={value.commencement.date} onChange={e => onChange(changeLeaseCommencement(value, e.target.value, false))} />
+      <p>{value.commencement.source}</p>
+      <label className="flex items-start gap-2"><input name="leaseCommencementConfirmed" type="checkbox" className="mt-1" disabled={!validLeaseStartDate(value.commencement.date)} checked={value.commencement.confirmed} onChange={e => onChange(changeLeaseCommencement(value, value.commencement!.date, e.target.checked))} /> I checked the start date against the agreement, first invoice or delivery record.</label>
     </div>}
     <label className="flex items-start gap-2 rounded-lg border p-3 text-sm"><input name="leaseEndingReviewed" type="checkbox" className="mt-1" disabled={checked.issues.length > 0} checked={value.status === "reviewed" && !checked.issues.length} onChange={e => onChange({ ...checked, status: e.target.checked ? "reviewed" : "draft" })} /><span>I reviewed what the client must pay, the amount and the supporting clauses. An optional purchase or value retained by the owner is not an amount the client must pay.</span></label>
     <p className="text-xs text-muted-foreground">{needsReview ? "Draft evidence — resolve missing information and check the review confirmation." : "Ending evidence reviewed. Changing any input requires review again."}</p>

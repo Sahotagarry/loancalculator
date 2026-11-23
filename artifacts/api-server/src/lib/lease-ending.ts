@@ -41,6 +41,11 @@ export const leaseEndingSchema = z.object({
   issues: z.array(z.string()),
   status: z.enum(["draft", "reviewed"]),
   explanation: z.string().optional(),
+  suggestedTreatment: z.object({
+    kind: z.enum(["mandatory_payment", "guaranteed_residual", "optional_purchase", "bargain_purchase", "lessor_residual"]),
+    reason: z.string().trim().min(1).max(1200),
+    accepted: z.boolean().default(false),
+  }).optional().catch(undefined),
   commencement: z.object({
     date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     basis: z.enum(["stated", "inferred"]),

@@ -3193,7 +3193,7 @@ export default function FileDetail() {
               paymentFrequency: "monthly",
               paymentTiming: result.answers.paymentAtBeginning ? "beginning" : "end",
               graceTermMode: "included",
-              firstPaymentDate: deriveFirstPaymentDate(importedLeaseMeta?.startDate ?? "", result.answers.paymentAtBeginning ? "beginning" : "end", 0, "monthly"),
+              firstPaymentDate: deriveFirstPaymentDate(result.answers.leaseEndingTerms?.commencement?.confirmed ? result.answers.leaseEndingTerms.commencement.date : importedLeaseMeta?.startDate ?? "", result.answers.paymentAtBeginning ? "beginning" : "end", 0, "monthly"),
               firstPaymentDateDerived: true,
               semiMonthlyFirstDueDay: undefined,
               semiMonthlySecondDueDay: undefined,
@@ -3244,7 +3244,7 @@ export default function FileDetail() {
             setCreateOpen(true);
           } else {
             setOperatingLeaseResult(result);
-            setOperatingStartDate(importedLeaseMeta?.startDate ?? "");
+            setOperatingStartDate(result.answers.leaseEndingTerms?.commencement?.confirmed ? result.answers.leaseEndingTerms.commencement.date : importedLeaseMeta?.startDate ?? "");
             setOperatingCounterparty(importedLeaseMeta?.lessor ?? null);
             setModification({ predecessorAgreementId: null, modificationEffectiveDate: null, modificationAssessment: null, valid: true });
             setOperatingDialogOpen(true);

@@ -16,6 +16,11 @@ export interface LeaseEndingTerms {
   issues: string[];
   status: "draft" | "reviewed";
   explanation?: string;
+  suggestedTreatment?: {
+    kind: Exclude<LeaseEndingKind, "unresolved" | "none">;
+    reason: string;
+    accepted: boolean;
+  };
   commencement?: { date: string; basis: "stated" | "inferred"; source: string; confirmed: boolean };
   taxTreatment?: "recoverable" | "nonrecoverable" | "excluded" | "unresolved";
   servicesMonthly?: number;
@@ -41,6 +46,9 @@ export function normalizeLeaseEnding(input: LeaseEndingTerms, termMonths: number
   if (!Number.isInteger(termMonths) || termMonths <= 0) issue("A positive whole-month lease term is required.");
   if (!input.source?.trim()) issue("Source clauses or reviewer evidence are required.");
   if (input.kind === "unresolved") issue("Ending obligation remains unresolved.");
+  if (input.suggestedTreatment && input.kind === input.suggestedTreatment.kind && !input.suggestedTreatment.accepted) {
+    issue("Confirm the suggested ending treatment or choose a different treatment.");
+  }
   if (input.basis === "unsupported") {
     result.amount = null;
     issue("Formula requires professional review; no amount was guessed.");
@@ -88,6 +96,33 @@ export function normalizeLeaseEnding(input: LeaseEndingTerms, termMonths: number
   if (input.refundableDeposit != null && !nonnegative(input.refundableDeposit)) issue("Refundable deposit must be non-negative.");
   if (result.issues.length) result.status = "draft";
   return result;
+}
+
+export function leaseEndingTreatmentLabel(kind: LeaseEndingKind): string {
+  return {
+    guaranteed_residual: "Client covers a loss when the asset is sold",
+    mandatory_payment: "Client must make a final payment",
+    optional_purchase: "Client may choose to buy the asset",
+    bargain_purchase: "Client has a bargain purchase option",
+    lessor_residual: "The leasing company keeps the ending-value risk",
+    none: "No final payment or loss guarantee",
+    unresolved: "Not yet confirmed",
+  }[kind];
+}
+
+/** Adopting a suggestion records a reviewer assumption, not a discovered clause. */
+export function acceptSuggestedLeaseTreatment(value: LeaseEndingTerms): LeaseEndingTerms {
+  const suggestion = value.suggestedTreatment;
+  if (!suggestion || !suggestion.reason.trim() || (value.kind !== "unresolved" && value.kind !== suggestion.kind)) return value;
+  return {
+    ...value,
+    kind: suggestion.kind,
+    suggestedTreatment: { ...suggestion, accepted: true },
+    status: "draft",
+    source: `${value.source}\nReviewer accepted an inferred treatment: ${leaseEndingTreatmentLabel(suggestion.kind)}. Basis: ${suggestion.reason}`,
+    issues: value.issues.filter(issue => issue !== "Ending obligation remains unresolved." &&
+      issue !== "Confirm the suggested ending treatment or choose a different treatment."),
+  };
 }
 
 export function lesseeEndingAmount(terms: LeaseEndingTerms): number {
