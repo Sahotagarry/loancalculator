@@ -1,4 +1,4 @@
-import { assessmentConfirmationKey, assessmentConclusion, preTaxMonthlyPayment, financingFirstPayment, rentalAssessment, calculatePVFromAnswers, assessmentRate, percentLabel, normalizedAssessmentAnswers } from "@/lib/lease-assessment-values";
+import { assessmentConfirmationKey, assessmentConclusion, preTaxMonthlyPayment, financingFirstPayment, rentalAssessment, calculatePVFromAnswers, assessmentRate, percentLabel, normalizedAssessmentAnswers, changeAssessmentTerm, applyCalculatedLeaseRate } from "@/lib/lease-assessment-values";
 export { preTaxMonthlyPayment, calculatePVFromAnswers } from "@/lib/lease-assessment-values";
 import { formatCurrency } from "@/lib/format";
 import { useState, useCallback, useEffect, useRef } from "react";
@@ -225,8 +225,10 @@ export const ASSET_TYPE_LIVES: Record<string, number> = {
 };
 
 const ASSET_TYPE_OPTIONS: Array<[string, string]> = [
+  ["vehicle", "Vehicle (confirm useful life)"],
   ["vehicle_light", "Light Vehicle / Car (~8 years)"],
   ["vehicle_heavy", "Heavy Truck / Fleet (~12 years)"],
+  ["equipment", "Equipment (confirm useful life)"],
   ["equipment_manufacturing", "Manufacturing Equipment (~15 years)"],
   ["equipment_office", "Office Equipment (~10 years)"],
   ["it_hardware", "IT / Computer Hardware (~5 years)"],
@@ -261,9 +263,10 @@ export function formatAssetType(value: string): string {
  * assessment dropdown. Returns "" when it doesn't match any known type. */
 export function parseAssetType(stored: string): string {
   if (!stored) return "";
-  const byCode = ASSET_TYPE_OPTIONS.find(([v]) => v === stored);
+  const normalized = stored.trim().toLowerCase();
+  const byCode = ASSET_TYPE_OPTIONS.find(([v]) => v === normalized);
   if (byCode) return byCode[0];
-  const byLabel = ASSET_TYPE_OPTIONS.find(([, label]) => label.replace(/\s*\(.*\)$/, "") === stored);
+  const byLabel = ASSET_TYPE_OPTIONS.find(([, label]) => label.replace(/\s*\(.*\)$/, "").toLowerCase() === normalized);
   return byLabel ? byLabel[0] : "";
 }
 
@@ -517,13 +520,15 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
 
   const updateNumber = (key: "leaseTermPct" | "pvPctFairValue" | "fairValue" | "economicLife" | "termMonths" | "monthlyPayment" | "downPayment" | "interestRate" | "buyoutAmount" | "taxRate" | "buyoutForImplicitRate", value: number) => {
     setAnswers((prev) => {
+      if (key === "termMonths") return changeAssessmentTerm(prev, value);
       const next = { ...prev, [key]: value,
         ...(prev.leaseEndingTerms ? { leaseEndingTerms: { ...prev.leaseEndingTerms, status: "draft" as const,
           ...(key === "monthlyPayment" ? { grossMonthlyPayment: value, paymentComponentsApplied: false } : {}),
           ...(key === "interestRate" ? { discountRate: value, implicitRate: null, incrementalBorrowingRate: null } : {}) } } : {}) };
-      // Auto-calculate leaseTermPct when termMonths or economicLife changes
-      if ((key === "termMonths" || key === "economicLife") && next.termMonths > 0 && next.economicLife > 0) {
-        next.leaseTermPct = Math.round((next.termMonths / (next.economicLife * 12)) * 1000) / 10;
+      // Term edits are handled above; keep useful-life edits in sync too.
+      if (key === "economicLife") {
+        next.leaseTermPct = next.termMonths > 0 && next.economicLife > 0
+          ? Math.round((next.termMonths / (next.economicLife * 12)) * 1000) / 10 : 0;
       }
       return next;
     });
@@ -1655,11 +1660,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                     <Button
                       className="w-full gap-2"
                       onClick={() => {
-                        setAnswers((prev) => {
-                          const next = { ...prev, interestRate: rate,
-                            ...(prev.leaseEndingTerms ? { leaseEndingTerms: { ...prev.leaseEndingTerms, implicitRate: rate, status: "draft" as const } } : {}) };
-                          return next;
-                        });
+                        setAnswers((prev) => applyCalculatedLeaseRate(prev, rate));
                         setShowImplicitRateDialog(false);
                       }}
                     >

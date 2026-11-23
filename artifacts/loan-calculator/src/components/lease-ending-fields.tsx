@@ -6,6 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { LeaseReviewDetails } from "./lease-review-details";
 import { changeLeaseCommencement, validLeaseStartDate } from "@/lib/lease-import-calendar";
+import { assessmentRate } from "@/lib/lease-assessment-values";
 
 const kinds: Array<[LeaseEndingTerms["kind"], string]> = [
   ["unresolved", "Not yet established"], ["mandatory_payment", "Client must make a final payment / purchase"],
@@ -49,8 +50,15 @@ export function LeaseEndingFields({ value, months, onChange, readOnly }: {
           {kinds.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
         </select></div>
         <div className="space-y-1"><Label htmlFor={`${id}-amount`}>Ending payment or guaranteed amount ($)</Label><Input id={`${id}-amount`} name="leaseEndingAmount" type="number" min="0" step="0.01" value={value.amount ?? ""} onChange={e => update({ amount: e.target.value === "" ? null : Number(e.target.value), basis: "stated", explanation: "Reviewer-entered amount; see source explanation." })} /></div>
-        <div className="space-y-1"><Label htmlFor={`${id}-month`}>Months from lease start to settlement</Label><Input id={`${id}-month`} name="leaseSettlementMonth" type="number" min="0" value={value.settlementMonth ?? ""} onChange={e => update({ settlementMonth: e.target.value === "" ? null : Number(e.target.value) })} /></div>
-        <div className="space-y-1"><Label htmlFor={`${id}-rate`}>Client’s supported borrowing rate (%)</Label><Input id={`${id}-rate`} name="leaseBorrowingRate" type="number" min="0" step="any" value={value.incrementalBorrowingRate ?? ""} onChange={e => update({ incrementalBorrowingRate: e.target.value === "" ? null : Number(e.target.value) })} /><p className="text-xs text-muted-foreground">Incremental borrowing rate: the rate for similar financing. Support it with a lender quote or comparable borrowing terms.</p></div>
+        <div className="space-y-1"><Label htmlFor={`${id}-month`}>Months from lease start to settlement</Label><Input id={`${id}-month`} name="leaseSettlementMonth" type="number" min="0" value={value.settlementMonth ?? ""} onChange={e => update({ settlementMonth: e.target.value === "" ? null : Number(e.target.value), settlementMonthBasis: "separate" })} />
+          <p className="text-xs text-muted-foreground">Lease term: {months || "not entered"} months. Use different settlement timing only when supported by the agreement.</p>
+          {months > 0 && value.settlementMonth !== months && <Button type="button" variant="outline" size="sm" onClick={() => update({ settlementMonth: months, settlementMonthBasis: "lease_end" })}>Use lease end ({months} months)</Button>}
+        </div>
+        <div className="space-y-1">
+          {value.implicitRate != null && <p className="text-sm" data-testid="lease-calculated-rate">Calculated lease rate (implicit): <strong>{Number(value.implicitRate.toFixed(5))}%</strong></p>}
+          {(value.implicitRate != null || value.incrementalBorrowingRate != null || value.discountRate != null) && <p className="text-sm" data-testid="lease-selected-rate">Discount rate used: <strong>{Number(assessmentRate({ leaseEndingTerms: value, interestRate: value.discountRate ?? 0 }).toFixed(5))}%</strong></p>}
+          <Label htmlFor={`${id}-rate`}>Client’s supported borrowing rate, if known (%)</Label><Input id={`${id}-rate`} name="leaseBorrowingRate" type="number" min="0" step="any" value={value.incrementalBorrowingRate ?? ""} onChange={e => update({ incrementalBorrowingRate: e.target.value === "" ? null : Number(e.target.value) })} /><p className="text-xs text-muted-foreground">This separate rate is what the client would pay for similar borrowing. Leave blank if unknown; it is not the calculated lease rate above.</p>
+        </div>
       </div>
       <div className="space-y-1"><Label htmlFor={`${id}-source`}>Agreement clauses and your explanation</Label><Textarea id={`${id}-source`} name="leaseEndingSource" value={value.source} onChange={e => update({ source: e.target.value })} placeholder="Quote the purchase, return or sale-shortfall clause and explain the amount." /></div>
       {value.explanation && <p className="text-xs text-blue-800">Amount explanation: {value.explanation}</p>}

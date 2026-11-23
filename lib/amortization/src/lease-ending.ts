@@ -13,6 +13,8 @@ export interface LeaseEndingTerms {
   reserves?: Array<{ fromMonth: number; toMonth: number; monthlyAmount: number }>;
   sumAmounts?: number[];
   settlementMonth: number | null;
+  /** Working lease-end timing follows term edits; a separate reviewer timing does not. */
+  settlementMonthBasis?: "lease_end" | "separate";
   issues: string[];
   status: "draft" | "reviewed";
   explanation?: string;
@@ -33,6 +35,22 @@ export interface LeaseEndingTerms {
   grossFirstPaymentAmount?: number;
   firstPaymentComponentsApplied?: boolean;
   taxRate?: number;
+}
+
+/** Only draft/default timing follows a term correction. Preserve separately
+ * entered timing and historical reviewed evidence unless explicitly opted in. */
+export function updateLeaseSettlementForTerm(value: LeaseEndingTerms, previousMonths: number, months: number): LeaseEndingTerms {
+  const followsTerm = value.settlementMonthBasis === "lease_end" ||
+    (value.settlementMonthBasis !== "separate" && value.status !== "reviewed" &&
+      (value.settlementMonth == null || previousMonths <= 0 || value.settlementMonth === previousMonths));
+  const valid = Number.isInteger(months) && months > 0;
+  return { ...value, status: "draft",
+    ...(followsTerm ? { settlementMonth: valid ? months : null, settlementMonthBasis: "lease_end" as const }
+      : value.settlementMonthBasis ? {} : { settlementMonthBasis: "separate" as const }),
+    issues: value.issues.filter(issue =>
+      !(valid && issue === "A positive whole-month lease term is required.") &&
+      !(valid && followsTerm && issue === "Confirm settlement timing at or after the final rental period.")),
+  };
 }
 
 const nonnegative = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n) && n >= 0;

@@ -1,4 +1,4 @@
-import { DEFAULT_LOAN_INTEREST_METHOD, isDaily, type InterestMethod } from "@workspace/amortization";
+import { DEFAULT_LOAN_INTEREST_METHOD, isDaily, updateLeaseSettlementForTerm, type InterestMethod } from "@workspace/amortization";
 import { InterestMethodField } from "./interest-method-field";
 import { useState, type Dispatch, type SetStateAction } from "react";
 import { LeaseEndingFields } from "./lease-ending-fields";
@@ -195,7 +195,11 @@ export function LoanFormFields({ form, setForm: persistForm, mode = "loan" }: Lo
     const next = typeof action === "function" ? action(prev) : action;
     const financialFields: Array<keyof LoanFormState> = ["principal", "downPayment", "interestRate", "leaseAssessmentRate", "amortizationYears", "termYears", "termMonths", "startDate", "paymentFrequency", "paymentTiming", "firstPaymentDate", "firstPaymentAmount", "monthlyPayment", "paymentOverride", "balloonPayment", "fairValue", "ioMonths", "graceMonths", "transferOfOwnership", "bargainPurchaseOption", "leaseTermPct", "assetUsefulLife", "specializedAsset", "isCapitalLease"];
     if (next.leaseEndingTerms && next.leaseEndingTerms === prev.leaseEndingTerms && financialFields.some(key => next[key] !== prev[key])) {
-      return { ...next, leaseEndingTerms: { ...next.leaseEndingTerms, status: "draft" } };
+      const oldMonths = prev.termMonths ?? Math.round(prev.termYears * 12);
+      const months = next.termMonths ?? Math.round(next.termYears * 12);
+      return { ...next, leaseEndingTerms: oldMonths !== months
+        ? updateLeaseSettlementForTerm(next.leaseEndingTerms, oldMonths, months)
+        : { ...next.leaseEndingTerms, status: "draft" } };
     }
     return next;
   });

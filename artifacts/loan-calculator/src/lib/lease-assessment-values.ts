@@ -1,4 +1,4 @@
-import { assessLeaseClassification, leaseRentalPresentValue, leasePresentValue, normalizeLeaseEnding, type LeaseEndingTerms } from "@workspace/amortization";
+import { assessLeaseClassification, leaseRentalPresentValue, leasePresentValue, normalizeLeaseEnding, updateLeaseSettlementForTerm, type LeaseEndingTerms } from "@workspace/amortization";
 import type { AssessmentAnswers, AssessmentResult } from "../components/capital-lease-assessment";
 import { calculateStraightLineLease } from "./straight-line";
 
@@ -25,10 +25,31 @@ export function calculateOperatingLeaseAssessment(
   });
 }
 
-export function assessmentRate(a: AssessmentAnswers) {
+export function assessmentRate(a: Pick<AssessmentAnswers, "interestRate" | "leaseEndingTerms">) {
   const e = a.leaseEndingTerms;
   if (e?.implicitRate != null && e.incrementalBorrowingRate != null) return Math.min(e.implicitRate, e.incrementalBorrowingRate);
   return e?.incrementalBorrowingRate ?? e?.implicitRate ?? e?.discountRate ?? a.interestRate;
+}
+
+export function changeAssessmentTerm(a: AssessmentAnswers, months: number): AssessmentAnswers {
+  return { ...a, termMonths: months,
+    leaseTermPct: months > 0 && a.economicLife > 0 ? Math.round(months / (a.economicLife * 12) * 1000) / 10 : 0,
+    ...(a.leaseEndingTerms ? { leaseEndingTerms: updateLeaseSettlementForTerm(a.leaseEndingTerms, a.termMonths, months) } : {}),
+  };
+}
+
+/** An implicit lease rate is not the client's separately supported borrowing rate. */
+export function applyCalculatedLeaseRate(a: AssessmentAnswers, rate: number): AssessmentAnswers {
+  if (!Number.isFinite(rate) || rate <= 0) return a;
+  if (!a.leaseEndingTerms) return { ...a, interestRate: rate };
+  const ending = { ...a.leaseEndingTerms, implicitRate: rate, status: "draft" as const,
+    // Unknown imported/draft borrowing rates sometimes arrived as zero. They
+    // must not override the positive rate the reviewer has just chosen.
+    ...(a.leaseEndingTerms.incrementalBorrowingRate === 0 && a.leaseEndingTerms.status !== "reviewed"
+      ? { incrementalBorrowingRate: null } : {}),
+  };
+  const selected = assessmentRate({ interestRate: rate, leaseEndingTerms: ending });
+  return { ...a, interestRate: selected, leaseEndingTerms: { ...ending, discountRate: selected } };
 }
 
 export const percentLabel = (value: number) => (value < 90 && value >= 89.95) ? "<90" : value.toFixed(1);

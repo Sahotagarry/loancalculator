@@ -5,7 +5,9 @@ import { z } from "zod";
 import { normalizeLeaseEnding } from "@workspace/amortization";
 import { suggestLeaseCommencement } from "./import-lease-commencement";
 import { addLeaseEndingSuggestion } from "./import-lease-suggestion";
-import { leaseEndingSchema, unresolvedLeaseEnding } from "./lease-ending";
+import { parseImportedLeaseEnding } from "./import-lease-ending";
+import { leaseSourceChecks, leaseSourceFacts, recoverLeaseReserveOperands } from "./import-lease-source-facts";
+import { unresolvedLeaseEnding } from "./lease-ending";
 import { UserFacingError, type AzureSettings } from "./azure-settings";
 
 const LEGACY_API_VERSION = "2024-10-21";
@@ -77,7 +79,7 @@ const leaseFieldsSchema = z.object({
   fairValue: z.number().nullable().catch(null),
   economicLifeYears: z.number().nullable().catch(null),
   buyoutAmount: z.number().nullable().catch(null),
-  leaseEndingTerms: leaseEndingSchema.nullable().catch(null),
+  leaseEndingTerms: z.unknown().transform(parseImportedLeaseEnding),
   expiryDate: z.string().nullable().catch(null),
   transferOfOwnership: z.boolean().nullable().catch(null),
   bargainPurchaseOption: z.boolean().nullable().catch(null),
@@ -324,10 +326,11 @@ export async function extractLoanOrLease(settings: AzureSettings, documentText: 
     throw new UserFacingError("This agreement is too long to analyze completely. Split it into complete related sections and review all ending clauses; no partial interpretation was saved.", 422);
   }
   const text = documentText;
+  const sourceFacts = leaseSourceFacts(documentText);
 
   const res = await callChatCompletions(settings, [
     { role: "system", content: SYSTEM_PROMPT },
-    { role: "user", content: text },
+    { role: "user", content: text + leaseSourceChecks(sourceFacts) },
   ]);
 
   if (res.status === 401 || res.status === 403) {
@@ -379,15 +382,23 @@ export async function extractLoanOrLease(settings: AzureSettings, documentText: 
     const notes = { ...lease.fieldNotes };
     delete notes.termMonths;
     if (duration.termQuote) notes.termMonths = duration.termQuote;
+    const proposedCommencement = suggestLeaseCommencement(documentText, lease.expiryDate, lease.termMonths);
+    if (lease.startDate && (/\b(?:assum\w*|infer\w*|header|signature)\b/i.test(notes.startDate ?? "") ||
+        (proposedCommencement?.date === lease.startDate && proposedCommencement.source.startsWith("Agreement date:") &&
+          /\bcommence\b.{0,100}\bdeliver(?:ed|y)\b/i.test(documentText.replace(/\s+/g, " "))))) {
+      lease.startDate = null;
+      delete notes.startDate;
+    }
     lease.fieldNotes = notes;
-    const ending = lease.leaseEndingTerms ?? unresolvedLeaseEnding("Ending terms were not reliably extracted. Review all schedules and return clauses.", lease.termMonths);
+    const ending = recoverLeaseReserveOperands(lease.leaseEndingTerms ?? unresolvedLeaseEnding(
+      "The AI did not provide usable ending clauses. The application retained any readable cost and reserve rows; confirm the ending obligation in assessment.", lease.termMonths), sourceFacts);
     ending.status = "draft";
     if (ending.suggestedTreatment) {
       ending.kind = "unresolved";
       ending.suggestedTreatment.accepted = false;
     }
     if (!lease.startDate) {
-      ending.commencement = suggestLeaseCommencement(documentText, lease.expiryDate, lease.termMonths) ?? undefined;
+      ending.commencement = proposedCommencement ?? undefined;
     }
     lease.leaseEndingTerms = addLeaseEndingSuggestion(normalizeLeaseEnding(ending, lease.termMonths ?? 0), documentText);
   }

@@ -77,6 +77,8 @@ export function verifyDurations(document: string, evidence: Evidence, kind: "loa
       const name = field === "term" ? "Term" : "Amortization";
       warnings.push(matches.length
         ? `${name}: conflicting or unclear durations. Confirm the period in the agreement.`
+        : kind === "lease" && field === "term" && /\bmonthly\s+(?:rent(?:al)?s?|payments?)\b/i.test(document)
+        ? "Term: a monthly rental table was detected, but its populated ranges or amounts could not be verified. Check the rental rows; blank future template rows do not extend the term."
         : `${name}: no separately supported duration with a clear unit. Enter it after review.`);
       return null;
     }

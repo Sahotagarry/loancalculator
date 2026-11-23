@@ -370,10 +370,9 @@ export default function ImportDocumentDialog({ open, onOpenChange, fileId, onUse
                     <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-2 flex items-start gap-2">
                       <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
                       <span>
-                        {missing.length} {missing.length === 1 ? "detail wasn't" : "details weren't"} found
-                        in the document ({missing.map((m) => m.label.toLowerCase()).join(", ")}). You'll
-                        need to fill {missing.length === 1 ? "it" : "these"} in yourself on the next step —
-                        nothing has been guessed for you.
+                        {missing.length} {missing.length === 1 ? "detail could not" : "details could not"} be confirmed
+                        from this import ({missing.map((m) => m.label.toLowerCase()).join(", ")}).
+                        Review any suggestions and the notes above, then confirm or complete these details in the next step.
                       </span>
                     </p>
                   )}
@@ -381,7 +380,7 @@ export default function ImportDocumentDialog({ open, onOpenChange, fileId, onUse
                     <p className="text-xs text-muted-foreground bg-muted/50 border rounded-lg p-2 flex items-start gap-2">
                       <HelpCircle className="h-4 w-4 shrink-0 mt-0.5" />
                       <span>
-                        The document doesn't state the{" "}
+                        This import did not establish the{" "}
                         {missingWizardFields.map((m) => m.label.toLowerCase()).join(" or ")} — that's
                         normal for leases. In the assessment you can use your company's incremental
                         borrowing rate (what you'd pay to borrow a similar amount), or the built-in
