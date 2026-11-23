@@ -65,6 +65,27 @@ describe("release safety", () => {
     expect(await readFile(file, "utf8")).not.toMatch(/token|authorization/i);
   });
 
+  it.each(["A", "M", "D"] as const)("keeps known development support files out of %s release changes", status => {
+    const developmentFiles = [".gitignore", ".replitignore",
+      "scripts/post-merge.sh", "scripts/check-print-samples.py"];
+    const source = [
+      { status: "M" as const, path: "artifacts/loan-calculator/src/pages/file-detail.tsx" },
+      { status: "A" as const, path: "lib/db/migrations/0042_lease_assessment_rate.sql" },
+    ];
+    expect(selectReleaseChanges([
+      ...developmentFiles.map(path => ({ status, path })), ...source,
+    ])).toEqual(source);
+    for (const file of developmentFiles) expect(isReleasePath(file)).toBe(false);
+  });
+
+  it.each(["scripts/unreviewed.sh", "scripts/check-print-samples.py.bak",
+    ".gitignore.private", ".env", "exports/report.pdf"])(
+    "continues rejecting unknown, sensitive and generated paths: %s", path => {
+      expect(() => selectReleaseChanges([{ status: "A", path }]))
+        .toThrow(/explicit source allowlist/);
+    },
+  );
+
   it("rejects stale checkpoints and branch drift", () => {
     expect(() => assertCompatibleCheckpoint(checkpoint, { ...checkpoint, localHead: "other" }, "base"))
       .toThrow(/incompatible/);

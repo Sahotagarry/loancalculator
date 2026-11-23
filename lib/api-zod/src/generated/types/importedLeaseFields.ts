@@ -22,6 +22,11 @@ export interface ImportedLeaseFields {
   startDate?: string | null;
   termMonths?: number | null;
   monthlyPayment?: number | null;
+  /**
+     * Distinct first rental on the same tax and service basis as monthlyPayment.
+     * @nullable
+     */
+  firstPaymentAmount?: number | null;
   downPayment?: number | null;
   interestRate?: number | null;
   fairValue?: number | null;

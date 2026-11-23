@@ -1,3 +1,4 @@
+import { rentalAssessment, assessmentPaymentSaveValues, calculateOperatingLeaseAssessment } from "@/lib/lease-assessment-values";
 import { DEFAULT_LOAN_INTEREST_METHOD } from "@workspace/amortization";
 import { useAuth } from "@/hooks/use-auth";
 import { leaseScheduleSupportIssue, lesseeEndingAmount, type LeaseEndingTerms } from "@workspace/amortization";
@@ -51,7 +52,8 @@ import { ArrowLeft, ArrowRight, Plus, Trash2, Calculator, FileSpreadsheet, Calen
 import { Textarea } from "@/components/ui/textarea";
 import { PageHeader } from "@/components/page-header";
 import { useMemo } from "react";
-import { calculateStraightLineLease, buildYearlyStraightLine } from "@/lib/straight-line";
+import { buildYearlyStraightLine } from "@/lib/straight-line";
+import { OperatingLeaseCardTerms } from "@/components/operating-lease-card-terms";
 import { exportFileWorkpapersPdf, exportFileWorkpapersXlsx, exportFileLeadSheetPdf, exportFileLeadSheetXlsx } from "@/lib/workpaper-export";
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { runFileDiagnostics } from "@/lib/diagnostics";
@@ -74,7 +76,7 @@ import {
   isOperatingLeaseLoan,
   hydrateLinkedAgreementPredecessors,
 } from "@/lib/aspe-utils";
-import CapitalLeaseAssessment, { calculatePVFromAnswers, formatAssetType, parseAssetType, type AssessmentResult, type StraightLineAnswers, type AssessmentAnswers, type ImportedEstimates } from "@/components/capital-lease-assessment";
+import CapitalLeaseAssessment, { formatAssetType, parseAssetType, type AssessmentResult, type StraightLineAnswers, type AssessmentAnswers, type ImportedEstimates } from "@/components/capital-lease-assessment";
 import ImportDocumentDialog from "@/components/import-document-dialog";
 import { importedLoanDurations, validImportMonths } from "@/lib/import-durations";
 import type { DocumentImportResult, DocumentImportResultUnresolvedRateFindingsItem } from "@workspace/api-client-react";
@@ -84,6 +86,9 @@ import ModificationAssessment, { type ModificationAssessmentValue } from "@/comp
 import { usePredecessorGraph } from "@/hooks/use-predecessor-graph";
 import { buildDisclosureModel, type DisclosureModel, DisclosureEvidenceError } from "@/lib/disclosure-model";
 import { downloadPresentationDisclosureDocx, downloadPresentationDisclosurePdf } from "@/lib/disclosure-export";
+
+import { LeaseSaveStatus } from "@/components/lease-save-status";
+import { LeaseCalculationAvailability } from "@/components/lease-calculation-availability";
 
 function groupByCounterparty<T extends { counterparty: string | null }>(
   items: T[],
@@ -459,6 +464,7 @@ export default function FileDetail() {
       economicLife,
       termMonths,
       monthlyPayment: f?.monthlyPayment ?? 0,
+      firstPaymentAmount: f?.firstPaymentAmount ?? null,
       downPayment: f?.downPayment ?? 0,
       interestRate: f?.interestRate ?? 0,
       paymentAtBeginning: f?.paymentAtBeginning ?? false,
@@ -468,10 +474,7 @@ export default function FileDetail() {
       buyoutForImplicitRate: f?.buyoutAmount ?? 0,
       leaseEndingTerms: f?.leaseEndingTerms as unknown as LeaseEndingTerms | null,
     };
-    const pv = calculatePVFromAnswers(answers);
-    if (pv > 0 && answers.fairValue > 0) {
-      answers.pvPctFairValue = Math.round((pv / answers.fairValue) * 1000) / 10;
-    }
+    answers.pvPctFairValue = rentalAssessment(answers)?.percent ?? 0;
     setImportedAnswers(answers);
     const hasSLData =
       (f?.freeRentMonths ?? 0) > 0 ||
@@ -1817,22 +1820,19 @@ export default function FileDetail() {
                 </CardHeader>
                 <CardContent className="p-6 pt-4 pb-5 flex-1">
                       {(() => {
+                        if (loan.leaseEndingTerms && (loan.leaseEndingTerms.status !== "reviewed" || leaseScheduleSupportIssue(loan))) {
+                          return <LeaseCalculationAvailability unavailable />;
+                        }
                         if (isOperatingLease) {
-                          const monthly = Number(loan.monthlyPayment ?? 0);
-                          const term = loan.termMonths ?? 0;
-                          const total = monthly * term;
-                          return (
-                            <div className="text-sm space-y-1">
-                              <div className="flex justify-between"><span className="text-muted-foreground">Monthly Payment</span><span className="font-medium">{formatCurrency(monthly)}</span></div>
-                              <div className="flex justify-between"><span className="text-muted-foreground">Term</span><span className="font-medium">{term} months</span></div>
-                              <div className="flex justify-between"><span className="text-muted-foreground">Total Commitment</span><span className="font-medium">{formatCurrency(total)}</span></div>
-                            </div>
-                          );
+                          return <OperatingLeaseCardTerms loan={loan} />;
                         }
                         // Loan or capital lease — compute the booked schedule. When
                         // fair value is adopted the contractual payment is held fixed.
                         const effectiveRate = effectiveLoanRate(loan);
                         const result = calculateBookedSchedule(withPredecessor(loan) as any);
+                        if (result.evidenceMetadata?.accountingUnavailable === true) {
+                          return <LeaseCalculationAvailability unavailable />;
+                        }
                         const reportYearEnd = parseISO(loan.fiscalYearEnd ?? file?.fiscalYearEnd ?? format(new Date(), "yyyy-MM-dd"));
                         const currentPeriodEnd = new Date(reportYearEnd);
                         currentPeriodEnd.setFullYear(currentPeriodEnd.getFullYear() + 1);
@@ -2871,7 +2871,8 @@ export default function FileDetail() {
               </Button>
             </div>
           )}
-          <DialogFooter>
+          <DialogFooter className="flex-wrap">
+            <LeaseSaveStatus ending={form.leaseEndingTerms} validationError={validateLoanForm(form, formMode)} />
             <Button variant="outline" onClick={() => { setCreateOpen(false); setEditingLoanId(null); setConfirmedImportedEvents([]); setImportFindings([]); }}>
               Cancel
             </Button>
@@ -2898,6 +2899,7 @@ export default function FileDetail() {
                         principal: form.principal,
                         downPayment: form.downPayment,
                         interestRate: Number(form.interestRate),
+                        leaseAssessmentRate: form.leaseAssessmentRate,
                         rateType: form.rateType,
                         rateBenchmark: form.rateType === "prime_linked"
                           ? form.rateBenchmark === "boc_v80691311" ? "boc_v80691311" : undefined
@@ -2973,6 +2975,7 @@ export default function FileDetail() {
                         principal: form.principal,
                         downPayment: form.downPayment,
                         interestRate: Number(form.interestRate),
+                        leaseAssessmentRate: form.leaseAssessmentRate,
                         rateType: form.rateType,
                         rateBenchmark: form.rateType === "prime_linked" ? "boc_v80691311" : null,
                         contractualPrimeName: form.contractualPrimeName,
@@ -3051,8 +3054,8 @@ export default function FileDetail() {
               disabled={validateLoanForm(form, formMode) !== null || !modification.valid || createLoan.isPending || updateLoan.isPending}
             >
               {editingLoanId
-                ? updateLoan.isPending ? "Saving..." : "Save Changes"
-                : createLoan.isPending ? "Creating..." : form.isCapitalLease ? "Create Capital Lease" : "Create Loan"}
+                ? updateLoan.isPending ? "Saving..." : form.leaseEndingTerms && form.leaseEndingTerms.status !== "reviewed" ? "Save Draft Lease" : "Save Changes"
+                : createLoan.isPending ? "Creating..." : form.leaseEndingTerms && form.leaseEndingTerms.status !== "reviewed" ? "Create Draft Lease" : form.isCapitalLease ? "Create Capital Lease" : formMode === "operating_lease" ? "Create Operating Lease" : "Create Loan"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -3206,12 +3209,13 @@ export default function FileDetail() {
               fairValue: result.answers.fairValue,
               specializedAsset: result.answers.specializedAsset,
               assetDescription: formatAssetType(result.answers.assetType) || "",
-              assetCost: result.answers.fairValue || 0,
+              assetCost: result.pvValue > 0 ? Math.min(result.pvValue, result.answers.fairValue) : 0,
               assetUsefulLife: result.answers.economicLife || 0,
               capitalLeaseRationale: result.rationale,
               monthlyPayment: result.answers.monthlyPayment,
               paymentOverride: result.answers.monthlyPayment,
               firstPaymentAmount: result.answers.firstPaymentAmount ?? undefined,
+              leaseAssessmentRate: result.answers.interestRate,
               termMonths: result.answers.termMonths,
               isOfficeProperty: false,
               freeRentMonths: 0,
@@ -3268,18 +3272,8 @@ export default function FileDetail() {
             const annualPayment = r.answers.monthlyPayment * 12;
 
             // Straight-line computation
-            const sl = (file && r.straightLine && operatingStartDate)
-              ? calculateStraightLineLease({
-                  baseMonthlyRent: r.answers.monthlyPayment,
-                  termMonths: r.answers.termMonths,
-                  freeRentMonths: r.straightLine.freeRentMonths || 0,
-                  escalationRate: r.straightLine.rentEscalationRate || 0,
-                  rentSteps: r.straightLine.rentSteps ?? [],
-                  tenantImprovementAllowance: r.straightLine.tenantImprovementAllowance || 0,
-                  otherInducements: r.straightLine.otherInducements || 0,
-                  startDate: operatingStartDate,
-                  fiscalYearEnd: file.fiscalYearEnd,
-                })
+            const sl = (file && operatingStartDate)
+              ? calculateOperatingLeaseAssessment(r, operatingStartDate, file.fiscalYearEnd)
               : null;
             const yearly = sl ? buildYearlyStraightLine(sl.schedule) : [];
 
@@ -3438,14 +3432,14 @@ export default function FileDetail() {
 
                 {/* Recurring Monthly Entries */}
                 {sl && (() => {
-                  const cashVaries = (r.straightLine?.freeRentMonths ?? 0) > 0 || (r.straightLine?.rentEscalationRate ?? 0) > 0 || (r.straightLine?.rentSteps?.length ?? 0) > 0;
+                  const cashVaries = sl.schedule.some((p) => p.actualPayment !== r.answers.monthlyPayment);
                   return (
                   <div className="space-y-3">
                     <h4 className="font-semibold text-sm">Recurring Monthly Journal Entry</h4>
                     <div className="rounded-lg border overflow-hidden text-sm">
                       <div className="bg-muted/40 p-2 text-xs font-medium text-muted-foreground">
                         {cashVaries
-                          ? "Straight-line expense is the same every month; the cash amount varies by month (free rent / escalations) — use the actual payment for each month from the schedule above. Shown below using the base monthly rent."
+                          ? "Straight-line expense is the same every month; cash payments vary (first rental, free rent, steps or escalations). Use the actual payment for each month. Shown below using the base monthly rent."
                           : "Same every month over the lease term"}
                       </div>
                       <table className="w-full">
@@ -3542,8 +3536,9 @@ export default function FileDetail() {
                 ...makeBlankLoanForm(),
                 name: importedLeaseMeta?.name || "Operating lease",
                 counterparty: operatingCounterparty,
-                principal: operatingLeaseResult.answers.monthlyPayment * operatingLeaseResult.answers.termMonths,
+                principal: calculateOperatingLeaseAssessment(operatingLeaseResult, operatingStartDate, file?.fiscalYearEnd ?? operatingStartDate)?.totalLeasePayments ?? 0,
                 monthlyPayment: operatingLeaseResult.answers.monthlyPayment,
+                firstPaymentAmount: operatingLeaseResult.answers.firstPaymentAmount ?? undefined,
                 termMonths: operatingLeaseResult.answers.termMonths,
                 termYears: operatingLeaseResult.answers.termMonths / 12,
                 startDate: operatingStartDate,
@@ -3566,15 +3561,7 @@ export default function FileDetail() {
                 const termYears = Math.ceil(r.answers.termMonths / 12);
                 // Total cash commitment must respect rent steps and free-rent
                 // months, not just first-year rent × term.
-                const slPreview = calculateStraightLineLease({
-                  baseMonthlyRent: r.answers.monthlyPayment,
-                  termMonths: r.answers.termMonths,
-                  freeRentMonths: r.straightLine?.freeRentMonths ?? 0,
-                  escalationRate: r.straightLine?.rentEscalationRate ?? 0,
-                  rentSteps: r.straightLine?.rentSteps,
-                  startDate: operatingStartDate,
-                  fiscalYearEnd: file.fiscalYearEnd,
-                });
+                const slPreview = calculateOperatingLeaseAssessment(r, operatingStartDate, file.fiscalYearEnd);
                 const totalCommitment =
                   slPreview?.totalLeasePayments ?? r.answers.monthlyPayment * r.answers.termMonths;
                 const descParts = [
@@ -3594,7 +3581,7 @@ export default function FileDetail() {
                     counterparty: operatingCounterparty,
                     isCapitalLease: false,
                     principal: totalCommitment,
-                    interestRate: 0,
+                    ...assessmentPaymentSaveValues(r.answers, false),
                     amortizationYears: termYears,
                     termYears,
                     startDate: operatingStartDate,
@@ -3609,8 +3596,9 @@ export default function FileDetail() {
                     fairValue: r.answers.fairValue || undefined,
                     specializedAsset: r.answers.specializedAsset,
                     capitalLeaseRationale: r.rationale,
-                    leaseEndingTerms: r.answers.leaseEndingTerms ? { ...r.answers.leaseEndingTerms } : undefined,
-                    monthlyPayment: r.answers.monthlyPayment,
+                    paymentTiming: r.answers.paymentAtBeginning ? "beginning" : "end",
+                    assetDescription: formatAssetType(r.answers.assetType) || undefined,
+                    assetUsefulLife: r.answers.economicLife || undefined,
                     termMonths: r.answers.termMonths,
                     isOfficeProperty: r.isOfficeProperty,
                     freeRentMonths: r.straightLine?.freeRentMonths ?? 0,

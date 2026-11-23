@@ -31,8 +31,48 @@ export interface RentStep {
   monthlyRent: number;
 }
 
+export interface OperatingLeaseCashTerms {
+  baseMonthlyRent: number;
+  /** Already-normalized financing rental; replaces the first non-free rental only. */
+  firstPaymentAmount?: number | null;
+  termMonths: number;
+  freeRentMonths?: number;
+  escalationRate?: number;
+  /** Stepped $ rent schedule. When provided (non-empty), overrides escalationRate. */
+  rentSteps?: RentStep[] | null;
+}
+
+/** One contractual rental stream for commitments and straight-line accounting.
+ * Free months remain zero; the distinct first rental is not escalated or added
+ * on top of a step. Null/omitted keeps the historical stream unchanged. */
+export function buildOperatingLeasePayments({
+  baseMonthlyRent, firstPaymentAmount, termMonths, freeRentMonths = 0,
+  escalationRate = 0, rentSteps,
+}: OperatingLeaseCashTerms): number[] {
+  const steps = (rentSteps ?? [])
+    .filter((s) => s.monthlyRent > 0 && s.fromYear >= 1 && s.toYear >= s.fromYear)
+    .sort((a, b) => a.fromYear - b.fromYear);
+  const payments: number[] = [];
+  let firstRental = true;
+  for (let m = 0; m < termMonths; m++) {
+    if (m < freeRentMonths) {
+      payments.push(0);
+      continue;
+    }
+    const yearOffset = Math.floor(m / 12);
+    const step = steps.find((s) => yearOffset + 1 >= s.fromYear && yearOffset + 1 <= s.toYear);
+    const rent = steps.length > 0
+      ? (step ?? steps[steps.length - 1]).monthlyRent
+      : baseMonthlyRent * Math.pow(1 + escalationRate / 100, yearOffset);
+    payments.push(firstRental ? firstPaymentAmount ?? rent : rent);
+    firstRental = false;
+  }
+  return payments;
+}
+
 export function calculateStraightLineLease({
   baseMonthlyRent,
+  firstPaymentAmount,
   termMonths,
   freeRentMonths = 0,
   escalationRate = 0,
@@ -41,13 +81,7 @@ export function calculateStraightLineLease({
   otherInducements = 0,
   startDate,
   fiscalYearEnd,
-}: {
-  baseMonthlyRent: number;
-  termMonths: number;
-  freeRentMonths?: number;
-  escalationRate?: number;
-  /** Stepped $ rent schedule. When provided (non-empty), overrides escalationRate. */
-  rentSteps?: RentStep[] | null;
+}: OperatingLeaseCashTerms & {
   tenantImprovementAllowance?: number;
   otherInducements?: number;
   startDate: string;
@@ -64,25 +98,10 @@ export function calculateStraightLineLease({
   const fyEndMonth = fyEnd.getMonth();
   const fyEndDay = fyEnd.getDate();
 
-  // Build actual payment schedule month by month
-  const actualPayments: number[] = [];
-  let totalLeasePayments = 0;
-
-  for (let m = 0; m < termMonths; m++) {
-    const yearOffset = Math.floor(m / 12);
-    let rent: number;
-    if (hasSteps) {
-      const leaseYear = yearOffset + 1;
-      const step = steps.find((s) => leaseYear >= s.fromYear && leaseYear <= s.toYear);
-      // Months past the last defined step keep the last step's rent.
-      rent = step ? step.monthlyRent : steps[steps.length - 1].monthlyRent;
-    } else {
-      rent = baseMonthlyRent * Math.pow(1 + escalationRate / 100, yearOffset);
-    }
-    const payment = m < freeRentMonths ? 0 : rent;
-    actualPayments.push(payment);
-    totalLeasePayments += payment;
-  }
+  const actualPayments = buildOperatingLeasePayments({
+    baseMonthlyRent, firstPaymentAmount, termMonths, freeRentMonths, escalationRate, rentSteps,
+  });
+  const totalLeasePayments = actualPayments.reduce((sum, payment) => sum + payment, 0);
 
   const totalInducements = tenantImprovementAllowance + otherInducements;
   const totalConsideration = totalLeasePayments - totalInducements;

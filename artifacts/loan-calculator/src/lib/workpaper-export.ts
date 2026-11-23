@@ -1,3 +1,4 @@
+import { savedLeaseConclusion } from "./lease-assessment-values";
 import { saveAs } from "file-saver";
 import { PrintReport, type PrintTable, type Orientation } from "./print-report";
 import { printRateTimeline } from "./print-rate-evidence";
@@ -155,6 +156,29 @@ export function buildLoanWorkpaper(
         cells,
       );
   appendTransitionEvidence(workpaper, loan, cells);
+  if (loan.isCapitalLease || agreementKind(loan) === "operating_lease") {
+    const assessment = savedLeaseConclusion(loan);
+    const conflict = assessment.status !== "needs_review" && (assessment.status === "capital") !== loan.isCapitalLease;
+    workpaper.sections = workpaper.sections.filter(s => s.title !== "Lease Classification (ASPE 3065)");
+    workpaper.sections.splice(1, 0, {
+      title: "Lease Classification (ASPE 3065)",
+      head: ["Item", "Detail"],
+      rows: [
+        ["Saved classification", loan.isCapitalLease ? "Capital lease" : "Operating lease"],
+        ["Evidence status", assessment.status === "needs_review" || conflict ? "Needs review — historical classification retained" : "Reviewed evidence supports saved classification"],
+        ["Conclusion / review explanation", assessment.rationale],
+        ["Confirmed supporting reasons", assessment.status === "needs_review" ? "Unavailable until evidence is reviewed" : assessment.reasons.join("; ") || "Reviewed operating conclusion"],
+        ["Present value of rents", assessment.rental ? cells.amount(assessment.rental.pv) : "Unavailable"],
+        ["Rent as % of fair value", assessment.rental ? cells.rate(assessment.rental.percent) : "Unavailable — not a failed test"],
+        ["Useful-life comparison", assessment.lifePercent == null ? "Unavailable — not a failed test" : cells.rate(assessment.lifePercent)],
+        ...(assessment.required ? [
+          ["Required-payment support as % of fair value", cells.rate(assessment.required.percent)],
+          ["Required-payment basis", loan.leaseEndingTerms?.kind === "guaranteed_residual" ? "Reviewed shortfall guarantee — not a purchase" : "Reviewed mandatory ending payment"],
+        ] : []),
+      ],
+      notes: ["Rent alone excludes ending amounts. Supported mandatory payments and guarantees remain relevant under ASPE 3065. Optional purchases and unguaranteed lessor residuals are not required lessee payments. Genuine bargain purchases are a separate basis; all criteria need not pass. Classification support is not an opening asset or liability. Missing historical evidence does not change the saved classification."],
+    });
+  }
   if (loan.leaseEndingTerms) {
     const ending = loan.leaseEndingTerms;
     workpaper.sections.push({
@@ -437,10 +461,9 @@ function buildDebtWorkpaper(
     }
   } else {
     sections.push({
-      title: "Lease Classification (ASPE 3065)",
+      title: "Capital Lease Calculation",
       head: ["Item", "Detail"],
       rows: [
-        ["Classification", "Capital lease"],
         ["Discount rate used", cells.rate(summary.interestRate)],
         [
           "Total minimum lease payments",
@@ -450,7 +473,7 @@ function buildDebtWorkpaper(
         ["Obligation at year end (PV)", cells.amount((summary as CapitalLeaseSummary).obligations)],
       ],
       notes: [
-        "Classification support: document which ASPE 3065.06 criteria were met (transfer of ownership / bargain purchase option, lease term vs. economic life, PV of minimum payments vs. fair value of the asset).",
+        "These amounts relate to recording the capital lease, after classification.",
       ],
     });
   }
@@ -648,6 +671,8 @@ function buildOperatingLeaseWorkpaper(
     ["Term", `${summary.termMonths} months`],
     ["Total lease commitment", cells.amount(summary.totalCommitment)],
   ];
+  if (loan.firstPaymentAmount != null)
+    termsRows.push(["First financing rental", cells.amount(Number(loan.firstPaymentAmount))]);
   if ((loan.freeRentMonths ?? 0) > 0) termsRows.push(["Free rent period", `${loan.freeRentMonths} months`]);
   if (Number(loan.tenantImprovementAllowance ?? 0) > 0)
     termsRows.push(["Tenant improvement allowance", cells.amount(Number(loan.tenantImprovementAllowance))]);
@@ -655,16 +680,6 @@ function buildOperatingLeaseWorkpaper(
     termsRows.push(["Other inducements", cells.amount(Number(loan.otherInducements))]);
   sections.push({ title: "Terms", head: ["Item", "Detail"], rows: termsRows });
 
-  sections.push({
-    title: "Lease Classification (ASPE 3065)",
-    head: ["Item", "Detail"],
-    rows: [
-      [
-        "Classification",
-        "Operating lease — benefits and risks of ownership remain substantially with the lessor; none of the capital lease criteria in ASPE 3065.06 are met.",
-      ],
-    ],
-  });
 
   const slExpenseFY =
     summary.yearlyStraightLine.find((y) => y.fiscalYear === reportFY)?.amount ?? 0;

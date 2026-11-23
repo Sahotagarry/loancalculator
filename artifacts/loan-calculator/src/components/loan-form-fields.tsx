@@ -18,6 +18,7 @@ import { CounterpartyCombobox } from "@/components/counterparty-combobox";
 import { SecurityCollateralFields } from "@/components/security-collateral-fields";
 
 export interface LoanFormState {
+  leaseAssessmentRate?: number | null;
   interestMethod?: InterestMethod;
   importedInterestNote?: string;
   importedDurationMonths?: boolean;
@@ -192,7 +193,7 @@ interface LoanFormFieldsProps {
 export function LoanFormFields({ form, setForm: persistForm, mode = "loan" }: LoanFormFieldsProps) {
   const setForm: Dispatch<SetStateAction<LoanFormState>> = action => persistForm(prev => {
     const next = typeof action === "function" ? action(prev) : action;
-    const financialFields: Array<keyof LoanFormState> = ["principal", "downPayment", "interestRate", "amortizationYears", "termYears", "termMonths", "startDate", "paymentFrequency", "paymentTiming", "firstPaymentDate", "firstPaymentAmount", "monthlyPayment", "paymentOverride", "balloonPayment", "fairValue", "ioMonths", "graceMonths"];
+    const financialFields: Array<keyof LoanFormState> = ["principal", "downPayment", "interestRate", "leaseAssessmentRate", "amortizationYears", "termYears", "termMonths", "startDate", "paymentFrequency", "paymentTiming", "firstPaymentDate", "firstPaymentAmount", "monthlyPayment", "paymentOverride", "balloonPayment", "fairValue", "ioMonths", "graceMonths", "transferOfOwnership", "bargainPurchaseOption", "leaseTermPct", "assetUsefulLife", "specializedAsset", "isCapitalLease"];
     if (next.leaseEndingTerms && next.leaseEndingTerms === prev.leaseEndingTerms && financialFields.some(key => next[key] !== prev[key])) {
       return { ...next, leaseEndingTerms: { ...next.leaseEndingTerms, status: "draft" } };
     }
@@ -374,7 +375,7 @@ export function LoanFormFields({ form, setForm: persistForm, mode = "loan" }: Lo
               </div>
               <div className="space-y-2">
                 <Label htmlFor="downPayment">
-                  {mode === "capital_lease" ? "Down Payment / First Payment" : "Down Payment"}
+                  {mode === "capital_lease" ? "Down Payment / First Payment" : "Down payment at loan start"}
                 </Label>
                 <Input
                   id="downPayment"
@@ -388,6 +389,7 @@ export function LoanFormFields({ form, setForm: persistForm, mode = "loan" }: Lo
                       : "Lump sum paid upfront (optional)"
                   }
                 />
+                {mode === "loan" && <p className="text-xs text-muted-foreground">Paid later? Open the saved loan and select <strong>Record extra principal payment</strong>.</p>}
                 {form.downPayment > 0 && form.principal > form.downPayment ? (
                   <p className="text-xs text-muted-foreground">
                     {mode === "capital_lease" ? "Obligation financed" : "Amount financed"}:{" "}
@@ -414,19 +416,6 @@ export function LoanFormFields({ form, setForm: persistForm, mode = "loan" }: Lo
                     required
                   />
                   <p className="text-[10px] text-muted-foreground leading-tight">Must be evidenced from the contract.</p>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="downPaymentPrime">
-                    {mode === "capital_lease" ? "Down Payment / First Payment" : "Down Payment"}
-                  </Label>
-                  <Input
-                    id="downPaymentPrime"
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={form.downPayment || ""}
-                    onChange={(e) => setForm({ ...form, downPayment: Number(e.target.value) })}
-                  />
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-4">
@@ -535,7 +524,7 @@ export function LoanFormFields({ form, setForm: persistForm, mode = "loan" }: Lo
               </div>
               <div className="space-y-2">
                 <Label htmlFor="downPaymentPrime">
-                  {mode === "capital_lease" ? "Down Payment / First Payment" : "Down Payment"}
+                  {mode === "capital_lease" ? "Down Payment / First Payment" : "Down payment at loan start"}
                 </Label>
                 <Input
                   id="downPaymentPrime"
@@ -549,6 +538,7 @@ export function LoanFormFields({ form, setForm: persistForm, mode = "loan" }: Lo
                       : "Lump sum paid upfront (optional)"
                   }
                 />
+                {mode === "loan" && <p className="text-xs text-muted-foreground">Paid later? Open the saved loan and select <strong>Record extra principal payment</strong>.</p>}
                 {form.downPayment > 0 && form.principal > form.downPayment ? (
                   <p className="text-xs text-muted-foreground">
                     {mode === "capital_lease" ? "Obligation financed" : "Amount financed"}:{" "}

@@ -148,6 +148,8 @@ export const loansTable = pgTable("loans", {
   monthlyPayment: numeric("monthly_payment", { precision: 15, scale: 2 }),
   paymentOverride: numeric("payment_override", { precision: 15, scale: 2 }),
   firstPaymentAmount: numeric("first_payment_amount", { precision: 15, scale: 2 }),
+  // Assessment evidence, never the contractual rate used to identify operating leases.
+  leaseAssessmentRate: numeric("lease_assessment_rate"),
   termMonths: integer("term_months"),
   leaseEndingTerms: jsonb("lease_ending_terms").$type<Record<string, unknown>>(),
   // Asset tracking

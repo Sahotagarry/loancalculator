@@ -1,9 +1,10 @@
+import { savedLeaseConclusion, percentLabel, savedRentalAssessment, assessmentPaymentSaveValues, assessmentAnswersForReview, calculateOperatingLeaseAssessment } from "@/lib/lease-assessment-values";
 import { DEFAULT_LOAN_INTEREST_METHOD, interestMethods, isDaily } from "@workspace/amortization";
 import { useAuth } from "@/hooks/use-auth";
 import { useState, useMemo } from "react";
 import { useRoute } from "wouter";
 import { Link } from "wouter";
-import { useGetLoan, getGetLoanQueryKey, useGetFile, useGetClient, useUpdateLoan, useGetPrimeRate, useListLoans, useListMasterAgreements, useCreateLoanEventSet, usePreviewLoanEventSet, getListLoanEventSetsQueryKey, useGetLoanRateTimeline, getGetLoanRateTimelineQueryKey, useOverrideLoanRate, useRestoreLoanSourcedRate, useGetFvDecisionHistory, getGetFvDecisionHistoryQueryKey, getListLoansQueryKey, useConfirmFvDecision, type LoanEventInput } from "@workspace/api-client-react";
+import { useGetLoan, getGetLoanQueryKey, useGetFile, useGetClient, useUpdateLoan, useGetPrimeRate, useListLoans, useListMasterAgreements, useCreateLoanEventSet, usePreviewLoanEventSet, getListLoanEventSetsQueryKey, useGetLoanRateTimeline, getGetLoanRateTimelineQueryKey, useOverrideLoanRate, useRestoreLoanSourcedRate, useGetFvDecisionHistory, getGetFvDecisionHistoryQueryKey, getListLoansQueryKey, useConfirmFvDecision, type LoanEventInput, type LoanEventSetPreview } from "@workspace/api-client-react";
 import { queryClient } from "@/lib/queryClient";
 import {
   Card,
@@ -72,6 +73,7 @@ import { FvDecisionPanel } from "@/components/fv-decision-panel";
 import { ArrowLeft, Download, FileText, Calendar, Pencil, ShieldCheck, AlertTriangle, CheckCircle2, XCircle, RotateCcw, DollarSign, TrendingDown, Clock, Percent, Star, ClipboardList, ChevronDown, ChevronUp, Paperclip } from "lucide-react";
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import CapitalLeaseAssessment, { formatAssetType, parseAssetType, type AssessmentAnswers, type AssessmentResult, type StraightLineAnswers } from "@/components/capital-lease-assessment";
+import { LeaseReviewDetails } from "@/components/lease-review-details";
 import { PageHeader } from "@/components/page-header";
 import { calculateStraightLineLease, buildYearlyStraightLine } from "@/lib/straight-line";
 import { formatCurrency } from "@/lib/format";
@@ -93,8 +95,13 @@ import { buildAssetDepreciationSchedule, isOperatingLeaseLoan, calculateBookedSc
 import { needsFvAssessment, needsUrgentFvAssessment } from "@/lib/fv-assessment";
 import { resolveSuggestedFvRate, resolveEffectiveRate, parseFvRateInput, canSaveFvRate, resolveFvRateForDecision, isValidFvRate } from "@/lib/fv-rate";
 import { getFiscalYear, getFyEndParts } from "@/lib/fiscal";
+import { ExtraPrincipalPaymentFields, newExtraPayment } from "@/components/extra-principal-payment-fields";
 import { normalizeEventSequences } from "@/lib/import-events";
 import ModificationAssessment, { type ModificationAssessmentValue } from "@/components/modification-assessment";
+
+import { LeaseSaveStatus } from "@/components/lease-save-status";
+import { LeaseCalculationAvailability } from "@/components/lease-calculation-availability";
+import { leaseScheduleCounts } from "@/lib/schedule-display";
 
 export default function LoanDetail() {
   const { canWrite } = useAuth();
@@ -114,7 +121,8 @@ export default function LoanDetail() {
   const [eventEditorOpen, setEventEditorOpen] = useState(false);
   const [eventDraft, setEventDraft] = useState<LoanEventInput[]>([]);
   const [eventReason, setEventReason] = useState("");
-  const [eventPreview, setEventPreview] = useState<any>(null);
+  const [paymentVersion, setPaymentVersion] = useState<{ version: number; revision: string | null } | null>(null);
+  const [previewResult, setPreviewResult] = useState<{ key: string; result: LoanEventSetPreview } | null>(null);
   const [modification, setModification] = useState<ModificationAssessmentValue>({
     predecessorAgreementId: null,
     modificationEffectiveDate: null,
@@ -292,16 +300,17 @@ export default function LoanDetail() {
       onSuccess: () => {
         queryClient.invalidateQueries({ queryKey: [`/api/loans/${loanId}`] });
         queryClient.invalidateQueries({ queryKey: getListLoanEventSetsQueryKey(loanId) });
+        queryClient.invalidateQueries({ queryKey: getListLoansQueryKey(fileId) });
         setEventEditorOpen(false);
-        toast({ title: "Principal payment events saved", description: "A successor event-set version was created." });
+        toast({ title: "Extra principal payments saved", description: "The loan schedule has been updated." });
       },
       onError: (err: any) => {
         const conflict = err?.status === 409 || /version|conflict/i.test(getErrorMessage(err));
-        toast({ title: conflict ? "Events changed elsewhere" : "Couldn't save events", description: conflict ? "Refresh the loan, review the current event set, then apply your changes again." : getErrorMessage(err), variant: "destructive" });
+        toast({ title: conflict ? "Payments changed elsewhere" : "Couldn't save payments", description: conflict ? "Refresh the loan and review the latest payments before making your changes again." : getErrorMessage(err), variant: "destructive" });
       },
     },
   });
-  const previewEventSet = usePreviewLoanEventSet({ mutation: { onSuccess: setEventPreview, onError: (err) => toast({ title: "Couldn't preview events", description: getErrorMessage(err), variant: "destructive" }) } });
+  const previewEventSet = usePreviewLoanEventSet({ mutation: { onSuccess: (result, { data }) => setPreviewResult({ key: JSON.stringify(data), result }), onError: (err) => toast({ title: "Couldn't preview payments", description: getErrorMessage(err), variant: "destructive" }) } });
 
   const rate = Number(loan?.interestRate ?? 0);
 
@@ -344,6 +353,10 @@ export default function LoanDetail() {
     if (loan.fvDecision === "use_fv" && fvResult) return fvResult;
     return contractualResult;
   }, [loan, contractualResult, fvResult]);
+
+  const accountingUnavailable = result?.evidenceMetadata?.accountingUnavailable === true
+    || !!(loan?.leaseEndingTerms && loan.leaseEndingTerms.status !== "reviewed");
+  const { rentals: rentalPeriods, settlementAccruals: settlementAccrualRows } = leaseScheduleCounts(result?.schedule ?? []);
 
   const fvDiff = useMemo(() => {
     if (!loan || !fvResult || fvResult.fairValue == null) return null;
@@ -809,6 +822,26 @@ export default function LoanDetail() {
       </div>
     );
   }
+  const rentAssessment = savedRentalAssessment(loan);
+  const leaseConclusion = savedLeaseConclusion(loan);
+  const openPayments = (add: boolean) => {
+    if (!canWrite) return;
+    const existing = normalizeEventSequences((loan.activeEvents ?? []).map(({ id: _id, setId: _setId, loanId: _loanId, termRevisionId: _termId, ...payment }) => payment));
+    setEventDraft(add ? [...existing, newExtraPayment(existing.length + 1)] : existing);
+    setPaymentVersion({ version: loan.activeEventSetVersion, revision: loan.currentRevisionId ?? null });
+    setEventReason(add ? "Record extra principal payment" : "");
+    setPreviewResult(null);
+    setEventEditorOpen(true);
+  };
+  const paymentRequest = eventEditorOpen && paymentVersion?.revision ? {
+    expectedVersion: paymentVersion.version, termRevisionId: paymentVersion.revision,
+    reason: eventReason.trim(), source: "Loan detail", events: normalizeEventSequences(eventDraft),
+  } : null;
+  const canSubmitPayments = canWrite && paymentRequest && !!paymentRequest.reason &&
+    !createEventSet.isPending && eventDraft.every(e => e.effectiveDate && e.amount > 0 && e.source.trim() && e.reason.trim() && e.classification === "ordinary");
+  const eventPreview = paymentRequest && previewResult?.key === JSON.stringify(paymentRequest) ? previewResult.result : null;
+
+
 
   return (
     <div className="min-h-screen bg-background">
@@ -957,36 +990,33 @@ export default function LoanDetail() {
         <main className="space-y-6">
           {!isOperatingLeaseLoan(loan) && (
             <Card>
-              <CardHeader className="flex-row items-center justify-between space-y-0">
+              <CardHeader className="flex flex-col gap-3 space-y-0 sm:flex-row sm:items-center sm:justify-between">
                 <div>
-                  <CardTitle className="text-base">Mid-term Principal Payments</CardTitle>
-                  <CardDescription>Immutable, ordered principal-only events used in this schedule.</CardDescription>
+                  <CardTitle className="text-base">Extra principal payments</CardTitle>
+                  <CardDescription>Record a lump sum paid after the agreement started. It reduces the balance from the payment date, not from day one.</CardDescription>
                 </div>
-                {canWrite && (
-                <Button size="sm" variant="outline" onClick={() => {
-                  setEventDraft(normalizeEventSequences((loan.activeEvents ?? []).map(({ id: _id, setId: _setId, loanId: _loanId, termRevisionId: _termId, ...event }) => event)));
-                  setEventReason("");
-                  setEventPreview(null);
-                  setEventEditorOpen(true);
-                }}>Manage payments</Button>
-                )}
+                {canWrite && <div className="flex shrink-0 flex-wrap gap-2">
+                  {!!loan.activeEvents?.length && <Button size="sm" variant="outline" onClick={() => openPayments(false)}>Edit payments</Button>}
+                  <Button size="sm" onClick={() => openPayments(true)}>Record extra principal payment</Button>
+                </div>}
               </CardHeader>
               <CardContent className="space-y-2 text-sm">
-                {(loan.activeEvents ?? []).length === 0 ? <p className="text-muted-foreground">No active mid-term principal payments.</p> : (
+                {(loan.activeEvents ?? []).length === 0 ? <p className="text-muted-foreground">No extra principal payments recorded.</p> : (
                   <div className="rounded-md border divide-y">
                     {loan.activeEvents.map((event) => <div key={event.id} className="p-2 grid grid-cols-1 md:grid-cols-4 gap-1">
                       <span>{format(parseISO(event.effectiveDate), "MMM d, yyyy")} · {formatCurrency(Number(event.amount))}</span>
                       <span className="text-muted-foreground">{event.ordering === "before_scheduled_payment" ? "Before payment" : "After payment"} · #{event.sequence}</span>
-                      <span>{event.treatment === "keep_maturity" ? "Keep maturity / recast" : "Keep payment / earlier payoff"}</span>
+                      <span>{event.treatment === "keep_maturity" ? "Same end date, recalculated payments" : "Same regular payment"}</span>
                       <span className="text-muted-foreground">{event.source}: {event.reason}</span>
                     </div>)}
                   </div>
                 )}
-                <p className="text-xs text-muted-foreground">Revision {loan.currentRevisionId ?? "—"} · event set {loan.activeEventSetId ?? "—"} v{loan.activeEventSetVersion} · {loan.activeEventSetHash ?? "no fingerprint"}</p>
+                <details className="text-xs text-muted-foreground"><summary className="cursor-pointer">Payment history reference</summary><p className="mt-1 break-all">Revision {loan.currentRevisionId ?? "—"} · event set {loan.activeEventSetId ?? "—"} v{loan.activeEventSetVersion} · {loan.activeEventSetHash ?? "no fingerprint"}</p></details>
               </CardContent>
             </Card>
           )}
           {/* Quick Stats */}
+          <LeaseCalculationAvailability unavailable={accountingUnavailable}>
           {result && (
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <Card>
@@ -1042,13 +1072,15 @@ export default function LoanDetail() {
                     <Clock className="h-5 w-5 text-primary" />
                   </div>
                   <div>
-                    <p className="text-xs text-muted-foreground font-medium">Payment Periods</p>
-                    <p className="text-lg font-bold text-foreground">{result.schedule.length}</p>
+                    <p className="text-xs text-muted-foreground font-medium">{loan.isCapitalLease ? "Rentals" : "Payment Periods"}</p>
+                    <p className="text-lg font-bold text-foreground">{loan.isCapitalLease ? rentalPeriods : result.schedule.length}</p>
+                    {loan.isCapitalLease && settlementAccrualRows > 0 && <p className="text-xs text-muted-foreground">Plus {settlementAccrualRows} settlement-accrual {settlementAccrualRows === 1 ? "row" : "rows"} (not rent)</p>}
                   </div>
                 </CardContent>
               </Card>
             </div>
           )}
+          </LeaseCalculationAvailability>
 
           {/* Review / Diagnostics */}
           {loanDiagnostics && (loanDiagnostics.findings.length > 0 || loanDiagnostics.dismissed.length > 0) && (
@@ -1157,6 +1189,7 @@ export default function LoanDetail() {
               </TabsList>
 
               <TabsContent value="schedule" className="space-y-6">
+                <LeaseCalculationAvailability unavailable={accountingUnavailable}>
                 <Card>
                   <CardHeader>
                     <CardTitle className="font-display">Full Amortization Schedule</CardTitle>
@@ -1226,6 +1259,7 @@ export default function LoanDetail() {
                               <TableCell>
                                 <div className="flex items-center gap-2">
                                   <span>{format(row.date, "MMMM d, yyyy")}</span>
+                                  {row.rowType === "accrued_interest_settlement" && <span className="text-xs text-muted-foreground">Settlement accrual — not a rental{row.payment === 0 ? "; no cash payment assumed" : ""}</span>}
                                   {row.isGrace && (
                                     <span className="text-[10px] font-semibold uppercase tracking-wide rounded bg-muted text-muted-foreground px-1.5 py-0.5 whitespace-nowrap">
                                       Grace
@@ -1270,6 +1304,7 @@ export default function LoanDetail() {
                     </div>
                   </CardContent>
                 </Card>
+                </LeaseCalculationAvailability>
               </TabsContent>
 
               {loan?.rateType === "prime_linked" && (
@@ -1409,6 +1444,7 @@ export default function LoanDetail() {
               )}
 
               <TabsContent value="annual" className="space-y-6">
+                <LeaseCalculationAvailability unavailable={accountingUnavailable}>
                 <Card>
                   <CardHeader className="flex flex-row items-center justify-between space-y-0">
                     <div>
@@ -1477,9 +1513,11 @@ export default function LoanDetail() {
                     </div>
                   </CardContent>
                 </Card>
+                </LeaseCalculationAvailability>
               </TabsContent>
 
               <TabsContent value="chart" className="space-y-6">
+                <LeaseCalculationAvailability unavailable={accountingUnavailable}>
                 {chartStats && (
                   <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
                     <div className="rounded-xl border bg-card p-4 shadow-sm">
@@ -1570,10 +1608,12 @@ export default function LoanDetail() {
                     )}
                   </CardContent>
                 </Card>
+                </LeaseCalculationAvailability>
               </TabsContent>
 
               <TabsContent value="summary" className="space-y-6">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <LeaseCalculationAvailability unavailable={accountingUnavailable}>
                   <Card className="bg-primary text-primary-foreground shadow-xl border-none overflow-hidden">
                     <CardHeader className="pb-2">
                       <CardTitle className="font-display opacity-90 text-sm uppercase tracking-wider">
@@ -1606,6 +1646,7 @@ export default function LoanDetail() {
                     </CardContent>
                   </Card>
 
+                </LeaseCalculationAvailability>
                   <Card>
                     <CardHeader>
                       <CardTitle className="font-display">{loan.isCapitalLease ? "Lease Details" : "Loan Details"}</CardTitle>
@@ -1681,14 +1722,19 @@ export default function LoanDetail() {
                     </CardContent>
                   </Card>
 
-                  {loan.capitalLeaseRationale && (
+                  {loan.isCapitalLease && (
                     <Card>
                       <CardHeader>
-                        <CardTitle className="font-display">ASPE Assessment</CardTitle>
-                        <CardDescription>Capital lease classification rationale</CardDescription>
+                        <CardTitle className="font-display">Lease classification review</CardTitle>
+                        <CardDescription>{leaseConclusion.status === "needs_review" ? "Needs review — reopen the assessment to resolve evidence" : "Classification evidence — reopen the assessment to review or change it"}</CardDescription>
                       </CardHeader>
                       <CardContent className="space-y-3">
-                        <p className="text-sm">{loan.capitalLeaseRationale}</p>
+                        <p className="text-sm">{leaseConclusion.rationale}</p>
+                        {loan.capitalLeaseRationale && <LeaseReviewDetails title="Previous assessment explanation"><p className="text-xs text-muted-foreground">{loan.capitalLeaseRationale}</p></LeaseReviewDetails>}
+                        {rentAssessment && rentAssessment.meets && <p className="text-sm">Rent alone: <strong>{percentLabel(rentAssessment.percent)}% of fair value</strong> — meets the 90% guideline without relying on an ending payment.</p>}
+                        {leaseConclusion.required && (rentAssessment?.meets
+                          ? <LeaseReviewDetails title="Additional required-payment support"><p className="text-sm">{percentLabel(leaseConclusion.required.percent)}% of fair value, including the reviewed {loan.leaseEndingTerms?.kind === "guaranteed_residual" ? "shortfall guarantee — not a purchase" : "mandatory payment"}. Rent alone already meets the guideline; this does not assume buyout cash.</p></LeaseReviewDetails>
+                          : <p className="text-sm">Required-payment support: {percentLabel(leaseConclusion.required.percent)}% of fair value, including the reviewed {loan.leaseEndingTerms?.kind === "guaranteed_residual" ? "shortfall guarantee — not a purchase" : "mandatory payment"}. Rent alone: {rentAssessment ? `${percentLabel(rentAssessment.percent)}%` : "Unavailable"}.</p>)}
                         <div className="space-y-1 pt-2">
                           <div className="flex justify-between text-sm">
                             <span className="text-muted-foreground">Transfer of Ownership</span>
@@ -1700,11 +1746,11 @@ export default function LoanDetail() {
                           </div>
                           <div className="flex justify-between text-sm">
                             <span className="text-muted-foreground">Lease Term % of Life</span>
-                            <span>{loan.leaseTermPct}%</span>
+                            <span>{leaseConclusion.lifePercent == null ? "Unavailable" : `${percentLabel(leaseConclusion.lifePercent)}%`}</span>
                           </div>
                           <div className="flex justify-between text-sm">
-                            <span className="text-muted-foreground">PV % of Fair Value</span>
-                            <span>{loan.pvPctFairValue}%</span>
+                            <span className="text-muted-foreground">Rent as % of fair value</span>
+                            <span>{rentAssessment ? `${percentLabel(rentAssessment.percent)}%` : "Not calculated"}</span>
                           </div>
                           {loan.fairValue && (
                             <div className="flex justify-between text-sm">
@@ -1725,6 +1771,7 @@ export default function LoanDetail() {
 
               {assetDepreciation && (
                 <TabsContent value="asset" className="space-y-6">
+                  <LeaseCalculationAvailability unavailable={accountingUnavailable}>
                   <Card>
                     <CardHeader>
                       <CardTitle className="font-display">Asset Amortization Schedule</CardTitle>
@@ -1812,6 +1859,7 @@ export default function LoanDetail() {
                       )}
                     </CardContent>
                   </Card>
+                  </LeaseCalculationAvailability>
                 </TabsContent>
               )}
 
@@ -2042,12 +2090,15 @@ export default function LoanDetail() {
                       <AlertTriangle className="h-5 w-5 text-amber-600" />
                       Operating Lease
                     </CardTitle>
-                    <CardDescription>ASPE 3065 — No balance sheet impact</CardDescription>
+                    <CardDescription>{accountingUnavailable ? "Draft — classification requires review" : "ASPE 3065 — No balance sheet impact"}</CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-3">
+                    <LeaseCalculationAvailability unavailable={accountingUnavailable}>
                     <p className="text-sm text-muted-foreground">
-                      {loan.capitalLeaseRationale || "This lease does not meet any capital lease criteria under ASPE Section 3065."}
+                      {leaseConclusion.rationale}
                     </p>
+                    <p className="text-sm">Rent alone: {leaseConclusion.rental ? `${percentLabel(leaseConclusion.rental.percent)}% of fair value` : "Unavailable — not a failed test"}.</p>
+                    {leaseConclusion.required && <p className="text-sm">Reviewed required-payment support: {percentLabel(leaseConclusion.required.percent)}% of fair value. A shortfall guarantee is not a purchase.</p>}
                     <div className="space-y-1 pt-2">
                       <div className="flex justify-between text-sm">
                         <span className="text-muted-foreground">Transfer of Ownership</span>
@@ -2062,8 +2113,8 @@ export default function LoanDetail() {
                         <span>{loan.leaseTermPct}%</span>
                       </div>
                       <div className="flex justify-between text-sm">
-                        <span className="text-muted-foreground">PV % of Fair Value</span>
-                        <span>{loan.pvPctFairValue}%</span>
+                        <span className="text-muted-foreground">Rent as % of fair value</span>
+                        <span>{rentAssessment ? `${percentLabel(rentAssessment.percent)}%` : "Not calculated"}</span>
                       </div>
                       {loan.fairValue && (
                         <div className="flex justify-between text-sm">
@@ -2076,16 +2127,17 @@ export default function LoanDetail() {
                         <span>{loan.specializedAsset ? "Yes" : "No"}</span>
                       </div>
                     </div>
+                    </LeaseCalculationAvailability>
                   </CardContent>
                 </Card>
 
                 <Card>
                   <CardHeader>
-                    <CardTitle className="font-display">Lease Details</CardTitle>
+                    <CardTitle className="font-display">{accountingUnavailable ? "Stored lease inputs — not reviewed" : "Lease Details"}</CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-4">
                     <div className="flex justify-between">
-                      <span className="text-muted-foreground">Monthly Payment</span>
+                      <span className="text-muted-foreground">{accountingUnavailable ? "Stored monthly rent" : "Monthly Payment"}</span>
                       <span className="font-semibold">{formatCurrency(Number(loan.monthlyPayment ?? 0))}</span>
                     </div>
                     <div className="flex justify-between">
@@ -2102,7 +2154,7 @@ export default function LoanDetail() {
                     </div>
                     <div className="flex justify-between">
                       <span className="text-muted-foreground">Total Commitment</span>
-                      <span className="font-semibold">{formatCurrency(Number(loan.principal))}</span>
+                      <span className="font-semibold">{accountingUnavailable ? "Unavailable — review required" : formatCurrency(Number(loan.principal))}</span>
                     </div>
                     {Number(loan.camMonthly ?? 0) > 0 && (
                       <>
@@ -2165,6 +2217,7 @@ export default function LoanDetail() {
               )}
 
               {/* Minimum Lease Payments Schedule */}
+              {accountingUnavailable ? <LeaseCalculationAvailability unavailable /> : (
               <Card>
                 <CardHeader>
                   <CardTitle className="font-display">Minimum Lease Payments Schedule</CardTitle>
@@ -2184,6 +2237,7 @@ export default function LoanDetail() {
                         // free rent, and escalations) and group it by fiscal year.
                         const sl = calculateStraightLineLease({
                           baseMonthlyRent: Number(loan.monthlyPayment ?? 0),
+                          firstPaymentAmount: loan.firstPaymentAmount == null ? null : Number(loan.firstPaymentAmount),
                           termMonths: loan.termMonths ?? 0,
                           freeRentMonths: loan.freeRentMonths ?? 0,
                           escalationRate: Number(loan.rentEscalationRate ?? 0),
@@ -2242,15 +2296,17 @@ export default function LoanDetail() {
                   </table>
                 </CardContent>
               </Card>
+              )}
             </div>
           )}
 
           {/* Straight-Line Lease Adjustments — Operating Leases Only */}
           {(() => {
             const isOperatingLease = loan && isOperatingLeaseLoan(loan);
-            if (!isOperatingLease) return null;
+            if (!isOperatingLease || accountingUnavailable) return null;
             const sl = calculateStraightLineLease({
               baseMonthlyRent: Number(loan.monthlyPayment ?? 0),
+              firstPaymentAmount: loan.firstPaymentAmount == null ? null : Number(loan.firstPaymentAmount),
               termMonths: loan.termMonths ?? 0,
               freeRentMonths: loan.freeRentMonths ?? 0,
               escalationRate: Number(loan.rentEscalationRate ?? 0),
@@ -2391,12 +2447,12 @@ export default function LoanDetail() {
                     <div className="space-y-3">
                       <h4 className="font-semibold text-sm">Recurring Monthly Journal Entry</h4>
                       {(() => {
-                        const cashVaries = (loan.freeRentMonths ?? 0) > 0 || Number(loan.rentEscalationRate ?? 0) > 0 || ((loan.rentSteps as unknown[] | undefined)?.length ?? 0) > 0;
+                        const cashVaries = sl.schedule.some((p) => p.actualPayment !== Number(loan.monthlyPayment ?? 0));
                         return (
                       <div className="rounded-lg border overflow-hidden text-sm">
                         <div className="bg-muted/40 p-2 text-xs font-medium text-muted-foreground">
                           {cashVaries
-                            ? "Straight-line expense is the same every month; the cash amount varies by month (free rent / escalations) — use the actual payment for each month from the schedule above. Shown below using the base monthly rent."
+                            ? "Straight-line expense is the same every month; cash payments vary (first rental, free rent, steps or escalations). Use the actual payment for each month. Shown below using the base monthly rent."
                             : "Same every month over the lease term"}
                         </div>
                         <table className="w-full">
@@ -2570,7 +2626,8 @@ export default function LoanDetail() {
             initialAssessment={modification.modificationAssessment}
             onChange={setModification}
           />
-          <DialogFooter>
+          <DialogFooter className="flex-wrap">
+            <LeaseSaveStatus ending={editForm.leaseEndingTerms} validationError={validateLoanForm(editForm, editMode)} />
             <Button variant="outline" onClick={() => setEditOpen(false)}>Cancel</Button>
             <Button
               onClick={() => {
@@ -2657,7 +2714,7 @@ export default function LoanDetail() {
               }}
               disabled={validateLoanForm(editForm, editMode) !== null || !modification.valid || updateLoan.isPending}
             >
-              {updateLoan.isPending ? "Saving..." : "Save Changes"}
+              {updateLoan.isPending ? "Saving..." : editForm.leaseEndingTerms && editForm.leaseEndingTerms.status !== "reviewed" ? "Save Draft Lease" : "Save Changes"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -2678,9 +2735,9 @@ export default function LoanDetail() {
           assetType: parseAssetType(loan.assetDescription ?? ""),
           economicLife: loan.assetUsefulLife ?? 0,
           termMonths: loan.termMonths ?? 0,
-          monthlyPayment: loan.monthlyPayment != null ? Number(loan.monthlyPayment) : 0,
+          monthlyPayment: Number(loan.paymentOverride ?? loan.monthlyPayment ?? 0),
           downPayment: Number(loan.downPayment ?? 0),
-          interestRate: Number(loan.interestRate),
+          interestRate: Number(loan.leaseAssessmentRate ?? loan.interestRate),
           paymentAtBeginning: loan.paymentTiming === "beginning",
           paymentIncludesTax: false,
           taxType: "none",
@@ -2691,6 +2748,7 @@ export default function LoanDetail() {
         };
         return (
           <CapitalLeaseAssessment
+            finalAction="save"
             readOnly={!canWrite}
             open={reevaluateOpen}
             onOpenChange={setReevaluateOpen}
@@ -2698,15 +2756,7 @@ export default function LoanDetail() {
               // Operating-lease total commitment must respect rent steps and
               // free-rent months, not just first-year rent × term.
               const slPreview = !result.isCapitalLease
-                ? calculateStraightLineLease({
-                    baseMonthlyRent: result.answers.monthlyPayment,
-                    termMonths: result.answers.termMonths,
-                    freeRentMonths: result.straightLine?.freeRentMonths ?? 0,
-                    escalationRate: result.straightLine?.rentEscalationRate ?? 0,
-                    rentSteps: result.straightLine?.rentSteps,
-                    startDate: loan.startDate,
-                    fiscalYearEnd: loan.fiscalYearEnd,
-                  })
+                ? calculateOperatingLeaseAssessment(result, loan.startDate, loan.fiscalYearEnd)
                 : null;
               updateLoan.mutate({
                 id: loanId,
@@ -2721,16 +2771,16 @@ export default function LoanDetail() {
                   capitalLeaseRationale: result.rationale,
                   assetDescription: formatAssetType(result.answers.assetType) || undefined,
                   assetUsefulLife: result.answers.economicLife || undefined,
-                  monthlyPayment: result.answers.monthlyPayment,
-                  paymentOverride: result.answers.monthlyPayment,
+                  ...assessmentPaymentSaveValues(result.answers, result.isCapitalLease),
                   paymentTiming: result.answers.paymentAtBeginning ? "beginning" : "end",
-                  leaseEndingTerms: result.answers.leaseEndingTerms ? { ...result.answers.leaseEndingTerms } : undefined,
                   termMonths: result.answers.termMonths,
-                  interestRate: result.answers.interestRate,
                   downPayment: result.isCapitalLease ? result.answers.downPayment : 0,
                   principal: result.isCapitalLease
-                    ? (result.pvValue > 0 ? result.pvValue : result.answers.fairValue)
+                    ? (result.pvValue > 0 ? Math.min(result.pvValue, result.answers.fairValue) : result.answers.fairValue)
                     : (slPreview?.totalLeasePayments ?? result.answers.monthlyPayment * result.answers.termMonths),
+                  ...(result.isCapitalLease ? {
+                    assetCost: result.pvValue > 0 ? Math.min(result.pvValue, result.answers.fairValue) : result.answers.fairValue,
+                  } : {}),
                   amortizationYears: result.answers.assetType
                     ? Math.min(Math.ceil(result.answers.termMonths / 12), Math.max(3, Math.ceil(result.answers.economicLife)))
                     : Math.ceil(result.answers.termMonths / 12),
@@ -2755,7 +2805,7 @@ export default function LoanDetail() {
                 },
               });
             }}
-            initialAnswers={initialAnswers}
+            initialAnswers={assessmentAnswersForReview(initialAnswers)}
             initialStraightLine={{
               freeRentMonths: loan.freeRentMonths ?? 0,
               rentEscalationRate: Number(loan.rentEscalationRate ?? 0),
@@ -2769,30 +2819,27 @@ export default function LoanDetail() {
         );
       })()}
       <Dialog open={eventEditorOpen} onOpenChange={setEventEditorOpen}>
-        <DialogContent className="max-w-3xl">
-          <DialogHeader><DialogTitle>Mid-term Principal Payments</DialogTitle><DialogDescription>Edit the complete draft timeline. Saving creates a successor event set; existing evidence is never patched.</DialogDescription></DialogHeader>
-          <div className="max-h-[55vh] overflow-y-auto space-y-3">
-            {eventDraft.map((event, index) => (
-              <div key={`${event.effectiveDate}-${index}`} className="rounded-lg border p-3 grid grid-cols-1 md:grid-cols-3 gap-2 text-sm">
-                <Label>Date<Input type="date" value={event.effectiveDate.slice(0, 10)} onChange={e => setEventDraft(d => d.map((v, i) => i === index ? { ...v, effectiveDate: e.target.value } : v))} /></Label>
-                <Label>Principal amount<Input type="number" min="0.01" value={event.amount} onChange={e => setEventDraft(d => d.map((v, i) => i === index ? { ...v, amount: Number(e.target.value) } : v))} /></Label>
-                <Label>Same-day order<Input type="number" min="1" value={event.sequence} onChange={e => setEventDraft(d => d.map((v, i) => i === index ? { ...v, sequence: Math.max(1, Number(e.target.value)) } : v))} /></Label>
-                <Label>Relative to scheduled payment<select className="w-full h-9 border rounded px-2" value={event.ordering} onChange={e => setEventDraft(d => d.map((v, i) => i === index ? { ...v, ordering: e.target.value as LoanEventInput["ordering"] } : v))}><option value="before_scheduled_payment">Before scheduled payment</option><option value="after_scheduled_payment">After scheduled payment</option></select></Label>
-                <Label>Treatment<select className="w-full h-9 border rounded px-2" value={event.treatment} onChange={e => setEventDraft(d => d.map((v, i) => i === index ? { ...v, treatment: e.target.value as LoanEventInput["treatment"] } : v))}><option value="keep_payment">Keep payment / earlier payoff</option><option value="keep_maturity">Keep maturity / recast payments</option></select></Label>
-                <Label>Classification<select className="w-full h-9 border rounded px-2" value={event.classification} onChange={e => setEventDraft(d => d.map((v, i) => i === index ? { ...v, classification: e.target.value as LoanEventInput["classification"] } : v))}><option value="ordinary">Ordinary contractual prepayment</option><option value="agreement_change">Agreement change</option></select></Label>
-                <Label>Source<Input value={event.source} onChange={e => setEventDraft(d => d.map((v, i) => i === index ? { ...v, source: e.target.value } : v))} /></Label>
-                <Label className="md:col-span-2">Reason<Input value={event.reason} onChange={e => setEventDraft(d => d.map((v, i) => i === index ? { ...v, reason: e.target.value } : v))} /></Label>
-                <Button variant="ghost" className="text-destructive" onClick={() => setEventDraft(d => d.filter((_, i) => i !== index))}>Remove</Button>
-              </div>
+        <DialogContent className="max-w-3xl max-h-[90dvh] grid-rows-[auto_minmax(0,1fr)_auto]" onOpenAutoFocus={e => {
+          const blankDate = e.currentTarget instanceof HTMLElement ? e.currentTarget.querySelector<HTMLInputElement>('input[type="date"][value=""]') : null;
+          if (blankDate) { e.preventDefault(); blankDate.focus(); }
+        }}>
+          <DialogHeader><DialogTitle>Extra principal payments</DialogTitle><DialogDescription>Use the actual payment date and only the amount the lender applied to principal. Do not change the original down payment.</DialogDescription></DialogHeader>
+          <div className="min-h-0 overflow-y-auto space-y-3 px-1 pb-1">
+            {eventDraft.map((payment, index) => (
+              <ExtraPrincipalPaymentFields key={index} payment={payment} index={index}
+                onChange={patch => setEventDraft(d => d.map((v, i) => i === index ? { ...v, ...patch } : v))}
+                onRemove={() => setEventDraft(d => d.filter((_, i) => i !== index))} />
             ))}
+            {!eventDraft.length && <p className="text-sm text-muted-foreground">No payments listed. Saving will leave this agreement with no extra principal payments.</p>}
+            <Button variant="outline" size="sm" onClick={() => setEventDraft(d => [...d, newExtraPayment(d.length + 1)])}>{eventDraft.length ? "Add another payment" : "Add payment"}</Button>
+            <Label className="block">Reason for this update<Input value={eventReason} required onChange={e => setEventReason(e.target.value)} placeholder="e.g. Correct a payment date from the lender statement" /></Label>
+            {!paymentVersion?.revision && <p role="alert" className="text-sm text-destructive">This agreement has no saved revision. Payments cannot be saved until one is available.</p>}
             {eventDraft.some(e => e.classification === "agreement_change") && <p className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">Agreement-change items must be assessed in the renewal/modification workflow. They cannot be saved as ordinary principal payments.</p>}
             {eventPreview && <div className="rounded-md bg-muted p-3 text-sm grid grid-cols-2 gap-2"><b>Preview (before → after)</b><span /><span>Next payment: {formatCurrency(eventPreview.before.nextRegularPayment)} → {formatCurrency(eventPreview.after.nextRegularPayment)}</span><span>Payoff: {eventPreview.before.payoffDate ?? "—"} → {eventPreview.after.payoffDate ?? "—"}</span><span>Total interest: {formatCurrency(eventPreview.before.totalInterest)} → {formatCurrency(eventPreview.after.totalInterest)}</span><span>Ending balance: {formatCurrency(eventPreview.before.endingBalance)} → {formatCurrency(eventPreview.after.endingBalance)}</span></div>}
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setEventDraft(d => normalizeEventSequences([...d, { kind: "principal_prepayment", effectiveDate: loan.startDate.slice(0, 10), ordering: "after_scheduled_payment", sequence: d.length + 1, amount: 0, treatment: "keep_payment", classification: "ordinary", source: "Loan agreement", reason: "", authoredAt: new Date().toISOString() }]))}>Add payment</Button>
-            <Label className="flex-1">Set reason<Input value={eventReason} onChange={e => setEventReason(e.target.value)} placeholder="Why this successor set is being created" /></Label>
-            <Button variant="secondary" disabled={!eventReason || eventDraft.some(e => !e.effectiveDate || e.amount <= 0 || !e.source || !e.reason || e.classification === "agreement_change")} onClick={() => { const events = normalizeEventSequences(eventDraft); setEventDraft(events); previewEventSet.mutate({ id: loanId, data: { expectedVersion: loan.activeEventSetVersion, termRevisionId: loan.currentRevisionId!, reason: eventReason, source: "Loan detail", events } }); }}>Preview</Button>
-            <Button disabled={!eventReason || !loan.currentRevisionId || eventDraft.some(e => !e.effectiveDate || e.amount <= 0 || !e.source || !e.reason || e.classification === "agreement_change")} onClick={() => { const events = normalizeEventSequences(eventDraft); setEventDraft(events); createEventSet.mutate({ id: loanId, data: { expectedVersion: loan.activeEventSetVersion, termRevisionId: loan.currentRevisionId!, reason: eventReason, source: "Loan detail", events } }); }}>Save successor set</Button>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" disabled={!canSubmitPayments || previewEventSet.isPending} onClick={() => paymentRequest && previewEventSet.mutate({ id: loanId, data: paymentRequest })}>{previewEventSet.isPending ? "Previewing…" : "Preview schedule"}</Button>
+            <Button disabled={!canSubmitPayments} onClick={() => paymentRequest && createEventSet.mutate({ id: loanId, data: paymentRequest })}>{createEventSet.isPending ? "Saving…" : "Save payments"}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

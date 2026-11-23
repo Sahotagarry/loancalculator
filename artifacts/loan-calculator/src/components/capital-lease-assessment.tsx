@@ -1,9 +1,15 @@
+import { assessmentConfirmationKey, assessmentConclusion, preTaxMonthlyPayment, financingFirstPayment, rentalAssessment, calculatePVFromAnswers, assessmentRate, percentLabel, normalizedAssessmentAnswers } from "@/lib/lease-assessment-values";
+export { preTaxMonthlyPayment, calculatePVFromAnswers } from "@/lib/lease-assessment-values";
+import { formatCurrency } from "@/lib/format";
 import { useState, useCallback, useEffect, useRef } from "react";
-import { leasePresentValue, leaseImplicitRate, normalizeLeaseEnding, type LeaseEndingTerms } from "@workspace/amortization";
+import { leaseImplicitRate, normalizeLeaseEnding, type LeaseEndingTerms } from "@workspace/amortization";
 import { LeaseEndingFields } from "./lease-ending-fields";
+import { LeaseOpeningSummary } from "./lease-opening-summary";
+import { LeaseReviewDetails } from "./lease-review-details";
 import {
   Dialog,
   DialogContent,
+  DialogBody,
   DialogHeader,
   DialogTitle,
   DialogDescription,
@@ -85,60 +91,6 @@ export type AssessmentResult = {
   isOfficeProperty: boolean;
 };
 
-/** Minimum lease payments must exclude executory costs like sales tax
- * (ASPE 3065). When the entered payment includes GST/HST/PST, strip it
- * before discounting. */
-export function preTaxMonthlyPayment(a: AssessmentAnswers): number {
-  if (a.leaseEndingTerms) {
-    if (a.leaseEndingTerms.paymentComponentsApplied) return a.monthlyPayment;
-    const services = a.leaseEndingTerms.servicesMonthly ?? 0;
-    const gross = a.leaseEndingTerms.grossMonthlyPayment ?? a.monthlyPayment;
-    const taxRate = a.leaseEndingTerms.taxRate ?? a.taxRate;
-    const payment = a.leaseEndingTerms.taxTreatment === "recoverable" && taxRate > 0
-      ? gross / (1 + taxRate / 100) : gross;
-    return Math.round(Math.max(0, payment - services) * 100) / 100;
-  }
-  if (a.paymentIncludesTax && a.taxRate > 0) {
-    return a.monthlyPayment / (1 + a.taxRate / 100);
-  }
-  return a.monthlyPayment;
-}
-
-export function financingFirstPayment(a: AssessmentAnswers): number | null {
-  if (a.firstPaymentAmount == null) return null;
-  const ending = a.leaseEndingTerms;
-  if (!ending || ending.firstPaymentComponentsApplied) return a.firstPaymentAmount;
-  const gross = ending.grossFirstPaymentAmount ?? a.firstPaymentAmount;
-  const rate = ending.taxRate ?? a.taxRate;
-  return Math.round(100 * ((ending.taxTreatment === "recoverable" && rate > 0 ? gross / (1 + rate / 100) : gross) - (ending.servicesMonthly ?? 0))) / 100;
-}
-
-export function calculatePVFromAnswers(a: AssessmentAnswers): number {
-  if (a.leaseEndingTerms) {
-    try {
-      const ending = normalizeLeaseEnding(a.leaseEndingTerms, a.termMonths);
-      const rate = ending.incrementalBorrowingRate != null && ending.implicitRate != null
-        ? Math.min(ending.incrementalBorrowingRate, ending.implicitRate)
-        : ending.incrementalBorrowingRate ?? ending.implicitRate ?? a.interestRate;
-      return Math.round(leasePresentValue({ ...a, monthlyPayment: preTaxMonthlyPayment(a), firstPaymentAmount: financingFirstPayment(a), ending }, rate) * 100) / 100;
-    } catch { return 0; } // Draft values are not an accounting conclusion.
-  }
-  if (a.monthlyPayment <= 0 || a.interestRate <= 0 || a.termMonths <= 0) return 0;
-  const r = a.interestRate / 100 / 12;
-  const n = a.termMonths;
-  const pmt = preTaxMonthlyPayment(a);
-  let pv: number;
-  if (a.paymentAtBeginning) {
-    pv = pmt * ((1 - Math.pow(1 + r, -n)) / r) * (1 + r);
-  } else {
-    pv = pmt * ((1 - Math.pow(1 + r, -n)) / r);
-  }
-  // A down payment is part of the minimum lease payments; paid at inception,
-  // its present value equals its face amount.
-  pv += a.downPayment || 0;
-  return Math.round(pv * 100) / 100;
-}
-
 export type ImportedEstimates = {
   economicLifeYears?: number | null;
   fairValue?: number | null;
@@ -147,6 +99,8 @@ export type ImportedEstimates = {
 };
 
 interface Props {
+  /** Existing leases save on confirmation; new leases continue to a form. */
+  finalAction?: "save" | "continue";
   readOnly?: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -354,15 +308,15 @@ const CRITERIA: Criterion[] = [
   },
   {
     key: "pvPctFairValue",
-    title: "Present Value vs. Fair Value",
-    question: "Does the present value of the lease payments equal or exceed 90% of the fair value of the leased asset?",
-    concept: "From the lessee's perspective: if the total lease payments the lessee will make (discounted to today's dollars) are almost the full value of the asset, then the lease is really just a financing arrangement to buy the asset over time — not a true rental. ASPE treats this as a capital lease on the lessee's books.",
-    guide: "From the lessee's view: 1. Find the fair value of the asset at inception (what it would cost the lessee to buy it outright). 2. Calculate the present value of all lease payments using the lower of the lease's implicit interest rate or the lessee's incremental borrowing rate. 3. Divide the present value by the fair value and multiply by 100. 4. If 90% or higher, this criterion is met.",
-    documentHint: "Fair value: ask the lessor for the purchase price or get an appraisal. For PV calculation, the app will compute this automatically from the lease terms you enter.",
-    example: "Example (lessee perspective): A piece of equipment has a fair value of $100,000. The present value of all lease payments the lessee will make is $95,000. 95,000 / 100,000 = 95%. Since 95% is greater than 90%, this criterion is met for the lessee.",
-    quickTip: "From the lessee's view: if the lease payments roughly equal the purchase price, this criterion is likely met. If payments are far below purchase price, it's likely not met.",
+    title: "Rent compared with fair value (90% test)",
+    question: "Do the rent payments alone cover at least 90% of the asset’s fair value?",
+    concept: "This assessment compares the rent, in today’s dollars, with the asset’s cash price at the start. Ownership, bargain purchase and useful life are assessed separately.",
+    guide: "Enter the rents, payment dates, fair value and discount rate. Do not add an optional purchase price or the vehicle’s expected sale value to the rent.",
+    documentHint: "Check the rental schedule and the asset’s cash price at the start of the lease.",
+    example: "If rent is worth $93,000 today and the asset is worth $100,000, rent alone covers 93%.",
+    quickTip: "If rent alone reaches 90%, this test supports capital classification without assuming a purchase.",
     isYesNo: false,
-    thresholdLabel: "PV of lease payments as % of fair value",
+    thresholdLabel: "Rent as % of fair value",
     threshold: 90,
     unit: "%",
     min: 0,
@@ -370,9 +324,9 @@ const CRITERIA: Criterion[] = [
   },
   {
     key: "specializedAsset",
-    title: "Specialized Asset",
+    title: "Specialized Asset (supporting evidence)",
     question: "Is the asset of a specialized nature such that only the lessee can use it without major modifications?",
-    concept: "From the lessee's perspective: if the asset is custom-built or so unique that no one else could use it, the lessor is essentially dependent on the lessee. This means the lessor has transferred the risks and rewards of ownership to the lessee, so ASPE treats this as a capital lease on the lessee's books.",
+    concept: "If the asset is custom-built or only the client can use it, that may support a transfer of the risks and rewards of ownership. It is supporting evidence, not an automatic capital lease test. Document the circumstances and review the other classification evidence.",
     guide: "From the lessee's view: ask yourself — could another party use this asset with minimal changes? If the asset was built specifically for the lessee's operations, contains the lessee's proprietary technology, or is located in a way that makes it impractical for others to use, answer Yes.",
     documentHint: "Review the asset specifications and any customization clauses in the lease. Ask operations staff if the asset is generic or custom-built for the lessee.",
     example: "Example (lessee perspective): A conveyor system built to the lessee's warehouse's exact dimensions and integrated with the lessee's specific packaging line. No other party could use it without major reconstruction. From the lessee's view, answer Yes. A standard forklift that any warehouse could use — from the lessee's view, answer No.",
@@ -381,14 +335,19 @@ const CRITERIA: Criterion[] = [
   },
 ];
 
-export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, initialAnswers, initialStraightLine, initialStep, importedNotes, importedEstimates, readOnly }: Props) {
+export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, initialAnswers, initialStraightLine, initialStep, importedNotes, importedEstimates, readOnly, finalAction = "continue" }: Props) {
   const [step, setStep] = useState(0);
+  const [confirmedAssessment, setConfirmedAssessment] = useState<string | null>(null);
   const [expandedCriterion, setExpandedCriterion] = useState<number | null>(null);
   const [showImplicitRateDialog, setShowImplicitRateDialog] = useState(false);
-  const [fastTrackConfirmed, setFastTrackConfirmed] = useState(false);
-  const [fastTrackNotSpecialized, setFastTrackNotSpecialized] = useState(false);
-  const [fastTrackPvBelow, setFastTrackPvBelow] = useState(false);
-  const [usedFastTrack, setUsedFastTrack] = useState(false);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const titleRef = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (open) {
+      bodyRef.current?.scrollTo?.({ top: 0 });
+      titleRef.current?.focus();
+    }
+  }, [step, open]);
 
   const defaultAnswers: AssessmentAnswers = {
     transferOfOwnership: false,
@@ -421,18 +380,18 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
     camMonthly: 0,
   };
 
-  const [answers, setAnswers] = useState<AssessmentAnswers>(defaultAnswers);
+  const [inputs, setAnswers] = useState<AssessmentAnswers>(defaultAnswers);
+  const rent = rentalAssessment(inputs);
+  // A saved accounting PV percentage is not evidence of the rent-only test.
+  const answers = { ...inputs, pvPctFairValue: rent?.percent ?? 0 };
   const [straightLine, setStraightLine] = useState<StraightLineAnswers>(defaultStraightLine);
 
   const reset = useCallback(() => {
     setStep(0);
+    setConfirmedAssessment(null);
     setExpandedCriterion(null);
     setAnswers(defaultAnswers);
     setStraightLine(defaultStraightLine);
-    setFastTrackConfirmed(false);
-    setFastTrackNotSpecialized(false);
-    setFastTrackPvBelow(false);
-    setUsedFastTrack(false);
   }, []);
 
   /** Set the asset type, pre-fill its typical economic life, and recompute
@@ -491,35 +450,14 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
   }, [onOpenChange, reset]);
 
   const computeResult = useCallback((): AssessmentResult => {
-    const met: string[] = [];
-    if (answers.transferOfOwnership) met.push("Transfer of ownership");
-    if (answers.bargainPurchaseOption) met.push("Bargain purchase option");
-    if (answers.leaseTermPct >= 75) met.push("Lease term >= 75% of useful life");
-    if (answers.pvPctFairValue >= 90) met.push("PV >= 90% of fair value");
-    // Specialized use is supporting risks-and-rewards evidence, not a separate ASPE bright line.
-
-    const isCapitalLease = met.length > 0;
-
-    let rationale = "";
-    if (isCapitalLease) {
-      rationale = `From the lessee's perspective, under ASPE Section 3065, this lease is classified as a capital lease because it meets the following criteria: ${met.join(", ")}.`;
-    } else if (usedFastTrack) {
-      rationale = "From the lessee's perspective, under ASPE Section 3065, this real-property lease is classified as an operating lease. The lessee confirmed that the lease does not transfer ownership and contains no bargain purchase option, that the property is a standard (non-specialized) space another tenant could use, and that total rent is well below the property's purchase value (under the 90% present-value test). The lease term is also well below 75% of the building's useful life.";
-    } else {
-      rationale = "From the lessee's perspective, under ASPE Section 3065, this lease does not meet any of the five capital lease criteria and is therefore classified as an operating lease.";
-    }
-
-    const pvValue = calculatePVFromAnswers(answers);
-    const ending = answers.leaseEndingTerms;
-    const rate = ending ? (ending.incrementalBorrowingRate != null && ending.implicitRate != null
-      ? Math.min(ending.incrementalBorrowingRate, ending.implicitRate)
-      : ending.incrementalBorrowingRate ?? ending.implicitRate ?? answers.interestRate) : answers.interestRate;
-    const finalAnswers = ending ? { ...answers, interestRate: rate, monthlyPayment: preTaxMonthlyPayment(answers), firstPaymentAmount: financingFirstPayment(answers), paymentIncludesTax: false,
-      leaseEndingTerms: { ...ending, discountRate: rate, paymentComponentsApplied: true,
-        ...(answers.firstPaymentAmount == null ? {} : { grossFirstPaymentAmount: ending.grossFirstPaymentAmount ?? answers.firstPaymentAmount, firstPaymentComponentsApplied: true }),
-        grossMonthlyPayment: ending.grossMonthlyPayment ?? answers.monthlyPayment, taxRate: ending.taxRate ?? answers.taxRate } } : answers;
+    const conclusion = assessmentConclusion(answers);
+    const met = conclusion.reasons;
+    const isCapitalLease = conclusion.status === "capital";
+    const rationale = conclusion.rationale;
+    const pvValue = step === 8 && isCapitalLease ? calculatePVFromAnswers(answers) : 0;
+    const finalAnswers = normalizedAssessmentAnswers(answers);
     return { isCapitalLease, metCriteria: met, rationale, answers: finalAnswers, pvValue, straightLine: isCapitalLease ? null : straightLine, isOfficeProperty: answers.assetType === "office_commercial" };
-  }, [answers, straightLine, usedFastTrack]);
+  }, [answers, rent, step, straightLine]);
 
   const totalSteps = 8;
 
@@ -527,10 +465,17 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
     setAnswers((prev) => ({ ...prev, [key]: value }));
   };
 
-  const calculatePV = useCallback((a: AssessmentAnswers) => calculatePVFromAnswers(a), []);
+
 
   const calculateImplicitRate = useCallback((a: AssessmentAnswers) => {
     if (a.leaseEndingTerms) {
+      const terms = normalizeLeaseEnding(a.leaseEndingTerms, a.termMonths);
+      if (terms.kind === "unresolved" || terms.issues.length) {
+        // A separately supplied price may be used to estimate the rate; it does not establish an obligation.
+        if (!(a.buyoutForImplicitRate > 0)) return 0;
+        try { return leaseImplicitRate({ ...a, monthlyPayment: preTaxMonthlyPayment(a), firstPaymentAmount: financingFirstPayment(a), ending: { ...terms, kind: "lessor_residual", amount: a.buyoutForImplicitRate, issues: [], settlementMonth: a.termMonths } }, a.fairValue) ?? 0; }
+        catch { return 0; }
+      }
       try { return leaseImplicitRate({ ...a, monthlyPayment: preTaxMonthlyPayment(a), firstPaymentAmount: financingFirstPayment(a), ending: normalizeLeaseEnding(a.leaseEndingTerms, a.termMonths) }, a.fairValue) ?? 0; }
       catch { return 0; }
     }
@@ -573,29 +518,25 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
   const updateNumber = (key: "leaseTermPct" | "pvPctFairValue" | "fairValue" | "economicLife" | "termMonths" | "monthlyPayment" | "downPayment" | "interestRate" | "buyoutAmount" | "taxRate" | "buyoutForImplicitRate", value: number) => {
     setAnswers((prev) => {
       const next = { ...prev, [key]: value,
-        ...(prev.leaseEndingTerms ? { leaseEndingTerms: { ...prev.leaseEndingTerms, status: "draft" as const } } : {}) };
+        ...(prev.leaseEndingTerms ? { leaseEndingTerms: { ...prev.leaseEndingTerms, status: "draft" as const,
+          ...(key === "monthlyPayment" ? { grossMonthlyPayment: value, paymentComponentsApplied: false } : {}),
+          ...(key === "interestRate" ? { discountRate: value, implicitRate: null, incrementalBorrowingRate: null } : {}) } } : {}) };
       // Auto-calculate leaseTermPct when termMonths or economicLife changes
       if ((key === "termMonths" || key === "economicLife") && next.termMonths > 0 && next.economicLife > 0) {
         next.leaseTermPct = Math.round((next.termMonths / (next.economicLife * 12)) * 1000) / 10;
-      }
-      // Auto-calculate pvPctFairValue when any PV input changes
-      if (["monthlyPayment", "downPayment", "interestRate", "termMonths", "fairValue", "paymentAtBeginning", "buyoutForImplicitRate", "taxRate"].includes(key) && next.fairValue > 0) {
-        const pv = calculatePV(next);
-        if (pv > 0) {
-          next.pvPctFairValue = Math.round((pv / next.fairValue) * 1000) / 10;
-        }
       }
       return next;
     });
   };
 
   const canProceed = () => {
+    if (step === 6) return assessmentConclusion(answers).status !== "needs_review";
     if (step === 0) return true;
     if (step >= 1 && step <= 5) {
       const criterion = CRITERIA[step - 1];
       if (!criterion.isYesNo) {
         if (criterion.key === "pvPctFairValue") {
-          return answers.fairValue > 0 && answers.monthlyPayment > 0 && answers.interestRate > 0 && answers.termMonths > 0;
+          return rent !== null;
         }
         if (criterion.key === "leaseTermPct") {
           return answers.termMonths > 0 && answers.economicLife > 0;
@@ -607,34 +548,57 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
   };
 
   const result = computeResult();
+  const conclusion = assessmentConclusion(answers);
+  // Bind confirmation to all evidence, not just the rounded percentage or outcome.
+  const assessmentKey = assessmentConfirmationKey(answers);
+  const changedSinceConclusion = (step === 8 || step === 7) && confirmedAssessment !== assessmentKey;
+  const documentedEnd = answers.leaseEndingTerms ? normalizeLeaseEnding(answers.leaseEndingTerms, answers.termMonths) : null;
+  const hasPricingEnd = documentedEnd?.amount != null && documentedEnd.kind !== "unresolved" && documentedEnd.issues.length === 0;
+
+  const firstInstallmentField = <div className="space-y-2">
+    <Label htmlFor="wizardFirstPayment">Distinct first rental ($, optional)</Label>
+    <Input id="wizardFirstPayment" disabled={readOnly} type="number" min="0.01" step="0.01"
+      value={answers.firstPaymentAmount ?? ""}
+      onChange={e => {
+        const value = e.target.value === "" ? null : Number(e.target.value);
+        setAnswers(prev => ({ ...prev, firstPaymentAmount: value,
+          ...(prev.leaseEndingTerms ? { leaseEndingTerms: { ...prev.leaseEndingTerms,
+            grossFirstPaymentAmount: value ?? undefined, firstPaymentComponentsApplied: false, status: "draft" as const } } : {}),
+        }));
+      }} placeholder="Leave blank when the first rental equals the regular rental" />
+    <p className="text-xs text-muted-foreground">Replaces the first rental, not an additional down payment. Use the same tax and service basis as the monthly payment.</p>
+  </div>;
 
   return (
     <>
       <Dialog open={open} onOpenChange={(o) => { if (!o) handleClose(); }}>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle className="font-display flex items-center gap-2">
+      <DialogContent scrollable className="max-w-2xl">
+        <DialogHeader className="shrink-0 pr-6 text-left">
+          <DialogTitle ref={titleRef} tabIndex={-1} className="font-display flex items-center gap-2 focus:outline-none">
             {step === 0 && <BookOpen className="h-5 w-5" />}
             {step >= 1 && step <= 5 && <HelpCircle className="h-5 w-5" />}
             {step === 6 && (result.isCapitalLease ? <ShieldCheck className="h-5 w-5" /> : <AlertTriangle className="h-5 w-5" />)}
-            {step === 0 && "ASPE Capital Lease Assessment"}
+            {step === 0 && "Lease assessment"}
             {step >= 1 && step <= 5 && `Criterion ${step} of 5`}
-            {step === 6 && "Lessee Assessment Conclusion"}
-            {step === 7 && "Lease Terms & Inducements"}
+            {step === 6 && "Is this a capital lease?"}
+            {step === 7 && "Operating lease rent expense"}
+            {step === 8 && "Capital lease calculation"}
           </DialogTitle>
           <DialogDescription>
-            {step === 0 && "Lessee's perspective: five ASPE Section 3065 criteria for classifying a lease as capital or operating."}
+            {step === 0 && "First classify the lease under ASPE 3065. Calculate the amounts to record in a separate step."}
             {step >= 1 && step <= 5 && CRITERIA[step - 1].title}
-            {step === 6 && "Review the determination and confirm to proceed."}
+            {step === 6 && "Review the answer and its evidence. Confirm classification before calculating amounts to record."}
+            {step === 8 && (changedSinceConclusion ? "Classification needs reconfirmation. Go back after reviewing your changes." : finalAction === "save" ? "Classification confirmed. Review opening amounts, then save changes to this lease." : "Classification confirmed. Review opening amounts, then continue to the lease form.")}
             {step === 7 && "Capture straight-line lease adjustments required for operating lease accounting."}
           </DialogDescription>
         </DialogHeader>
 
+        <DialogBody ref={bodyRef}>
         {/* Progress bar */}
         <div className="w-full bg-muted rounded-full h-2">
           <div
             className="bg-brand h-2 rounded-full transition-all"
-            style={{ width: `${((step) / (totalSteps - 1)) * 100}%` }}
+            style={{ width: `${Math.min(step / (totalSteps - 1), 1) * 100}%` }}
           />
         </div>
 
@@ -643,7 +607,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
           <div className="space-y-5 py-2">
             <div className="p-4 rounded-lg bg-blue-50 border border-blue-200 space-y-3">
               <p className="text-sm text-blue-900">
-                <strong>What this wizard does:</strong> This assessment is from the perspective of the <strong>lessee</strong> — the company <em>using</em> the leased asset. Under Canadian ASPE Section 3065, a lease is classified as a <strong>capital lease</strong> if it meets <strong>any one</strong> of five specific criteria. This wizard will guide you through each criterion with plain-English explanations, tell you where to look in your lease documents, and help you make the right classification.
+                <strong>What you’ll decide:</strong> Is this a capital lease for the client using the asset? Review ownership, any bargain purchase option, useful life and required payments under ASPE 3065. Specialized use is supporting evidence, not a separate automatic test. You’ll see the conclusion before calculating any opening amounts.
               </p>
               <div className="text-xs text-blue-800 space-y-1 border-t border-blue-200 pt-2">
                 <p><strong>Lessee</strong> = the party that <em>uses</em> the asset and makes lease payments.</p>
@@ -661,8 +625,11 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                   const isExpanded = expandedCriterion === i;
                   return (
                     <div key={c.key} className="rounded-lg border bg-muted/20 overflow-hidden">
-                      <div
-                        className="flex items-start gap-3 p-3 cursor-pointer hover:bg-brand/5 hover:border-brand/30 transition-colors group"
+                      <button
+                        type="button"
+                        aria-expanded={isExpanded}
+                        aria-controls={`criterion-guide-${i}`}
+                        className="flex w-full text-left items-start gap-3 p-3 cursor-pointer hover:bg-brand/5 hover:border-brand/30 transition-colors group focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
                         onClick={() => setExpandedCriterion(isExpanded ? null : i)}
                       >
                         <span className="flex-shrink-0 w-7 h-7 rounded-full bg-brand/10 text-brand text-xs font-bold flex items-center justify-center group-hover:bg-brand/20 group-hover:ring-2 group-hover:ring-brand/40 transition-all">
@@ -674,9 +641,9 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                           <p className="text-xs text-brand/70 mt-0.5 font-medium">{isExpanded ? "Click to collapse" : "Click to learn more"}</p>
                         </div>
                         <ChevronRight className={`h-5 w-5 text-muted-foreground/40 mt-1 flex-shrink-0 transition-transform group-hover:text-brand/60 ${isExpanded ? "rotate-90" : ""}`} />
-                      </div>
+                      </button>
                       {isExpanded && (
-                        <div className="px-3 pb-3 space-y-3 border-t border-border/50 pt-3">
+                        <div id={`criterion-guide-${i}`} className="px-3 pb-3 space-y-3 border-t border-border/50 pt-3">
                           <p className="text-sm text-muted-foreground leading-relaxed">
                             <strong className="text-foreground">What it means:</strong> {c.concept}
                           </p>
@@ -712,10 +679,10 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
               </p>
             </div>
 
-            {/* Asset type up front — unlocks the property fast track */}
+            {/* Asset type pre-fills useful life, but never replaces evidence. */}
             <div className="space-y-2 pt-1 border-t">
               <Label htmlFor="introAssetType">What kind of asset is being leased?</Label>
-              <Select value={answers.assetType} onValueChange={(val) => { applyAssetType(val); setFastTrackConfirmed(false); }}>
+              <Select value={answers.assetType} onValueChange={applyAssetType}>
                 <SelectTrigger id="introAssetType">
                   <SelectValue placeholder="Select an asset type (optional — you can also pick it later)" />
                 </SelectTrigger>
@@ -726,7 +693,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                 </SelectContent>
               </Select>
               <p className="text-xs text-muted-foreground">
-                Picking the asset type now pre-fills its typical useful life for Criterion 3. For office and industrial property leases, it also unlocks a shortcut below.
+                Picking the asset type now pre-fills its typical useful life for Criterion 3. Confirm that life against the asset's circumstances.
               </p>
             </div>
 
@@ -734,133 +701,23 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
               <div className="p-4 rounded-lg bg-emerald-50 border border-emerald-200 space-y-3">
                 <div className="flex items-center gap-2">
                   <ShieldCheck className="h-4 w-4 text-emerald-700 flex-shrink-0" />
-                  <p className="text-sm font-semibold text-emerald-900">Property Lease Shortcut — conclude Operating Lease</p>
+                  <p className="text-sm font-semibold text-emerald-900">Property lease — evidence required</p>
                 </div>
                 <p className="text-xs text-emerald-800 leading-relaxed">
-                  A typical office or industrial building lease is usually an <strong>operating lease</strong> under ASPE 3065:
-                  a building's useful life is around 40 years, so even a 10-year lease is only ~25% of it (well under the 75% test);
-                  rent payments rarely approach 90% of the building's purchase value; and a standard office or warehouse
-                  usually isn't a specialized asset only one tenant could use.
+                  Property type alone does not establish an operating lease. Complete the five criteria, including supported fair value, rental terms, discount rate and ending evidence, before confirming classification.
                 </p>
                 <p className="text-xs text-emerald-800 leading-relaxed">
-                  To use the shortcut, confirm each of the following. If you can't confirm any one of them, run the full assessment instead.
-                </p>
-                {(answers.transferOfOwnership || answers.bargainPurchaseOption) && (
-                  <div className="flex items-start gap-2 p-3 rounded-md bg-red-50 border border-red-200">
-                    <AlertTriangle className="h-4 w-4 text-red-600 mt-0.5 flex-shrink-0" />
-                    <p className="text-xs text-red-800">
-                      The shortcut can't be used: this lease is marked as {answers.transferOfOwnership ? "transferring ownership to the lessee" : "containing a bargain purchase option"}
-                      {answers.transferOfOwnership && answers.bargainPurchaseOption ? " and containing a bargain purchase option" : ""} — that makes it a capital lease. Please run the full assessment.
-                    </p>
-                  </div>
-                )}
-                <div className="flex items-start gap-3 rounded-md border border-emerald-300 bg-white/60 p-3">
-                  <Checkbox id="fastTrackConfirm" checked={fastTrackConfirmed} disabled={readOnly || answers.transferOfOwnership || answers.bargainPurchaseOption}
-                    onCheckedChange={(checked) => setFastTrackConfirmed(checked === true)}
-                  />
-                  <div className="space-y-1">
-                    <Label htmlFor="fastTrackConfirm" className="cursor-pointer text-sm">
-                      The lease does <strong>not</strong> transfer ownership of the property to the lessee, and does <strong>not</strong> contain a bargain purchase option.
-                    </Label>
-                    <p className="text-xs text-muted-foreground">
-                      Check the "End of Term" and "Purchase Option" sections of the lease.
-                    </p>
-                  </div>
-                </div>
-                <div className="flex items-start gap-3 rounded-md border border-emerald-300 bg-white/60 p-3">
-                  <Checkbox disabled={readOnly}
-                    id="fastTrackNotSpecialized"
-                    checked={fastTrackNotSpecialized}
-                    onCheckedChange={(checked) => setFastTrackNotSpecialized(checked === true)}
-                  />
-                  <div className="space-y-1">
-                    <Label htmlFor="fastTrackNotSpecialized" className="cursor-pointer text-sm">
-                      The property is a standard office or industrial space that another tenant could use without major modifications (not a specialized, purpose-built facility).
-                    </Label>
-                  </div>
-                </div>
-                <div className="flex items-start gap-3 rounded-md border border-emerald-300 bg-white/60 p-3">
-                  <Checkbox disabled={readOnly}
-                    id="fastTrackPvBelow"
-                    checked={fastTrackPvBelow}
-                    onCheckedChange={(checked) => setFastTrackPvBelow(checked === true)}
-                  />
-                  <div className="space-y-1">
-                    <Label htmlFor="fastTrackPvBelow" className="cursor-pointer text-sm">
-                      The total rent over the lease term is well below what it would cost to buy the property outright (nowhere near 90% of its value).
-                    </Label>
-                    <p className="text-xs text-muted-foreground">
-                      For a market-rate office or warehouse lease this is virtually always true — e.g. 5 years of rent on a building worth 30+ years of rent. If the rent seems unusually high relative to the property's value, run the full assessment with a fair value estimate instead.
-                    </p>
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="ftTermMonths">Lease Term (months)</Label>
-                  <Input disabled={readOnly}
-                    id="ftTermMonths"
-                    type="number"
-                    step="1"
-                    min={1}
-                    value={answers.termMonths || ""}
-                    onChange={(e) => updateNumber("termMonths", Number(e.target.value))}
-                    placeholder="e.g. 60 for a 5-year lease"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="ftMonthlyPayment">Monthly Rent ($, before sales tax)</Label>
-                  <Input disabled={readOnly}
-                    id="ftMonthlyPayment"
-                    type="number"
-                    step="0.01"
-                    min={0}
-                    value={answers.monthlyPayment || ""}
-                    onChange={(e) => updateNumber("monthlyPayment", Number(e.target.value))}
-                    placeholder="e.g. 7500 — starting base rent if rent steps up later"
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Enter base rent excluding GST/HST/PST. If rent steps up over the term, enter the starting rent — you'll enter the full schedule on the next screen.
-                  </p>
-                </div>
-                {answers.termMonths > 0 && answers.economicLife > 0 && (
-                  <div className="flex items-center gap-2 p-2 rounded-lg bg-white/60 border border-emerald-200 text-xs text-emerald-800">
-                    <Calculator className="h-3.5 w-3.5 flex-shrink-0" />
-                    <span>
-                      Check: {answers.termMonths} months / {answers.economicLife}-year life = <strong>{answers.leaseTermPct}%</strong> of useful life — {answers.leaseTermPct < 75 ? "well under the 75% capital-lease threshold." : "at or above 75%, so the shortcut can't be used — please run the full assessment."}
-                    </span>
-                  </div>
-                )}
-                <Button
-                  className="w-full gap-2"
-                  disabled={
-                    !fastTrackConfirmed ||
-                    !fastTrackNotSpecialized ||
-                    !fastTrackPvBelow ||
-                    answers.transferOfOwnership ||
-                    answers.bargainPurchaseOption ||
-                    answers.termMonths <= 0 ||
-                    answers.monthlyPayment <= 0 ||
-                    answers.leaseTermPct >= 75
-                  }
-                  onClick={() => {
-                    setUsedFastTrack(true);
-                    setStep(6);
-                  }}
-                >
-                  <CheckCircle2 className="h-4 w-4" />
-                  Conclude Operating Lease
-                </Button>
-                <p className="text-[11px] text-emerald-700 italic">
-                  You'll still see the conclusion summary and can go back to run the full five-criteria assessment at any time.
+                  Have the agreement and supporting estimates ready. Missing or conflicting evidence will remain marked Needs review.
                 </p>
               </div>
             )}
 
             <Button
               onClick={() => setStep(1)}
-              variant={REAL_PROPERTY_TYPES.includes(answers.assetType) ? "outline" : "default"}
+              variant="default"
               className="w-full h-12 text-base"
             >
-              {REAL_PROPERTY_TYPES.includes(answers.assetType) ? "Run the Full Assessment Instead" : "Begin Criterion 1"}
+              Begin Criterion 1
             </Button>
           </div>
         )}
@@ -871,6 +728,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
             {(() => {
               const c = CRITERIA[step - 1];
               const answerVal = answers[c.key];
+              const displayVal = c.key === "pvPctFairValue" ? percentLabel(answers.pvPctFairValue) : answerVal;
               return (
                 <>
                   {/* Question card */}
@@ -894,6 +752,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                     );
                   })()}
 
+                  <LeaseReviewDetails title="How to answer and where to look">
                   {/* Concept explanation */}
                   <div className="space-y-2">
                     <div className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
@@ -939,27 +798,32 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                       {c.quickTip}
                     </p>
                   </div>
+                  </LeaseReviewDetails>
 
                   {/* Input area */}
                   <div className="pt-2 border-t">
                     <p className="text-sm font-semibold mb-3">Your answer:</p>
                     {c.isYesNo ? (
-                      <div className="flex gap-4">
+                      <div className="flex gap-3">
                         <Button
+                          disabled={readOnly}
+                          aria-pressed={Boolean(answerVal)}
                           variant={answerVal ? "default" : "outline"}
                           className="flex-1 gap-2 h-11"
                           onClick={() => updateYesNo(c.key as "transferOfOwnership" | "bargainPurchaseOption" | "specializedAsset", true)}
                         >
                           <CheckCircle2 className="h-4 w-4" />
-                          Yes — this criterion is met
+                          Yes
                         </Button>
                         <Button
+                          disabled={readOnly}
+                          aria-pressed={!answerVal}
                           variant={!answerVal ? "default" : "outline"}
                           className="flex-1 gap-2 h-11"
                           onClick={() => updateYesNo(c.key as "transferOfOwnership" | "bargainPurchaseOption" | "specializedAsset", false)}
                         >
                           <XCircle className="h-4 w-4" />
-                          No — this criterion is not met
+                          No
                         </Button>
                       </div>
                     ) : (
@@ -1067,8 +931,9 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                             </div>
 
                             {/* Down payment / first payment at inception */}
+                            {firstInstallmentField}
                             <div className="space-y-2">
-                              <Label htmlFor="wizardDownPayment">Down Payment / First Payment at Inception ($)</Label>
+                              <Label htmlFor="wizardDownPayment">Separate down payment at inception ($)</Label>
                               <Input disabled={readOnly}
                                 id="wizardDownPayment"
                                 type="number"
@@ -1079,7 +944,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                                 placeholder="Optional — lump sum paid when the lease starts"
                               />
                               <p className="text-xs text-muted-foreground">
-                                Paid at inception, so it counts toward the PV test at its full amount.
+                                Exclude refundable deposits. Do not enter the first regular rent here as well.
                               </p>
                             </div>
 
@@ -1094,20 +959,17 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                                       const next = {
                                         ...prev,
                                         paymentIncludesTax: checked === true,
+                                        ...(prev.leaseEndingTerms ? { leaseEndingTerms: { ...prev.leaseEndingTerms, taxTreatment: checked === true ? "recoverable" as const : "excluded" as const, grossMonthlyPayment: prev.monthlyPayment, paymentComponentsApplied: false, firstPaymentComponentsApplied: false, status: "draft" as const } } : {}),
                                         taxType: checked === true ? prev.taxType : ("none" as AssessmentAnswers["taxType"]),
                                         taxRate: checked === true ? prev.taxRate : 0,
                                       };
-                                      if (next.fairValue > 0) {
-                                        const pv = calculatePV(next);
-                                        if (pv > 0) next.pvPctFairValue = Math.round((pv / next.fairValue) * 1000) / 10;
-                                      }
                                       return next;
                                     });
                                   }}
                                 />
                                 <div>
-                                  <Label htmlFor="paymentIncludesTax" className="cursor-pointer">My payment amount includes sales tax</Label>
-                                  <p className="text-xs text-muted-foreground">Check this if your lease statement shows GST/HST/PST included in the payment</p>
+                                  <Label htmlFor="paymentIncludesTax" className="cursor-pointer">Rental includes recoverable sales tax</Label>
+                                  <p className="text-xs text-muted-foreground">Exclude only tax the client can recover; do not assume all taxes on the rental are recoverable.</p>
                                 </div>
                               </div>
 
@@ -1133,11 +995,8 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                                           ...prev,
                                           taxType: val as AssessmentAnswers["taxType"],
                                           taxRate: rates[val] || 0,
+                                          ...(prev.leaseEndingTerms ? { leaseEndingTerms: { ...prev.leaseEndingTerms, taxRate: rates[val] || 0, status: "draft" as const } } : {}),
                                         };
-                                        if (next.fairValue > 0) {
-                                          const pv = calculatePV(next);
-                                          if (pv > 0) next.pvPctFairValue = Math.round((pv / next.fairValue) * 1000) / 10;
-                                        }
                                         return next;
                                       });
                                     }}
@@ -1228,10 +1087,6 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                                 onCheckedChange={(checked) => {
                                   setAnswers((prev) => {
                                     const next = { ...prev, paymentAtBeginning: checked === true };
-                                    const pv = calculatePV(next);
-                                    if (pv > 0 && next.fairValue > 0) {
-                                      next.pvPctFairValue = Math.round((pv / next.fairValue) * 1000) / 10;
-                                    }
                                     return next;
                                   });
                                 }}
@@ -1242,20 +1097,6 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                               </div>
                             </div>
 
-                            {/* Buyout Warning */}
-                            <div className="p-3 rounded-lg bg-red-50 border border-red-200 space-y-2">
-                              <div className="flex items-center gap-2">
-                                <AlertTriangle className="h-4 w-4 text-red-600 flex-shrink-0" />
-                                <p className="text-sm font-semibold text-red-900">Distinguish ending obligations from optional purchases</p>
-                              </div>
-                              <p className="text-xs text-red-800 leading-relaxed">
-                                Include required final payments, lessee-guaranteed residuals and qualifying bargain purchase prices. A return/sale shortfall guarantee is not an optional purchase. Exclude ordinary purchase options and unguaranteed lessor residuals from the lessee liability.
-                              </p>
-                              <p className="text-xs text-red-800">
-                                Use the ending-terms review below. A reserve table alone does not establish a lessee guarantee; check the operative clauses.
-                              </p>
-                            </div>
-
                             {/* Discount Rate */}
                             <div className="space-y-3">
                               <Label htmlFor="interestRate">Discount Rate (annual %)</Label>
@@ -1264,7 +1105,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                                 type="number"
                                 step="0.01"
                                 min={0.01}
-                                value={answers.interestRate || ""}
+                                value={assessmentRate(answers) || ""}
                                 onChange={(e) => updateNumber("interestRate", Number(e.target.value))}
                                 placeholder="e.g. 6.5"
                               />
@@ -1330,34 +1171,20 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                                   <div className="p-2 rounded bg-white/60 border border-blue-100">
                                     <p className="text-xs font-semibold text-blue-900">2. Safe Default (if uncertain)</p>
                                     <p className="text-xs text-blue-800">
-                                      If the lessee has no other debt and no quoted rate, a conservative estimate for Canadian mid-market companies in 2024–2025 is <strong>6% to 9%</strong>. Using a higher rate reduces the PV, so being conservative errs toward operating lease classification.
+                                      Obtain a supported rate for similar financing from a lender quote or comparable borrowing terms. Document the source and date. Do not choose a rate to obtain a preferred classification; if support is missing, keep the assessment in review.
                                     </p>
                                   </div>
                                 </div>
                               </div>
                             </div>
 
-                            {/* Buyout Warning */}
-                            <div className="p-3 rounded-lg bg-red-50 border border-red-200 space-y-2">
-                              <div className="flex items-center gap-2">
-                                <AlertTriangle className="h-4 w-4 text-red-600 flex-shrink-0" />
-                                <p className="text-sm font-semibold text-red-900">Distinguish ending obligations from optional purchases</p>
-                              </div>
-                              <p className="text-xs text-red-800 leading-relaxed">
-                                Include required final payments, lessee-guaranteed residuals and qualifying bargain purchase prices. Exclude ordinary purchase options and unguaranteed lessor residuals from the lessee liability. Do not count alternative settlements twice.
-                              </p>
-                              <p className="text-xs text-red-800">
-                                The absence of a purchase clause is not evidence that no residual guarantee exists.
-                              </p>
-                            </div>
-
                             {/* Calculated Result */}
-                            {answers.pvPctFairValue > 0 && (
+                            {rent && (
                               <div className="flex items-center gap-2 p-3 rounded-lg bg-muted/30 text-sm">
                                 <Calculator className="h-4 w-4 text-brand flex-shrink-0" />
                                 <span>
-                                  PV of payments: <strong>${calculatePV(answers).toLocaleString()}</strong> / Fair Value <strong>${answers.fairValue.toLocaleString()}</strong> ={" "}
-                                  <strong>{answers.pvPctFairValue}%</strong>
+                                  Present value of rent: <strong>{formatCurrency(rent!.pv)}</strong> / Fair Value <strong>${answers.fairValue.toLocaleString()}</strong> ={" "}
+                                  <strong>{percentLabel(answers.pvPctFairValue)}%</strong>
                                 </span>
                               </div>
                             )}
@@ -1381,15 +1208,15 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                           </div>
                         )}
                         <div className="flex items-center gap-2 p-3 rounded-lg bg-muted/30 text-sm">
-                          {(answerVal as number) >= (c.threshold ?? 0) ? (
+                          {c.key === "pvPctFairValue" && !rent ? <span>Enter the rental terms, fair value and discount rate to run this test.</span> : (answerVal as number) >= (c.threshold ?? 0) ? (
                             <>
                               <CheckCircle2 className="h-4 w-4 text-emerald-600" />
-                              <span>This criterion is <strong>met</strong> ({answerVal}{c.unit}{" >= "}{c.threshold}{c.unit})</span>
+                              <span>This criterion is <strong>met</strong> ({displayVal}{c.unit}{" >= "}{c.threshold}{c.unit})</span>
                             </>
                           ) : (
                             <>
                               <XCircle className="h-4 w-4 text-muted-foreground" />
-                              <span>This criterion is <strong>not met</strong> ({answerVal}{c.unit}{" < "}{c.threshold}{c.unit})</span>
+                              <span>This criterion is <strong>not met</strong> ({displayVal}{c.unit}{" < "}{c.threshold}{c.unit})</span>
                             </>
                           )}
                         </div>
@@ -1414,15 +1241,18 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                     <AlertTriangle className="h-5 w-5 text-amber-600" />
                   )}
                   <p className="font-semibold font-display">
-                    {result.isCapitalLease ? "Capital Lease" : "Operating Lease"}
+                    {conclusion.status === "needs_review" ? "Not ready to conclude — needs review" : result.isCapitalLease ? "Yes — capital lease" : "No — operating lease"}
                   </p>
                 </div>
                 <p className="text-sm text-muted-foreground">{result.rationale}</p>
+                <p className="text-xs">{conclusion.status === "needs_review" ? "Next: resolve the missing or conflicting evidence below. Classification cannot be confirmed yet." : "Not yet confirmed. Check the supporting evidence, then confirm to continue."}</p>
               </CardContent>
             </Card>
+            {rent && rent.percent >= 90 && <p className="text-sm">Rent alone: <strong>{percentLabel(rent.percent)}% of fair value</strong> — meets the 90% guideline without relying on an ending payment. This is classification evidence, not an opening book value.</p>}
+            {conclusion.required && (!rent || rent.percent < 90) && <p className="text-sm">Required-payment support: <strong>{percentLabel(conclusion.required.percent)}% of fair value</strong>, including the reviewed {answers.leaseEndingTerms?.kind === "guaranteed_residual" ? "shortfall guarantee (not a purchase)" : "mandatory ending payment"}. Rent alone: {rent ? `${percentLabel(rent.percent)}%` : "Unavailable"}. This is classification support, not an opening book value.</p>}
 
-            <div className="space-y-2">
-              <h4 className="font-semibold text-sm">Criteria Assessment</h4>
+            <LeaseReviewDetails title="Classification tests and evidence" needsAttention={conclusion.status === "needs_review"}>
+              {conclusion.required && rent && rent.percent >= 90 && <p className="text-sm">Additional required-payment support: {percentLabel(conclusion.required.percent)}% of fair value, including the reviewed {answers.leaseEndingTerms?.kind === "guaranteed_residual" ? "shortfall guarantee (not a purchase)" : "mandatory ending payment"}. Rent alone already meets the guideline; this does not assume buyout cash.</p>}
               {CRITERIA.map((c) => {
                 let met = false;
                 if (c.isYesNo) {
@@ -1431,32 +1261,33 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                   met = (answers[c.key] as number) >= (c.threshold ?? 0);
                 }
                 return (
-                  <div key={c.key} className="flex items-center justify-between text-sm py-1 border-b last:border-0">
-                    <span className="flex items-center gap-2">
+                  <div key={c.key} className="flex items-start justify-between gap-3 text-sm py-1 border-b last:border-0">
+                    <span className="flex items-start gap-2">
                       {met ? (
-                        <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                        <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" />
                       ) : (
-                        <XCircle className="h-4 w-4 text-muted-foreground" />
+                        <HelpCircle className="h-4 w-4 shrink-0 text-muted-foreground" />
                       )}
                       {c.title}
                     </span>
                     <span className={met ? "text-emerald-600 font-medium" : "text-muted-foreground"}>
                       {c.isYesNo
                         ? (answers[c.key] ? "Yes" : "No")
-                        : `${answers[c.key] as number}${c.unit}`}
+                        : (c.key === "pvPctFairValue" && !rent || c.key === "leaseTermPct" && conclusion.lifePercent == null ? "Unavailable" : `${c.key === "pvPctFairValue" ? percentLabel(answers.pvPctFairValue) : answers[c.key]}${c.unit}`)}
                     </span>
                   </div>
                 );
               })}
-            </div>
+            </LeaseReviewDetails>
+            <LeaseEndingFields value={answers.leaseEndingTerms} months={answers.termMonths} readOnly={readOnly} onChange={leaseEndingTerms => setAnswers(prev => ({ ...prev, leaseEndingTerms }))} />
 
-            {!result.isCapitalLease && (
+            {conclusion.status === "operating" && (
               <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-50 border border-amber-200 text-sm">
                 <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5" />
                 <div className="space-y-1">
                   <p className="font-medium">Operating Lease Classification</p>
                   <p>No capital lease criteria were met. Under ASPE 3065, treat this as an operating lease.</p>
-                  <p className="text-muted-foreground">Lease payments are expensed on a straight-line basis. No asset or liability is recorded on the balance sheet. Review your answers if you believe a criterion should be met.</p>
+                  <p className="text-muted-foreground">Next: confirm classification, then review rent expense, rent-free periods and any landlord incentives. Review your answers if you believe a capital classification basis should be met.</p>
                 </div>
               </div>
             )}
@@ -1686,21 +1517,36 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
           </div>
         )}
 
-        {(step === 4 || step === 6 || step === 7) && <LeaseEndingFields value={answers.leaseEndingTerms} months={answers.termMonths} readOnly={readOnly} onChange={leaseEndingTerms => setAnswers(prev => {
-          const next = { ...prev, leaseEndingTerms };
-          return { ...next, pvPctFairValue: next.fairValue > 0 ? calculatePVFromAnswers(next) / next.fairValue * 100 : 0 };
-        })} />}
-        <DialogFooter className="flex-col sm:flex-row gap-2">
-          <div className="flex gap-2 w-full sm:w-auto">
+        {step === 8 && (
+          <div className="space-y-4 py-2" data-testid="capital-lease-measurement">
+            <p className="text-xs font-medium">{!answers.leaseEndingTerms ? "Previous ending treatment retained" : answers.leaseEndingTerms.status !== "reviewed" ? "Calculation draft — ending evidence needs review" : "Ending evidence reviewed — check amounts before continuing"}</p>
+            <LeaseOpeningSummary pvValue={result.pvValue} fairValue={answers.fairValue} downPayment={answers.downPayment} ending={answers.leaseEndingTerms} classificationChanged={changedSinceConclusion || !result.isCapitalLease} />
+            <LeaseReviewDetails title="Rent payments and calculation inputs">
+              <dl className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
+                <div><dt className="text-muted-foreground">Monthly rent used (after tax and services)</dt><dd>{formatCurrency(preTaxMonthlyPayment(answers))}</dd></div>
+                <div><dt className="text-muted-foreground">Discount rate used</dt><dd>{assessmentRate(answers)}%</dd></div>
+                <div><dt className="text-muted-foreground">Lease term</dt><dd>{answers.termMonths} months</dd></div>
+                <div><dt className="text-muted-foreground">Asset fair value at the start</dt><dd>{formatCurrency(answers.fairValue)}</dd></div>
+                <div><dt className="text-muted-foreground">Rent due</dt><dd>{answers.paymentAtBeginning ? "At the start of each period" : "At the end of each period"}</dd></div>
+                <div><dt className="text-muted-foreground">Separate upfront payment</dt><dd>{formatCurrency(answers.downPayment)}</dd></div>
+              </dl>
+              {answers.firstPaymentAmount != null && <p className="text-sm">First rent used (after tax and services): <strong>{formatCurrency(financingFirstPayment(answers) ?? 0)}</strong>. This replaces the first regular rent; it is not an extra payment.</p>}
+              <p className="text-xs text-muted-foreground">To change rent, term, fair value or payment timing, go Back to the assessment and use Back to reach the relevant question. Changes require classification to be confirmed again.</p>
+            </LeaseReviewDetails>
+            <LeaseEndingFields value={answers.leaseEndingTerms} months={answers.termMonths} readOnly={readOnly} onChange={leaseEndingTerms => setAnswers(prev => ({ ...prev, leaseEndingTerms }))} />
+          </div>
+        )}
+        {step === 7 && answers.leaseEndingTerms && <LeaseEndingFields value={answers.leaseEndingTerms} months={answers.termMonths} readOnly={readOnly} onChange={leaseEndingTerms => setAnswers(prev => ({ ...prev, leaseEndingTerms }))} />}
+        {changedSinceConclusion && <p role="alert" className="text-sm text-amber-800">These changes affect the assessment. Go back and confirm the classification before saving.</p>}
+        </DialogBody>
+        <DialogFooter className="shrink-0 border-t pt-3 gap-2">
+          <div className="flex flex-wrap gap-2 w-full sm:justify-end [&>button]:min-h-11 [&>button]:h-auto [&>button]:whitespace-normal [&>button]:py-2">
             {step > 0 && (
               <Button
                 variant="outline"
                 onClick={() => {
-                  // The shortcut jumps 0 → 6; Back should return to the start,
-                  // not drop the user into Criterion 5 mid-assessment.
-                  if (step === 6 && usedFastTrack) {
-                    setUsedFastTrack(false);
-                    setStep(0);
+                  if (step === 8) {
+                    setStep(6);
                   } else {
                     setStep((s) => s - 1);
                   }
@@ -1712,13 +1558,14 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
               </Button>
             )}
             {step > 0 && step < totalSteps - 1 && !(step === 6 && result.isCapitalLease) && (
-              <Button onClick={() => setStep((s) => s + 1)} disabled={!canProceed()} className="gap-2">
-                Next
+              <Button onClick={() => { if (step === 6) setConfirmedAssessment(assessmentKey); setStep(s => s + 1); }} disabled={!canProceed()} className="gap-2">
+                {step === 6 ? "Confirm classification & continue" : "Next"}
                 <ArrowRight className="h-4 w-4" />
               </Button>
             )}
-            {(step === totalSteps - 1 || (step === 6 && result.isCapitalLease)) && (
-              <Button
+            {step === 6 && result.isCapitalLease && <Button disabled={!canProceed()} onClick={() => { setConfirmedAssessment(assessmentKey); setStep(8); }}>Confirm classification &amp; calculate</Button>}
+            {(step === totalSteps - 1 || step === 8) && (
+              <Button disabled={readOnly || changedSinceConclusion || (step === 8 && !result.isCapitalLease)}
                 onClick={() => {
                   onConfirm(result);
                   handleClose();
@@ -1726,7 +1573,9 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                 className="gap-2"
               >
                 <CheckCircle2 className="h-4 w-4" />
-                {answers.leaseEndingTerms?.status === "draft" ? "Save Draft & Continue" : "Confirm & Continue"}
+                {finalAction === "save"
+                  ? answers.leaseEndingTerms?.status === "draft" ? "Save draft lease changes" : "Save lease changes"
+                  : answers.leaseEndingTerms?.status === "draft" ? "Continue with draft to lease form" : "Confirm & continue to lease form"}
               </Button>
             )}
           </div>
@@ -1743,7 +1592,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
             Calculate Implicit Rate
           </DialogTitle>
           <DialogDescription>
-            The implicit rate is the interest rate the lessor used to price the lease. We solve for it using the lease terms.
+            Estimate the discount rate from the lease pricing. A value used to estimate the rate is not added to the rent comparison.
           </DialogDescription>
         </DialogHeader>
 
@@ -1761,18 +1610,19 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
 
           {/* Buyout input */}
           <div className="space-y-2">
-            <Label htmlFor="dialogBuyout">Buyout / Residual Value at Lease-End ($)</Label>
+            <Label htmlFor="dialogBuyout">Expected ending value used to estimate the rate ($)</Label>
             <Input disabled={readOnly}
               id="dialogBuyout"
+              readOnly={hasPricingEnd}
               type="number"
               step="1"
               min={0}
-              value={answers.buyoutForImplicitRate || ""}
+              value={hasPricingEnd ? (documentedEnd!.kind === "optional_purchase" ? 0 : documentedEnd!.amount!) : answers.buyoutForImplicitRate || ""}
               onChange={(e) => updateNumber("buyoutForImplicitRate", Number(e.target.value))}
               placeholder="e.g. 10,000"
             />
             <p className="text-xs text-muted-foreground">
-              This is the optional amount to purchase the asset at lease-end. The lessor used this to price the lease, but it is NOT included in the PV test.
+              Use the supported ending value from the agreement. This value is for estimating the rate only; it is not another rental.
             </p>
           </div>
 
@@ -1780,7 +1630,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
           <div className="p-3 rounded-lg bg-blue-50 border border-blue-200 space-y-2">
             <p className="text-sm font-semibold text-blue-900">What we're solving</p>
             <p className="text-xs text-blue-800">
-              We find the rate where: <strong>PV(all lease payments) + PV(buyout) = Fair Value</strong>
+              We find the rate where: <strong>PV of rent and the supported ending value = fair value</strong>
             </p>
             <p className="text-xs text-blue-800">
               This is the rate the lessor used internally. If it is higher than your IBR, use your IBR instead (ASPE requires the lower rate).
@@ -1799,7 +1649,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                       <Calculator className="h-4 w-4 text-emerald-600 flex-shrink-0" />
                       <div>
                         <p className="text-sm font-semibold text-emerald-900">Calculated Implicit Rate</p>
-                        <p className="text-lg font-bold text-emerald-800">{rate}% annually</p>
+                        <p className="text-lg font-bold text-emerald-800">{Number(rate.toFixed(5))}% annually</p>
                       </div>
                     </div>
                     <Button
@@ -1808,17 +1658,13 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                         setAnswers((prev) => {
                           const next = { ...prev, interestRate: rate,
                             ...(prev.leaseEndingTerms ? { leaseEndingTerms: { ...prev.leaseEndingTerms, implicitRate: rate, status: "draft" as const } } : {}) };
-                          const pv = calculatePV(next);
-                          if (pv > 0 && next.fairValue > 0) {
-                            next.pvPctFairValue = Math.round((pv / next.fairValue) * 1000) / 10;
-                          }
                           return next;
                         });
                         setShowImplicitRateDialog(false);
                       }}
                     >
                       <CheckCircle2 className="h-4 w-4" />
-                      Use {rate}% as discount rate
+                      Use this rate
                     </Button>
                   </>
                 );

@@ -363,6 +363,7 @@ export const ListLoansResponseItem = zod.object({
   "monthlyPayment": zod.string().optional(),
   "paymentOverride": zod.string().nullish(),
   "firstPaymentAmount": zod.string().nullish().describe('Contractual first installment when it differs from the regular payment.'),
+  "leaseAssessmentRate": zod.string().nullish().describe('Lease assessment discount rate, separate from contractual interest.'),
   "leaseEndingTerms": zod.record(zod.string(), zod.unknown()).nullish().describe('Versioned lease ending evidence. Null retains legacy accounting; non-null is validated deterministically.'),
   "termMonths": zod.number().optional(),
   "isOfficeProperty": zod.boolean(),
@@ -521,6 +522,8 @@ export const createLoanBodySemiMonthlyFirstDueDayMax = 31;
 
 export const createLoanBodySemiMonthlySecondDueDayMax = 31;
 
+export const createLoanBodyLeaseAssessmentRateMin = 0;
+
 
 
 
@@ -634,6 +637,7 @@ export const CreateLoanBody = zod.object({
   "monthlyPayment": zod.number().optional(),
   "paymentOverride": zod.number().nullish(),
   "firstPaymentAmount": zod.number().nullish().describe('Contractual first installment when it differs from the regular payment.'),
+  "leaseAssessmentRate": zod.number().min(createLoanBodyLeaseAssessmentRateMin).nullish().describe('Lease assessment discount rate, separate from contractual interest.'),
   "leaseEndingTerms": zod.record(zod.string(), zod.unknown()).nullish().describe('Versioned lease ending evidence. Null retains legacy accounting; non-null is validated deterministically.'),
   "termMonths": zod.number().optional(),
   "isOfficeProperty": zod.boolean().optional(),
@@ -977,6 +981,7 @@ export const GetLoanResponse = zod.object({
   "monthlyPayment": zod.string().optional(),
   "paymentOverride": zod.string().nullish(),
   "firstPaymentAmount": zod.string().nullish().describe('Contractual first installment when it differs from the regular payment.'),
+  "leaseAssessmentRate": zod.string().nullish().describe('Lease assessment discount rate, separate from contractual interest.'),
   "leaseEndingTerms": zod.record(zod.string(), zod.unknown()).nullish().describe('Versioned lease ending evidence. Null retains legacy accounting; non-null is validated deterministically.'),
   "termMonths": zod.number().optional(),
   "isOfficeProperty": zod.boolean(),
@@ -1124,6 +1129,8 @@ export const updateLoanBodySemiMonthlyFirstDueDayMax = 31;
 
 export const updateLoanBodySemiMonthlySecondDueDayMax = 31;
 
+export const updateLoanBodyLeaseAssessmentRateMin = 0;
+
 
 
 
@@ -1219,6 +1226,7 @@ export const UpdateLoanBody = zod.object({
   "monthlyPayment": zod.number().optional(),
   "paymentOverride": zod.number().nullish(),
   "firstPaymentAmount": zod.number().nullish().describe('Contractual first installment when it differs from the regular payment.'),
+  "leaseAssessmentRate": zod.number().min(updateLoanBodyLeaseAssessmentRateMin).nullish().describe('Lease assessment discount rate, separate from contractual interest.'),
   "leaseEndingTerms": zod.record(zod.string(), zod.unknown()).nullish().describe('Versioned lease ending evidence. Null retains legacy accounting; non-null is validated deterministically.'),
   "termMonths": zod.number().optional(),
   "isOfficeProperty": zod.boolean().optional(),
@@ -1429,6 +1437,7 @@ export const UpdateLoanResponse = zod.object({
   "monthlyPayment": zod.string().optional(),
   "paymentOverride": zod.string().nullish(),
   "firstPaymentAmount": zod.string().nullish().describe('Contractual first installment when it differs from the regular payment.'),
+  "leaseAssessmentRate": zod.string().nullish().describe('Lease assessment discount rate, separate from contractual interest.'),
   "leaseEndingTerms": zod.record(zod.string(), zod.unknown()).nullish().describe('Versioned lease ending evidence. Null retains legacy accounting; non-null is validated deterministically.'),
   "termMonths": zod.number().optional(),
   "isOfficeProperty": zod.boolean(),
@@ -2093,6 +2102,7 @@ export const ImportDocumentResponse = zod.object({
   "startDate": zod.string().nullish(),
   "termMonths": zod.number().nullish(),
   "monthlyPayment": zod.number().nullish(),
+  "firstPaymentAmount": zod.number().nullish().describe('Distinct first rental on the same tax and service basis as monthlyPayment.'),
   "downPayment": zod.number().nullish(),
   "interestRate": zod.number().nullish(),
   "fairValue": zod.number().nullish(),

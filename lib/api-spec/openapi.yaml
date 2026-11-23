@@ -1588,6 +1588,9 @@ components:
           type: string
           nullable: true
           description: Contractual first installment when it differs from the regular payment.
+        leaseAssessmentRate:
+          type: [string, "null"]
+          description: Lease assessment discount rate, separate from contractual interest.
         leaseEndingTerms:
           $ref: "#/components/schemas/LeaseEndingTerms"
         termMonths:
@@ -1890,6 +1893,10 @@ components:
           type: number
           nullable: true
           description: Contractual first installment when it differs from the regular payment.
+        leaseAssessmentRate:
+          type: [number, "null"]
+          minimum: 0
+          description: Lease assessment discount rate, separate from contractual interest.
         leaseEndingTerms:
           $ref: "#/components/schemas/LeaseEndingTerms"
         termMonths:
@@ -2126,6 +2133,10 @@ components:
           type: number
           nullable: true
           description: Contractual first installment when it differs from the regular payment.
+        leaseAssessmentRate:
+          type: [number, "null"]
+          minimum: 0
+          description: Lease assessment discount rate, separate from contractual interest.
         leaseEndingTerms:
           $ref: "#/components/schemas/LeaseEndingTerms"
         termMonths:
@@ -2728,6 +2739,9 @@ components:
         monthlyPayment:
           type: number
           nullable: true
+        firstPaymentAmount:
+          type: [number, "null"]
+          description: Distinct first rental on the same tax and service basis as monthlyPayment.
         downPayment:
           type: number
           nullable: true

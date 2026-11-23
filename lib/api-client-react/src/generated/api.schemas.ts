@@ -702,6 +702,11 @@ export interface Loan {
   paymentOverride?: string | null;
   /** Contractual first installment when it differs from the regular payment. */
   firstPaymentAmount?: string | null;
+  /**
+     * Lease assessment discount rate, separate from contractual interest.
+     * @nullable
+     */
+  leaseAssessmentRate?: string | null;
   leaseEndingTerms?: LeaseEndingTerms | null;
   termMonths?: number;
   isOfficeProperty: boolean;
@@ -908,6 +913,12 @@ export interface CreateLoan {
   paymentOverride?: number | null;
   /** Contractual first installment when it differs from the regular payment. */
   firstPaymentAmount?: number | null;
+  /**
+     * Lease assessment discount rate, separate from contractual interest.
+     * @minimum 0
+     * @nullable
+     */
+  leaseAssessmentRate?: number | null;
   leaseEndingTerms?: LeaseEndingTerms | null;
   termMonths?: number;
   isOfficeProperty?: boolean;
@@ -1095,6 +1106,12 @@ export interface UpdateLoan {
   paymentOverride?: number | null;
   /** Contractual first installment when it differs from the regular payment. */
   firstPaymentAmount?: number | null;
+  /**
+     * Lease assessment discount rate, separate from contractual interest.
+     * @minimum 0
+     * @nullable
+     */
+  leaseAssessmentRate?: number | null;
   leaseEndingTerms?: LeaseEndingTerms | null;
   termMonths?: number;
   isOfficeProperty?: boolean;
@@ -1430,6 +1447,11 @@ export interface ImportedLeaseFields {
   startDate?: string | null;
   termMonths?: number | null;
   monthlyPayment?: number | null;
+  /**
+     * Distinct first rental on the same tax and service basis as monthlyPayment.
+     * @nullable
+     */
+  firstPaymentAmount?: number | null;
   downPayment?: number | null;
   interestRate?: number | null;
   fairValue?: number | null;

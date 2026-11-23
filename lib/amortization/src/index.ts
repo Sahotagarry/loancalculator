@@ -2,6 +2,7 @@ import { addMonths, getMonth, addDays } from "date-fns";
 import { accrualYears, isDaily, regularRate, type InterestMethod } from "./interest-method";
 export * from "./interest-method";
 export * from "./lease-ending";
+export * from "./lease-classification";
 export * from "./lease-schedule";
 
 export interface AmortizationRow {

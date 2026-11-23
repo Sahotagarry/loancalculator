@@ -1,5 +1,27 @@
 import { z } from "zod";
-import { calculateLeaseSchedule, leaseScheduleSupportIssue, leasePresentValue, lesseeEndingAmount, normalizeLeaseEnding, type LeaseEndingTerms } from "@workspace/amortization";
+import { assessLeaseClassification, calculateLeaseSchedule, leaseScheduleSupportIssue, leasePresentValue, lesseeEndingAmount, normalizeLeaseEnding, type LeaseEndingTerms, type LeaseClassificationInput } from "@workspace/amortization";
+
+/** Approval is separate from measurement; apply to operating and capital leases alike. */
+export function validateLeaseClassification(loan: LeaseClassificationInput, ending: LeaseEndingTerms) {
+  if (ending.status === "reviewed") {
+    const result = assessLeaseClassification({ ...loan, leaseEndingTerms: ending });
+    if (result.status === "needs_review") throw new Error(result.rationale);
+    if ((result.status === "capital") !== !!loan.isCapitalLease) {
+      throw new Error(`Classification conflicts with reviewed evidence. ${result.rationale} Reopen the assessment and explicitly reconfirm; the application has not changed your decision.`);
+    }
+  }
+  // Explicit operating evidence must persist as an operating lease, including
+  // drafts. A rate-only PATCH can invalidate review, but must not turn it into
+  // a loan. Assessment/discount rates are evidence, not contractual interest.
+  if (!loan.isCapitalLease) {
+    if (loan.interestRate == null || Number(loan.interestRate) !== 0) {
+      throw new Error("Operating leases require interestRate to be zero. Preserve the supported assessment rate separately in leaseAssessmentRate or the lease ending discount-rate evidence.");
+    }
+    if (loan.monthlyPayment == null || loan.termMonths == null) {
+      throw new Error("Operating leases require monthlyPayment and termMonths so the saved agreement remains an operating lease.");
+    }
+  }
+}
 
 export const leaseEndingSchema = z.object({
   version: z.literal(1),
@@ -90,7 +112,7 @@ export function leaseAccountingProjection(loan: Record<string, unknown>, ending:
   return {
     principal: Math.min(pv, fairValue).toFixed(2), assetCost: Math.min(pv, fairValue).toFixed(2),
     balloonPayment: lesseeEndingAmount(ending).toFixed(2),
-    pvPctFairValue: (pv / fairValue * 100).toFixed(2),
+    // Measurement owns the opening balances, not the earlier assessment percentage.
     interestRate: rate.toString(),
     monthlyPayment: payment.toFixed(2),
     paymentOverride: payment.toFixed(2),

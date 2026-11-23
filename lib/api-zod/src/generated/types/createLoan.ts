@@ -94,6 +94,12 @@ export interface CreateLoan {
   paymentOverride?: number | null;
   /** Contractual first installment when it differs from the regular payment. */
   firstPaymentAmount?: number | null;
+  /**
+     * Lease assessment discount rate, separate from contractual interest.
+     * @minimum 0
+     * @nullable
+     */
+  leaseAssessmentRate?: number | null;
   leaseEndingTerms?: LeaseEndingTerms | null;
   termMonths?: number;
   isOfficeProperty?: boolean;

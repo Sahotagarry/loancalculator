@@ -1,5 +1,6 @@
 import { parseISO, addMonths, addYears, isAfter, isBefore } from "date-fns";
 import { calculateProspectiveModificationSchedule } from "@workspace/amortization";
+import { savedLeaseConclusion } from "./lease-assessment-values";
 import { isOperatingLeaseLoan, PROSPECTIVE_EIR_EVIDENCE_WARNING } from "./aspe-utils";
 
 /* ── Types ───────────────────────────────────────────────────── */
@@ -56,6 +57,11 @@ export interface LoanDiagnosticInput {
   assetUsefulLife?: number | null;
   capitalLeaseRationale?: string | null;
   monthlyPayment?: string | number | null;
+  paymentOverride?: string | number | null;
+  firstPaymentAmount?: string | number | null;
+  downPayment?: string | number | null;
+  leaseAssessmentRate?: string | number | null;
+  leaseEndingTerms?: unknown;
   termMonths?: number | null;
   isOfficeProperty?: boolean;
   freeRentMonths?: number;
@@ -502,21 +508,15 @@ export function runLoanDiagnostics(
     }
   }
 
-  if (kind === "capital_lease") {
-    const criteriaMet =
-      loan.transferOfOwnership === true ||
-      loan.bargainPurchaseOption === true ||
-      num(loan.leaseTermPct) >= 75 ||
-      num(loan.pvPctFairValue) >= 90 ||
-      loan.specializedAsset === true;
-    if (!criteriaMet) {
-      add(
-        "cap-no-criteria",
-        "error",
-        "Classified as a capital lease but no ASPE 3065 criterion is met",
-        "Re-run the lease assessment — either a criterion should be documented or the lease may be operating.",
-      );
+  if (kind !== "loan") {
+    const assessment = savedLeaseConclusion(loan);
+    if (assessment.status === "needs_review") {
+      add("lease-classification-review", "warning", "Lease classification needs review — saved classification retained", assessment.rationale);
+    } else if ((assessment.status === "capital") !== loan.isCapitalLease) {
+      add("lease-classification-conflict", "error", "Saved lease classification conflicts with reviewed evidence", `${assessment.rationale} Reopen the assessment and explicitly reconfirm.`);
     }
+  }
+  if (kind === "capital_lease") {
     if (blank(loan.capitalLeaseRationale)) {
       add(
         "cap-rationale",

@@ -133,19 +133,25 @@ export function lastLeaseRentalDate(startDate: Date, firstPaymentDate: Date | nu
   return addMonths(first, Math.max(0, termMonths - 1));
 }
 
-export function leasePresentValue(a: LeaseCashFlows, annualRate: number, forImplicitRate = false): number {
+/** The rental stream only. No purchase option, guarantee, residual or other terminal amount. */
+export function leaseRentalPresentValue(a: Omit<LeaseCashFlows, "ending">, annualRate: number): number {
   if (!nonnegative(annualRate) || !nonnegative(a.monthlyPayment) || !nonnegative(a.downPayment) ||
       !Number.isInteger(a.termMonths) || a.termMonths <= 0 ||
       (a.firstPaymentAmount != null && !nonnegative(a.firstPaymentAmount))) throw new Error("Invalid lease cash flows.");
-  const end = lesseeEndingAmount(a.ending);
-  const residual = forImplicitRate && a.ending.kind === "lessor_residual" ? a.ending.amount! : end;
   const r = annualRate / 1200;
   let pv = a.downPayment;
   for (let i = 0; i < a.termMonths; i++) {
     const payment = i === 0 ? a.firstPaymentAmount ?? a.monthlyPayment : a.monthlyPayment;
     pv += payment / (1 + r) ** (i + (a.paymentAtBeginning ? 0 : 1));
   }
-  return pv + residual / (1 + r) ** a.ending.settlementMonth!;
+  return pv;
+}
+
+export function leasePresentValue(a: LeaseCashFlows, annualRate: number, forImplicitRate = false): number {
+  const pv = leaseRentalPresentValue(a, annualRate);
+  const end = lesseeEndingAmount(a.ending);
+  const residual = forImplicitRate && a.ending.kind === "lessor_residual" ? a.ending.amount! : end;
+  return pv + residual / (1 + annualRate / 1200) ** a.ending.settlementMonth!;
 }
 
 /** Returns null, never a confident zero, when the supported cash flows have no nonnegative solution. */

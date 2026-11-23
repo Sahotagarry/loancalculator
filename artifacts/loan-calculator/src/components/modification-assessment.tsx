@@ -68,6 +68,7 @@ export default function ModificationAssessment({
   const operatingAtEffective = initialPredecessor && !initialPredecessor.isCapitalLease && initialPredecessor.monthlyPayment
     ? calculateStraightLineLease({
         baseMonthlyRent: Number(initialPredecessor.monthlyPayment),
+        firstPaymentAmount: initialPredecessor.firstPaymentAmount == null ? null : Number(initialPredecessor.firstPaymentAmount),
         termMonths: initialPredecessor.termMonths ?? Math.round(initialPredecessor.termYears * 12),
         freeRentMonths: initialPredecessor.freeRentMonths,
         escalationRate: Number(initialPredecessor.rentEscalationRate),

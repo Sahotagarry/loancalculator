@@ -1,21 +1,24 @@
+import { useId } from "react";
 import { normalizeLeaseEnding, type LeaseEndingTerms } from "@workspace/amortization";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { LeaseReviewDetails } from "./lease-review-details";
 
 const kinds: Array<[LeaseEndingTerms["kind"], string]> = [
-  ["unresolved", "Unresolved ending terms"], ["mandatory_payment", "Required final payment / purchase"],
-  ["guaranteed_residual", "Guaranteed residual / sale shortfall"], ["optional_purchase", "Optional purchase"],
-  ["bargain_purchase", "Qualifying bargain purchase"], ["lessor_residual", "Unguaranteed lessor residual"],
-  ["none", "No ending obligation"],
+  ["unresolved", "Not yet established"], ["mandatory_payment", "Client must make a final payment / purchase"],
+  ["guaranteed_residual", "Client covers a sale shortfall (guaranteed residual)"], ["optional_purchase", "Client may choose to purchase"],
+  ["bargain_purchase", "Purchase option qualifies as a bargain"], ["lessor_residual", "Owner keeps the ending-value risk"],
+  ["none", "No ending payment or guarantee"],
 ];
 
 export function LeaseEndingFields({ value, months, onChange, readOnly }: {
   value?: LeaseEndingTerms | null; months: number; onChange: (value: LeaseEndingTerms) => void; readOnly?: boolean;
 }) {
+  const id = useId();
   if (!value) return <div className="rounded-lg border p-3 space-y-2">
-    <p className="text-xs text-muted-foreground">Legacy ending treatment is unchanged. Review the agreement before adopting explicit ending terms.</p>
+    <p className="text-xs text-muted-foreground">This lease uses its previous ending treatment. Review the agreement before changing it; existing calculations are unchanged.</p>
     <Button type="button" variant="outline" disabled={readOnly} onClick={() => onChange({
       version: 1, kind: "unresolved", amount: null, basis: "stated", source: "", settlementMonth: months || null,
       status: "draft", issues: [],
@@ -24,31 +27,42 @@ export function LeaseEndingFields({ value, months, onChange, readOnly }: {
   const checked = normalizeLeaseEnding(value, months);
   const update = (patch: Partial<LeaseEndingTerms>) => onChange({ ...value, ...patch,
     ...(patch.paymentComponentsApplied === false ? { firstPaymentComponentsApplied: false } : {}), status: "draft" });
-  return <fieldset disabled={readOnly} className="rounded-lg border p-3 space-y-3">
-    <legend className="px-1 text-sm font-semibold">Lease ending terms</legend>
-    <div className="grid grid-cols-2 gap-3">
-      <Label>Treatment<select className="block w-full rounded border p-2 text-xs" value={value.kind} onChange={e => update({ kind: e.target.value as LeaseEndingTerms["kind"] })}>
-        {kinds.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
-      </select></Label>
-      <Label>Ending amount ($)<Input type="number" min="0" step="0.01" value={value.amount ?? ""} onChange={e => update({ amount: e.target.value === "" ? null : Number(e.target.value), basis: "stated", explanation: "Reviewer-entered amount; see source explanation." })} /></Label>
-      <Label>Settlement month from commencement<Input type="number" min="0" value={value.settlementMonth ?? ""} onChange={e => update({ settlementMonth: e.target.value === "" ? null : Number(e.target.value) })} /></Label>
-      <Label>Incremental borrowing rate (%)<Input type="number" min="0" step="any" value={value.incrementalBorrowingRate ?? ""} onChange={e => update({ incrementalBorrowingRate: e.target.value === "" ? null : Number(e.target.value) })} /></Label>
-      <Label>Tax treatment<select className="block w-full rounded border p-2 text-xs" value={value.taxTreatment ?? "excluded"} onChange={e => update({ taxTreatment: e.target.value as LeaseEndingTerms["taxTreatment"], paymentComponentsApplied: false })}>
-        <option value="excluded">Payments exclude taxes</option><option value="recoverable">Recoverable tax included</option>
-        <option value="nonrecoverable">Non-recoverable tax included</option><option value="unresolved">Unresolved</option>
-      </select></Label>
-      <Label>Services included per month ($)<Input type="number" min="0" value={value.servicesMonthly ?? 0} onChange={e => update({ servicesMonthly: Number(e.target.value), paymentComponentsApplied: false })} /></Label>
-      <Label>Supported tax rate (%)<Input type="number" min="0" step="any" value={value.taxRate ?? ""} onChange={e => update({ taxRate: Number(e.target.value), paymentComponentsApplied: false })} /></Label>
-      <Label>Refundable deposit ($, not a down payment)<Input type="number" min="0" step="0.01" value={value.refundableDeposit ?? ""} onChange={e => update({ refundableDeposit: Number(e.target.value) })} /></Label>
-    </div>
-    <Label>Source clauses / review explanation<Textarea value={value.source} onChange={e => update({ source: e.target.value })} placeholder="Quote the amount basis and the operative purchase, return or shortfall clause." /></Label>
-    {value.explanation && <p className="text-xs text-blue-800">Calculated, not stated: {value.explanation}</p>}
-    <Label>Unresolved documentary issues<Textarea value={value.issues.join("\n")} onChange={e => update({ issues: e.target.value.split("\n").filter(Boolean) })} placeholder="Missing appendix, conflicting terms, unsupported formula… Clear only after documenting the resolution above." /></Label>
-    {value.commencement && <div className="text-xs">
-      <p>{value.commencement.basis === "inferred" ? "Inferred date — confirm before use" : "Document date"}: {value.commencement.date}. {value.commencement.source}</p>
-      <label><input type="checkbox" checked={value.commencement.confirmed} onChange={e => update({ commencement: { ...value.commencement!, confirmed: e.target.checked } })} /> I verified commencement against the agreement/delivery evidence.</label>
+  const needsReview = value.status !== "reviewed" || checked.issues.length > 0;
+  return <fieldset disabled={readOnly} className="space-y-3 min-w-0">
+    <legend className="mb-2 text-sm font-semibold">Review details</legend>
+    {checked.issues.length > 0 && <div role="alert" className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
+      <p className="font-semibold">Resolve before approval</p>
+      <ul className="list-disc pl-5">{checked.issues.map((issue, i) => <li key={i}>{issue}</li>)}</ul>
     </div>}
-    {checked.issues.length > 0 && <p className="text-xs text-amber-800">{checked.issues.join(" ")}</p>}
-    <label className="flex gap-2 text-xs"><input type="checkbox" disabled={checked.issues.length > 0} checked={value.status === "reviewed" && !checked.issues.length} onChange={e => onChange({ ...checked, status: e.target.checked ? "reviewed" : "draft" })} /> I reviewed this treatment, amount and supporting clauses. Optional and lessor-retained values are not lessee obligations.</label>
+    <LeaseReviewDetails title="Ending terms and supporting clauses" needsAttention={needsReview}>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div className="space-y-1"><Label htmlFor={`${id}-kind`}>What must the client do at the end?</Label><select id={`${id}-kind`} name="leaseEndingKind" className="block w-full min-w-0 rounded border bg-background p-2 text-sm focus-visible:ring-2 focus-visible:ring-ring" value={value.kind} onChange={e => update({ kind: e.target.value as LeaseEndingTerms["kind"] })}>
+          {kinds.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+        </select></div>
+        <div className="space-y-1"><Label htmlFor={`${id}-amount`}>Ending payment or guaranteed amount ($)</Label><Input id={`${id}-amount`} name="leaseEndingAmount" type="number" min="0" step="0.01" value={value.amount ?? ""} onChange={e => update({ amount: e.target.value === "" ? null : Number(e.target.value), basis: "stated", explanation: "Reviewer-entered amount; see source explanation." })} /></div>
+        <div className="space-y-1"><Label htmlFor={`${id}-month`}>Months from lease start to settlement</Label><Input id={`${id}-month`} name="leaseSettlementMonth" type="number" min="0" value={value.settlementMonth ?? ""} onChange={e => update({ settlementMonth: e.target.value === "" ? null : Number(e.target.value) })} /></div>
+        <div className="space-y-1"><Label htmlFor={`${id}-rate`}>Client’s supported borrowing rate (%)</Label><Input id={`${id}-rate`} name="leaseBorrowingRate" type="number" min="0" step="any" value={value.incrementalBorrowingRate ?? ""} onChange={e => update({ incrementalBorrowingRate: e.target.value === "" ? null : Number(e.target.value) })} /><p className="text-xs text-muted-foreground">Incremental borrowing rate: the rate for similar financing. Support it with a lender quote or comparable borrowing terms.</p></div>
+      </div>
+      <div className="space-y-1"><Label htmlFor={`${id}-source`}>Agreement clauses and your explanation</Label><Textarea id={`${id}-source`} name="leaseEndingSource" value={value.source} onChange={e => update({ source: e.target.value })} placeholder="Quote the purchase, return or sale-shortfall clause and explain the amount." /></div>
+      {value.explanation && <p className="text-xs text-blue-800">Amount explanation: {value.explanation}</p>}
+    </LeaseReviewDetails>
+    <LeaseReviewDetails title="Taxes, services and refundable deposit" needsAttention={needsReview}>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div className="space-y-1"><Label htmlFor={`${id}-tax`}>Taxes in the payment</Label><select id={`${id}-tax`} name="leaseTaxTreatment" className="block w-full rounded border bg-background p-2 text-sm focus-visible:ring-2 focus-visible:ring-ring" value={value.taxTreatment ?? "excluded"} onChange={e => update({ taxTreatment: e.target.value as LeaseEndingTerms["taxTreatment"], paymentComponentsApplied: false })}>
+          <option value="excluded">Payments exclude taxes</option><option value="recoverable">Recoverable tax included</option>
+          <option value="nonrecoverable">Non-recoverable tax included</option><option value="unresolved">Not yet established</option>
+        </select></div>
+        <div className="space-y-1"><Label htmlFor={`${id}-services`}>Services included each month ($)</Label><Input id={`${id}-services`} name="leaseServicesMonthly" type="number" min="0" value={value.servicesMonthly ?? 0} onChange={e => update({ servicesMonthly: Number(e.target.value), paymentComponentsApplied: false })} /></div>
+        <div className="space-y-1"><Label htmlFor={`${id}-tax-rate`}>Supported tax rate (%)</Label><Input id={`${id}-tax-rate`} name="leaseTaxRate" type="number" min="0" step="any" value={value.taxRate ?? ""} onChange={e => update({ taxRate: Number(e.target.value), paymentComponentsApplied: false })} /></div>
+        <div className="space-y-1"><Label htmlFor={`${id}-deposit`}>Refundable deposit ($, not an upfront payment)</Label><Input id={`${id}-deposit`} name="leaseRefundableDeposit" type="number" min="0" step="0.01" value={value.refundableDeposit ?? ""} onChange={e => update({ refundableDeposit: Number(e.target.value) })} /></div>
+      </div>
+    </LeaseReviewDetails>
+    {needsReview && <div className="space-y-1"><Label htmlFor={`${id}-issues`}>Evidence still missing or conflicting</Label><Textarea id={`${id}-issues`} name="leaseEndingIssues" value={value.issues.join("\n")} onChange={e => update({ issues: e.target.value.split("\n").filter(Boolean) })} placeholder="Missing appendix, conflicting terms, unsupported formula… Clear only after documenting the resolution in your explanation." /></div>}
+    {value.commencement && <div className="rounded-lg border p-3 text-sm space-y-2">
+      <p>{value.commencement.basis === "inferred" ? "Estimated start date — verify before use" : "Start date from the document"}: {value.commencement.date}. {value.commencement.source}</p>
+      <label className="flex items-start gap-2"><input name="leaseCommencementConfirmed" type="checkbox" className="mt-1" checked={value.commencement.confirmed} onChange={e => update({ commencement: { ...value.commencement!, confirmed: e.target.checked } })} /> I checked the start date against the agreement or delivery evidence.</label>
+    </div>}
+    <label className="flex items-start gap-2 rounded-lg border p-3 text-sm"><input name="leaseEndingReviewed" type="checkbox" className="mt-1" disabled={checked.issues.length > 0} checked={value.status === "reviewed" && !checked.issues.length} onChange={e => onChange({ ...checked, status: e.target.checked ? "reviewed" : "draft" })} /><span>I reviewed what the client must pay, the amount and the supporting clauses. An optional purchase or value retained by the owner is not an amount the client must pay.</span></label>
+    <p className="text-xs text-muted-foreground">{needsReview ? "Draft evidence — resolve missing information and check the review confirmation." : "Ending evidence reviewed. Changing any input requires review again."}</p>
   </fieldset>;
 }

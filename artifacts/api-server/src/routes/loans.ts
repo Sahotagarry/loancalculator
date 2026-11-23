@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { leaseAccountingProjection, validateLeaseEnding } from "../lib/lease-ending";
+import { leaseAccountingProjection, validateLeaseClassification, validateLeaseEnding } from "../lib/lease-ending";
 import { and, asc, desc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import { db, loansTable, filesTable, clientMembershipsTable, clientsTable, loanContractRevisionsTable, loanEventsTable, loanEventSetsTable, masterAgreementsTable, type AgreementModificationAssessment } from "@workspace/db";
 import {
@@ -300,6 +300,7 @@ const cleanLoan = (
   monthlyPayment: loan.monthlyPayment ?? undefined,
   paymentOverride: loan.paymentOverride ?? undefined,
   firstPaymentAmount: loan.firstPaymentAmount ?? undefined,
+  leaseAssessmentRate: loan.leaseAssessmentRate ?? undefined,
   termMonths: loan.termMonths ?? undefined,
   isOfficeProperty: loan.isOfficeProperty ?? undefined,
   freeRentMonths: loan.freeRentMonths ?? undefined,
@@ -558,10 +559,15 @@ router.post("/files/:id/loans", async (req, res): Promise<void> => {
 
   const rentStepsError = validateRentSteps(data.rentSteps);
   let leaseProjection: Record<string, unknown> = {};
+  if ((data.isCapitalLease || (data.termMonths != null && data.monthlyPayment != null && Number(data.interestRate) === 0)) && data.leaseEndingTerms == null) {
+    res.status(400).json({ error: "New leases require explicit ending evidence. Resolve and review the assessment or supply draft ending terms; historical classifications are not changed." });
+    return;
+  }
   if (data.leaseEndingTerms != null) {
     try {
       const ending = validateLeaseEnding(data.leaseEndingTerms, data.termMonths ?? Math.round(data.termYears * 12));
       data.leaseEndingTerms = { ...ending };
+      validateLeaseClassification(data, ending);
       leaseProjection = leaseAccountingProjection({ ...data, paymentFrequency: data.paymentFrequency ?? "monthly" }, ending);
     } catch (error) {
       res.status(400).json({ error: error instanceof Error ? error.message : "Invalid lease ending evidence" });
@@ -700,6 +706,7 @@ router.post("/files/:id/loans", async (req, res): Promise<void> => {
       monthlyPayment: data.monthlyPayment != null ? data.monthlyPayment.toString() : null,
       paymentOverride: data.paymentOverride != null ? data.paymentOverride.toString() : null,
       firstPaymentAmount: data.firstPaymentAmount != null ? data.firstPaymentAmount.toString() : null,
+      leaseAssessmentRate: data.leaseAssessmentRate?.toString() ?? null,
       leaseEndingTerms: data.leaseEndingTerms ?? null,
       termMonths: data.termMonths ?? null,
       isOfficeProperty: data.isOfficeProperty ?? false,
@@ -1254,6 +1261,11 @@ router.patch("/loans/:id", async (req, res): Promise<void> => {
   }
 
   const updates: Record<string, unknown> = {};
+  if (data.isCapitalLease !== undefined && data.isCapitalLease !== calendarCurrent.isCapitalLease &&
+      data.leaseEndingTerms == null && calendarCurrent.leaseEndingTerms == null) {
+    res.status(400).json({ error: "Historical classification cannot be changed without reviewed lease evidence. Reopen the assessment and explicitly reconfirm." });
+    return;
+  }
   if (data.leaseEndingTerms !== undefined) {
     if (data.leaseEndingTerms === null && calendarCurrent.leaseEndingTerms != null) {
       res.status(409).json({ error: "Ending evidence cannot be removed to restore legacy calculations. Save a revised interpretation instead." });
@@ -1367,6 +1379,8 @@ router.patch("/loans/:id", async (req, res): Promise<void> => {
   if (data.firstPaymentAmount !== undefined)
     updates.firstPaymentAmount =
       data.firstPaymentAmount != null ? data.firstPaymentAmount.toString() : null;
+  if (data.leaseAssessmentRate !== undefined)
+    updates.leaseAssessmentRate = data.leaseAssessmentRate?.toString() ?? null;
   if (data.downPayment !== undefined)
     updates.downPayment = data.downPayment != null ? data.downPayment.toString() : "0";
   if (data.termMonths != null) updates.termMonths = data.termMonths;
@@ -1436,7 +1450,10 @@ router.patch("/loans/:id", async (req, res): Promise<void> => {
       };
       const ending = validateLeaseEnding(next.leaseEndingTerms, Number(next.termMonths ?? next.termYears * 12));
       const changed = Object.keys(updates).some(key => key !== "leaseEndingTerms" && SCHEDULE_DRIVING_FIELDS.has(key as keyof typeof loansTable.$inferSelect) && String(current[key as keyof typeof current]) !== String(updates[key]));
-      if (changed && data.leaseEndingTerms === undefined) ending.status = "draft";
+      const classificationChanged = ["transferOfOwnership", "bargainPurchaseOption", "leaseTermPct", "assetUsefulLife", "specializedAsset", "isCapitalLease", "fairValue", "leaseAssessmentRate"].some(key =>
+        key in updates && String(current[key as keyof typeof current]) !== String(updates[key]));
+      if ((changed || classificationChanged) && data.leaseEndingTerms === undefined) ending.status = "draft";
+      validateLeaseClassification(next, ending);
       updates.leaseEndingTerms = { ...ending };
       Object.assign(updates, leaseAccountingProjection(next, ending));
     } catch (error) {
@@ -1452,12 +1469,15 @@ router.patch("/loans/:id", async (req, res): Promise<void> => {
     await tx.execute(sql`select id from loans where id = ${params.data.id} for update`);
     const [locked] = await tx.select().from(loansTable)
       .where(and(eq(loansTable.id, params.data.id), isNull(loansTable.deletedAt)));
-    if (locked && updates.leaseEndingTerms && (updates.leaseEndingTerms as { status?: string }).status === "reviewed") {
+    // Recheck the persistence classification under the lock for drafts too:
+    // losing reviewed status must never bypass the operating-lease sentinel.
+    if (locked && updates.leaseEndingTerms) {
       const events = locked.activeEventSetId
         ? await tx.select().from(loanEventsTable).where(eq(loanEventsTable.setId, locked.activeEventSetId))
         : [];
       const next = { ...locked, ...updates, activeEvents: events };
       const ending = validateLeaseEnding(next.leaseEndingTerms, Number(next.termMonths ?? next.termYears * 12));
+      validateLeaseClassification(next, ending);
       Object.assign(updates, leaseAccountingProjection(next, ending));
     }
     const [updated] = await tx
@@ -1683,6 +1703,7 @@ router.post("/loans/:id/rollforward", async (req, res): Promise<void> => {
     monthlyPayment: original.monthlyPayment,
     paymentOverride: original.paymentOverride,
     firstPaymentAmount: original.firstPaymentAmount,
+    leaseAssessmentRate: original.leaseAssessmentRate,
     leaseEndingTerms: original.leaseEndingTerms,
     termMonths: original.termMonths,
     isOfficeProperty: original.isOfficeProperty,

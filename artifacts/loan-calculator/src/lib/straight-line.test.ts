@@ -1,7 +1,58 @@
 import { describe, it, expect } from "vitest";
-import { calculateStraightLineLease, buildYearlyStraightLine } from "./straight-line";
+import { calculateStraightLineLease, buildYearlyStraightLine, buildOperatingLeasePayments } from "./straight-line";
 
 describe("calculateStraightLineLease", () => {
+  const terms = { baseMonthlyRent: 900, termMonths: 12,
+    startDate: "2026-07-01", fiscalYearEnd: "2026-12-31" };
+
+  it("replaces rather than adds the distinct first rental and reconciles deferred rent", () => {
+    const sl = calculateStraightLineLease({ ...terms, firstPaymentAmount: 1900 })!;
+    expect(sl.totalLeasePayments).toBe(11800);
+    expect(sl.monthlyStraightLineExpense).toBeCloseTo(983.333333, 6);
+    expect(sl.schedule.map(p => p.actualPayment)).toEqual([1900, ...Array(11).fill(900)]);
+    expect(sl.deferredRentAtYearEnd).toBeCloseTo(500, 6);
+    expect(sl.schedule.at(-1)?.cumulativeDeferredRent).toBeCloseTo(0, 6);
+    expect(buildYearlyStraightLine(sl.schedule)).toEqual([
+      expect.objectContaining({ fiscalYear: 2026, actual: 6400, straightLine: expect.closeTo(5900), deferredRent: expect.closeTo(500) }),
+      expect.objectContaining({ fiscalYear: 2027, actual: 5400, straightLine: expect.closeTo(5900), deferredRent: expect.closeTo(0) }),
+    ]);
+  });
+
+  it.each([null, undefined])("keeps historical rental streams unchanged with first rental %s", firstPaymentAmount => {
+    const legacy = { ...terms, termMonths: 30, freeRentMonths: 2, escalationRate: 5,
+      rentSteps: [{ fromYear: 1, toYear: 1, monthlyRent: 900 }, { fromYear: 2, toYear: 2, monthlyRent: 1200 }],
+      tenantImprovementAllowance: 1000, otherInducements: 500 };
+    expect(calculateStraightLineLease({ ...legacy, firstPaymentAmount }))
+      .toEqual(calculateStraightLineLease(legacy));
+  });
+
+  it("preserves free months, step precedence and the last-step extension", () => {
+    const sl = calculateStraightLineLease({ ...terms, termMonths: 30, freeRentMonths: 2,
+      firstPaymentAmount: 1900, escalationRate: 99,
+      rentSteps: [{ fromYear: 2, toYear: 2, monthlyRent: 1200 }, { fromYear: 1, toYear: 1, monthlyRent: 900 }],
+      tenantImprovementAllowance: 1000, otherInducements: 500 })!;
+    expect(sl.schedule.map(p => p.actualPayment))
+      .toEqual([0, 0, 1900, ...Array(9).fill(900), ...Array(18).fill(1200)]);
+    expect(sl.totalLeasePayments).toBe(31600);
+    expect(sl.monthlyStraightLineExpense).toBeCloseTo((31600 - 1500) / 30);
+    expect(sl.schedule.at(-1)?.cumulativeDeferredRent).toBeCloseTo(1500);
+  });
+
+  it("replaces the first payable rental after a year of free rent without escalating it", () => {
+    const payments = buildOperatingLeasePayments({ ...terms, termMonths: 15,
+      freeRentMonths: 12, firstPaymentAmount: 1900, escalationRate: 10 });
+    expect(payments.slice(0, 13)).toEqual([...Array(12).fill(0), 1900]);
+    expect(payments[13]).toBeCloseTo(990);
+    expect(payments[14]).toBeCloseTo(990);
+    expect(buildOperatingLeasePayments({ ...terms, freeRentMonths: 12, firstPaymentAmount: 1900 }))
+      .toEqual(Array(12).fill(0));
+  });
+
+  it("uses an explicit zero first rental instead of falling back to regular rent", () => {
+    expect(buildOperatingLeasePayments({ ...terms, firstPaymentAmount: 0 }))
+      .toEqual([0, ...Array(11).fill(900)]);
+  });
+
   it("returns null for degenerate inputs", () => {
     expect(
       calculateStraightLineLease({

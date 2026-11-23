@@ -40,6 +40,7 @@ export function calculateLeaseSchedule(a: LeaseCashFlows & { annualRate: number;
     balance += interest;
     schedule.push({ month: a.termMonths + 1, date: addMonths(a.startDate, settlementMonth),
       payment: 0, principal: -interest, interest, totalInterest, balance, isInterestOnly: false,
+      rowType: "accrued_interest_settlement",
       openingBalance: balance - interest });
   }
   if (Math.abs(balance - residual) > 0.05) throw new Error("Ending liability does not reconcile to the supported settlement. Review rate and opening value.");

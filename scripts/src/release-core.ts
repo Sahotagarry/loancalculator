@@ -75,6 +75,10 @@ export function isReleasePath(file: string): boolean {
 export function isWorkspaceOnlyPath(file: string): boolean {
   return file === ".replit" ||
     file === "replit.md" ||
+    file === ".gitignore" ||
+    file === ".replitignore" ||
+    file === "scripts/post-merge.sh" ||
+    file === "scripts/check-print-samples.py" ||
     /^\.github\//.test(file) ||
     /^\.agents\//.test(file) ||
     /^(?:attached_assets|screenshots)\//.test(file);

@@ -94,6 +94,11 @@ export interface Loan {
   paymentOverride?: string | null;
   /** Contractual first installment when it differs from the regular payment. */
   firstPaymentAmount?: string | null;
+  /**
+     * Lease assessment discount rate, separate from contractual interest.
+     * @nullable
+     */
+  leaseAssessmentRate?: string | null;
   leaseEndingTerms?: LeaseEndingTerms | null;
   termMonths?: number;
   isOfficeProperty: boolean;

@@ -1,6 +1,6 @@
 import { isAfter, addMonths, subDays, parseISO, format } from "date-fns";
 import { calculateAmortization, calculateFairValueSchedule, calculateProspectiveModificationSchedule, isValidFvRate, type AmortizationRow, type Frequency, type PrincipalPaymentEvent, type RateResetEvent } from "@workspace/amortization";
-import { calculateStraightLineLease, buildYearlyStraightLine } from "./straight-line";
+import { calculateStraightLineLease, buildYearlyStraightLine, buildOperatingLeasePayments } from "./straight-line";
 import { getFiscalYear, getFyEndParts } from "./fiscal";
 import { calculateLeaseSchedule, leaseScheduleSupportIssue, lesseeEndingAmount, type LeaseEndingTerms } from "@workspace/amortization";
 
@@ -1489,7 +1489,16 @@ export function buildLoanSummary(
   if (isOperating) {
     const monthlyPayment = Number(loan.monthlyPayment ?? 0);
     const termMonths = loan.termMonths ?? 0;
-    let totalCommitment = monthlyPayment * termMonths;
+    const cashTerms = {
+      baseMonthlyRent: monthlyPayment,
+      firstPaymentAmount: loan.firstPaymentAmount == null ? null : Number(loan.firstPaymentAmount),
+      termMonths,
+      freeRentMonths: loan.freeRentMonths ?? 0,
+      escalationRate: Number(loan.rentEscalationRate ?? 0),
+      rentSteps: loan.rentSteps ?? [],
+    };
+    const payments = buildOperatingLeasePayments(cashTerms);
+    let totalCommitment = payments.reduce((sum, payment) => sum + payment, 0);
     const startDate = parseISO(loan.startDate);
     // Cash-commitment buckets follow the contractual first due date when it is
     // known. Straight-line expense deliberately remains based on lease
@@ -1501,21 +1510,11 @@ export function buildLoanSummary(
 
     // Build year-by-year operating lease payments
     const yearlyMap = new Map<number, number>();
-    const steps = (loan.rentSteps ?? [])
-      .filter((s) => s.monthlyRent > 0 && s.fromYear >= 1 && s.toYear >= s.fromYear)
-      .sort((a, b) => a.fromYear - b.fromYear);
     for (let i = 0; i < termMonths; i++) {
       const paymentDate = addMonths(paymentStartDate, i);
       if (!isAfter(paymentDate, reportYearEnd)) continue; // only future
       const fy = getFiscalYear(paymentDate, fyEndMonth, fyEndDay);
-      let rent = monthlyPayment;
-      if (steps.length > 0) {
-        const leaseYear = Math.floor(i / 12) + 1;
-        const step = steps.find((s) => leaseYear >= s.fromYear && leaseYear <= s.toYear);
-        rent = step ? step.monthlyRent : steps[steps.length - 1].monthlyRent;
-      }
-      if (i < (loan.freeRentMonths ?? 0)) rent = 0;
-      yearlyMap.set(fy, (yearlyMap.get(fy) ?? 0) + rent);
+      yearlyMap.set(fy, (yearlyMap.get(fy) ?? 0) + payments[i]);
     }
 
     // Convert to array, merge "Thereafter" for years beyond the first 5 distinct fiscal years
@@ -1544,11 +1543,7 @@ export function buildLoanSummary(
 
     // Straight-line expense computation
     const sl = calculateStraightLineLease({
-      baseMonthlyRent: monthlyPayment,
-      termMonths,
-      freeRentMonths: loan.freeRentMonths ?? 0,
-      escalationRate: Number(loan.rentEscalationRate ?? 0),
-      rentSteps: loan.rentSteps ?? [],
+      ...cashTerms,
       tenantImprovementAllowance: Number(loan.tenantImprovementAllowance ?? 0),
       otherInducements: Number(loan.otherInducements ?? 0),
       startDate: loan.startDate,
@@ -1578,6 +1573,7 @@ export function buildLoanSummary(
     ) {
       const predecessorSl = calculateStraightLineLease({
         baseMonthlyRent: Number(predecessor.monthlyPayment ?? 0),
+        firstPaymentAmount: predecessor.firstPaymentAmount == null ? null : Number(predecessor.firstPaymentAmount),
         termMonths: predecessor.termMonths ?? 0,
         freeRentMonths: predecessor.freeRentMonths ?? 0,
         escalationRate: Number(predecessor.rentEscalationRate ?? 0),

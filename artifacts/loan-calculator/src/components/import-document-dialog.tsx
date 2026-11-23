@@ -4,6 +4,7 @@ import { useImportDocument, type DocumentImportResult } from "@workspace/api-cli
 import {
   Dialog,
   DialogContent,
+  DialogBody,
   DialogHeader,
   DialogTitle,
   DialogDescription,
@@ -19,6 +20,7 @@ import { formatCurrency } from "@/lib/format";
 import { canPersistImportedEvents, type ConfirmedImportEvent } from "@/lib/import-events";
 import { durationLabel, validImportMonths } from "@/lib/import-durations";
 import { Input } from "@/components/ui/input";
+import { LeaseReviewDetails } from "./lease-review-details";
 
 type FieldRow = { label: string; value: string | null; optional?: boolean };
 
@@ -93,7 +95,7 @@ function buildFieldRows(result: DocumentImportResult): FieldRow[] {
       { label: "Fair value", value: fmtMoney(f?.fairValue) },
       { label: "Economic life", value: fmtNum(f?.economicLifeYears, " years") },
       { label: "Buyout amount", value: fmtMoney(f?.buyoutAmount), optional: true },
-      { label: "Ending treatment", value: fmtText((f?.leaseEndingTerms?.kind as string | undefined)?.replaceAll("_", " ")) },
+      { label: "Ending terms to review", value: fmtText((f?.leaseEndingTerms?.kind as string | undefined)?.replaceAll("_", " ")) },
       { label: "Ending value", value: fmtMoney(f?.leaseEndingTerms?.amount as number | null) },
       { label: "Ending evidence", value: fmtText(f?.leaseEndingTerms?.source as string | null) },
       { label: "Calculated basis", value: fmtText(f?.leaseEndingTerms?.explanation as string | null), optional: true },
@@ -194,8 +196,8 @@ export default function ImportDocumentDialog({ open, onOpenChange, fileId, onUse
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-w-lg">
-        <DialogHeader>
+      <DialogContent scrollable={result?.classification === "lease"} className="max-w-lg">
+        <DialogHeader className={result?.classification === "lease" ? "shrink-0 pr-6" : undefined}>
           <DialogTitle className="font-display flex items-center gap-2">
             <FileUp className="h-5 w-5 text-primary" />
             Import from PDF
@@ -206,6 +208,7 @@ export default function ImportDocumentDialog({ open, onOpenChange, fileId, onUse
           </DialogDescription>
         </DialogHeader>
 
+        <DialogBody className={result?.classification === "lease" ? undefined : "contents"}>
         {!result && (
           <div className="space-y-3 py-2">
             <input
@@ -328,7 +331,12 @@ export default function ImportDocumentDialog({ open, onOpenChange, fileId, onUse
                   {(result.loan?.durationWarnings ?? result.lease?.durationWarnings ?? []).map(w => (
                     <p key={w} className="text-xs text-amber-800">{w}</p>
                   ))}
-                  <div className="rounded-lg border divide-y max-h-56 overflow-y-auto text-sm">
+                  {isLease && <p className="text-sm">Next: assess whether this is a capital lease. Opening amounts are calculated only after you confirm classification. Imported details are not approved evidence.</p>}
+                  {isLease ? <LeaseReviewDetails title="Details read from the agreement">
+                    <dl className="space-y-2 text-sm">{rows.map(r => <div key={r.label} className="grid grid-cols-1 gap-1 border-b pb-2 sm:grid-cols-2">
+                      <dt className="text-muted-foreground">{r.label}</dt><dd className="break-words font-medium">{r.value ?? (r.optional ? "Not stated" : "Not found — verify in assessment")}</dd>
+                    </div>)}</dl>
+                  </LeaseReviewDetails> : <div className="rounded-lg border divide-y max-h-56 overflow-y-auto text-sm">
                     {rows.map((r) => (
                       <div key={r.label} className="flex items-center justify-between gap-3 px-3 py-1.5">
                         <span className="text-muted-foreground">{r.label}</span>
@@ -343,7 +351,12 @@ export default function ImportDocumentDialog({ open, onOpenChange, fileId, onUse
                         )}
                       </div>
                     ))}
-                  </div>
+                  </div>}
+                  {isLease && Array.isArray(result.lease?.leaseEndingTerms?.issues) && result.lease.leaseEndingTerms.issues.length > 0 && <div role="alert" className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
+                    <p className="font-semibold">Ending evidence needs review</p>
+                    <ul className="list-disc pl-5">{result.lease.leaseEndingTerms.issues.map((issue, i) => <li key={i}>{String(issue)}</li>)}</ul>
+                    <p>Resolve these in the lease assessment before approval.</p>
+                  </div>}
                   {missing.length > 0 && (
                     <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-2 flex items-start gap-2">
                       <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
@@ -390,7 +403,7 @@ export default function ImportDocumentDialog({ open, onOpenChange, fileId, onUse
             )}
             {suggestedEvents.length > 0 && (
               <div className="space-y-2 rounded-lg border border-amber-200 bg-amber-50 p-3">
-                <p className="text-sm font-medium text-amber-950">Suggested mid-term principal payments</p>
+                <p className="text-sm font-medium text-amber-950">Suggested extra principal payments</p>
                 {suggestedEvents.map((event, index) => (
                   <div key={index} className="text-xs text-amber-900 grid grid-cols-1 sm:grid-cols-3 gap-1">
                     <span>{event.effectiveDate} · {formatCurrency(event.amount)} · {event.ordering === "before_scheduled_payment" ? "before" : "after"} payment</span>
@@ -477,7 +490,8 @@ export default function ImportDocumentDialog({ open, onOpenChange, fileId, onUse
           </div>
         )}
 
-        <DialogFooter className="flex-col sm:flex-row gap-2">
+        </DialogBody>
+        <DialogFooter className={result?.classification === "lease" ? "shrink-0 border-t pt-3 gap-2 [&>button]:h-auto [&>button]:min-h-11 [&>button]:whitespace-normal [&>button]:py-2" : "flex-col sm:flex-row gap-2"}>
           <Button variant="outline" onClick={() => handleOpenChange(false)}>
             Cancel
           </Button>
