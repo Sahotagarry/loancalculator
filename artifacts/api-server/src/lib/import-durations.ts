@@ -1,3 +1,5 @@
+import { leaseRentalTerm } from "./import-lease-rental-term";
+
 /** New imports only. Model numbers are never the source of truth for a duration. */
 type Evidence = {
   termQuote?: string | null;
@@ -67,6 +69,10 @@ export function verifyDurations(document: string, evidence: Evidence, kind: "loa
     const quote = verified(supplied);
     // Never search other facilities' clauses for a missing duration.
     const matches = hits(scoped ? quote : text, field);
+    if (field === "term" && kind === "lease") {
+      const rental = leaseRentalTerm(document, evidence.paymentScheduleQuote);
+      if (rental) matches.push(rental);
+    }
     if (!matches.length || matches.some(m => !Number.isFinite(m.months) || m.months !== matches[0].months)) {
       const name = field === "term" ? "Term" : "Amortization";
       warnings.push(matches.length
