@@ -39,7 +39,7 @@ export function LeasePaymentTest({ conclusion, compact }: { conclusion: ReturnTy
   </div>;
 }
 
-/** Criterion 4 view: figures, result and numeric blockers only. Review happens at classification review. */
+/** Criterion 4 view: calculation and outstanding confirmations refer to controls above. */
 function CompactPaymentTest({ conclusion }: { conclusion: ReturnType<typeof assessLeaseClassification> }) {
   const minimum = conclusion.minimum ?? conclusion.draftComparison?.minimum;
   const payments = conclusion.payments ?? conclusion.draftComparison?.payments;
@@ -62,6 +62,12 @@ function CompactPaymentTest({ conclusion }: { conclusion: ReturnType<typeof asse
         {minimum.meets ? (draft ? "Would meet 90%" : "Meets 90%") : (draft ? "Would not meet 90%" : "Below 90%")}
       </p>
     </div>
-    {draft && <p className="mt-1 text-xs text-amber-800" data-testid="text-draft-result">Draft result. Confirm at classification review.</p>}
+    {draft && <div className="mt-2 text-xs text-amber-800" data-testid="text-draft-result">
+      <p>Draft result. Complete the inputs and confirmations above before continuing.</p>
+      <ul className="list-disc pl-5">{[...new Set(conclusion.issues.filter(i =>
+        !i.startsWith("Minimum lease payment comparison unavailable:") &&
+        !i.startsWith("Useful-life comparison unavailable:"),
+      ).map(i => leaseReviewIssueLabel(i).replace(/\bbelow\b/g, "above")))].map(i => <li key={i}>{i}</li>)}</ul>
+    </div>}
   </div>;
 }

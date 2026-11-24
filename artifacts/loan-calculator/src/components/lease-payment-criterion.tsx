@@ -1,13 +1,13 @@
 import { useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
-import { leaseEndingTreatmentLabel } from "@workspace/amortization";
 import { formatCurrency } from "@/lib/format";
-import { assessmentRate, leasePricingAssumption, leaseRateGuidance, preTaxMonthlyPayment, type assessmentConclusion } from "@/lib/lease-assessment-values";
+import { assessmentRate, leaseRateGuidance, preTaxMonthlyPayment, type assessmentConclusion } from "@/lib/lease-assessment-values";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Calculator } from "lucide-react";
 import { LeasePaymentTest } from "./lease-payment-test";
 import { LeaseRateFallback } from "./lease-rate-fallback";
+import { LeaseEndingFields } from "./lease-ending-fields";
 import type { AssessmentAnswers, ImportedEstimates } from "./capital-lease-assessment";
 import { currentTaxTreatment, changeCriterionTaxTreatment, changeCriterionTaxRate, type LeaseTaxTreatment } from "@/lib/lease-payment-inputs";
 
@@ -34,7 +34,7 @@ function Fold({ title, children, testId }: { title: string; children: ReactNode;
   </details>;
 }
 
-/** Criterion 4 only: a compact 90% calculation. Ending-term review stays at classification review. */
+/** Every input and evidence confirmation needed for the 90% test precedes its result. */
 export function LeasePaymentCriterion({ answers, setAnswers, updateNumber, conclusion, readOnly, importedNotes, importedEstimates, onCalculateRate }: {
   answers: AssessmentAnswers;
   setAnswers: Dispatch<SetStateAction<AssessmentAnswers>>;
@@ -50,13 +50,12 @@ export function LeasePaymentCriterion({ answers, setAnswers, updateNumber, concl
   const tax = currentTaxTreatment(answers);
   const taxRate = ending?.taxRate ?? answers.taxRate;
   const rate = assessmentRate(answers);
-  const pricing = leasePricingAssumption(answers);
   const guidance = leaseRateGuidance(answers, importedEstimates?.interestRate);
   const netPayment = preTaxMonthlyPayment(answers);
   const canCalc = answers.fairValue > 0 && answers.monthlyPayment > 0 && answers.termMonths > 0;
   const notes = importedNotes ? SOURCE_FIELDS.filter(([f]) => importedNotes[f]) : [];
   const fvEvidence = answers.fairValue > 0 || !!importedNotes?.fairValue;
-  const extrasCount = [answers.firstPaymentAmount != null, answers.downPayment > 0, (ending?.servicesMonthly ?? 0) > 0].filter(Boolean).length;
+  const extrasCount = [answers.firstPaymentAmount != null, answers.downPayment > 0, (ending?.refundableDeposit ?? 0) > 0].filter(Boolean).length;
 
   const setTax = (value: LeaseTaxTreatment) => setAnswers(prev => changeCriterionTaxTreatment(prev, value));
   const setTaxRate = (value: number | undefined) => setAnswers(prev => changeCriterionTaxRate(prev, value));
@@ -101,10 +100,16 @@ export function LeasePaymentCriterion({ answers, setAnswers, updateNumber, concl
       <Row label="First payment">
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" data-testid="checkbox-payment-beginning" checked={answers.paymentAtBeginning}
-            onChange={e => setAnswers(prev => ({ ...prev, paymentAtBeginning: e.target.checked }))} />
+            onChange={e => setAnswers(prev => ({ ...prev, paymentAtBeginning: e.target.checked,
+              ...(prev.leaseEndingTerms ? { leaseEndingTerms: { ...prev.leaseEndingTerms, status: "draft" as const } } : {}) }))} />
           Due at lease start (in advance)
         </label>
       </Row>
+      {ending && <Row label="Services in rental ($/mo)" htmlFor="c4Services">
+        <Input id="c4Services" data-testid="input-services-monthly" type="number" min={0} step="0.01" className="h-9"
+          value={ending.servicesMonthly ?? 0} onChange={e => setServices(Number(e.target.value))} />
+        <p className="mt-1 text-xs text-muted-foreground">Enter 0 if the rental contains no service charges.</p>
+      </Row>}
       <Row label="Fair value ($)" htmlFor="fairValue">
         <Input id="fairValue" data-testid="input-fair-value" type="number" step="1" min={0} className="h-9"
           value={answers.fairValue || ""} onChange={e => updateNumber("fairValue", Number(e.target.value))} placeholder="Cash price at lease start" />
@@ -130,12 +135,6 @@ export function LeasePaymentCriterion({ answers, setAnswers, updateNumber, concl
         {ending?.implicitRate != null && <p className="mt-1 text-xs text-muted-foreground">Implicit {fmtRate(ending.implicitRate)}%{ending.incrementalBorrowingRate != null ? `, borrowing ${fmtRate(ending.incrementalBorrowingRate)}%; lower is used` : ""}</p>}
         {rate > 0 && rate < 3 && <p className="mt-1 text-xs text-amber-800">Below-market rate: an ASPE 3856 fair value adjustment may be required later.</p>}
       </Row>
-      <Row label="Ending amount">
-        <p className="text-sm" data-testid="text-ending-amount">
-          {ending ? <>{leaseEndingTreatmentLabel(ending.kind)}{ending.amount != null ? `: ${formatCurrency(ending.amount)}` : ""}</> : "Not recorded"}
-          <span className="block text-xs text-muted-foreground">Edit at classification review.{pricing.fromEnding ? "" : " Rate calculation uses the value entered in its dialog."}</span>
-        </p>
-      </Row>
     </fieldset>
 
     <Fold title={`Additional payments${extrasCount ? ` (${extrasCount} entered)` : ""}`} testId="details-additional-payments">
@@ -149,13 +148,18 @@ export function LeasePaymentCriterion({ answers, setAnswers, updateNumber, concl
           <Input id="wizardDownPayment" data-testid="input-down-payment" type="number" step="0.01" min={0} className="h-9"
             value={answers.downPayment || ""} onChange={e => updateNumber("downPayment", Number(e.target.value))} placeholder="Not refundable deposits" />
         </Row>
-        {ending && <Row label="Services in rental ($/mo)" htmlFor="c4Services">
-          <Input id="c4Services" data-testid="input-services-monthly" type="number" min={0} step="0.01" className="h-9"
-            value={ending.servicesMonthly || ""} onChange={e => setServices(Number(e.target.value))} />
+        {ending && <Row label="Refundable deposit ($)" htmlFor="c4Deposit">
+          <Input id="c4Deposit" type="number" min={0} step="0.01" className="h-9"
+            value={ending.refundableDeposit ?? ""} onChange={e => setAnswers(prev => prev.leaseEndingTerms ? ({
+              ...prev, leaseEndingTerms: { ...prev.leaseEndingTerms, refundableDeposit: e.target.value === "" ? undefined : Number(e.target.value), status: "draft" as const },
+            }) : prev)} />
         </Row>}
         <p className="text-xs text-muted-foreground">A different first rental replaces the first payment; use the same tax and service basis as the monthly rental.</p>
       </fieldset>
     </Fold>
+
+    <LeaseEndingFields compact hidePaymentComponents value={ending} months={answers.termMonths} readOnly={readOnly}
+      onChange={leaseEndingTerms => setAnswers(prev => ({ ...prev, leaseEndingTerms }))} />
 
     <LeasePaymentTest conclusion={conclusion} compact />
 

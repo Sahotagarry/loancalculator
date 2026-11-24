@@ -15,10 +15,12 @@ const kinds: Array<[LeaseEndingTerms["kind"], string]> = [
   ["none", "No ending payment or guarantee"],
 ];
 
-export function LeaseEndingFields({ value, months, onChange, readOnly, compact }: {
+export function LeaseEndingFields({ value, months, onChange, readOnly, compact, hidePaymentComponents }: {
   value?: LeaseEndingTerms | null; months: number; onChange: (value: LeaseEndingTerms) => void; readOnly?: boolean;
-  /** Wizard review only: open each section only when that section has a concrete issue. */
+  /** Open secondary sections only when they contain an outstanding issue. */
   compact?: boolean;
+  /** Criterion 4 already has the rental tax and service controls. */
+  hidePaymentComponents?: boolean;
 }) {
   const id = useId();
   if (!value) return <div className="rounded-lg border p-3 space-y-2">
@@ -42,12 +44,13 @@ export function LeaseEndingFields({ value, months, onChange, readOnly, compact }
   const amountField = <div className="space-y-1"><Label htmlFor={`${id}-amount`}>Ending payment or guaranteed amount ($)</Label><Input id={`${id}-amount`} name="leaseEndingAmount" type="number" min="0" step="0.01" value={value.amount ?? ""} onChange={e => update({ amount: e.target.value === "" ? null : Number(e.target.value), basis: "stated", explanation: "Reviewer-entered amount; see source explanation." })} />
           {compact && amountNeeded && value.amount == null && <p className="text-xs text-amber-800">Amount required for this ending treatment.</p>}</div>;
   return <fieldset disabled={readOnly} className="space-y-3 min-w-0">
-    <legend className="mb-2 text-sm font-semibold">Review details</legend>
+    <legend className="mb-2 text-sm font-semibold">Ending obligation and supporting information</legend>
     {value.suggestedTreatment && <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 space-y-2">
       <p className="font-semibold">{value.suggestedTreatment.accepted && value.kind === value.suggestedTreatment.kind ? "Accepted assessment — based on available information" : "Best assessment — confirm or change"}</p>
       <p>{leaseEndingTreatmentLabel(value.suggestedTreatment.kind)}.</p>
-      <p>{value.suggestedTreatment.reason}</p>
-      {!value.suggestedTreatment.accepted && (value.kind === "unresolved" || value.kind === value.suggestedTreatment.kind) && <Button type="button" variant="outline" size="sm" disabled={readOnly} onClick={() => onChange(acceptSuggestedLeaseTreatment(value))}>Use this assessment</Button>}
+      <details><summary className="cursor-pointer text-xs">Why this treatment is proposed</summary><p className="mt-1 text-xs">{value.suggestedTreatment.reason}</p></details>
+      {!value.suggestedTreatment.accepted && (value.kind === "unresolved" || value.kind === value.suggestedTreatment.kind) && <Button type="button" variant="outline" size="sm" disabled={readOnly} onClick={() => onChange(acceptSuggestedLeaseTreatment(value))}>Confirm proposed treatment</Button>}
+      <p className="text-xs">To change the proposal, choose the correct ending obligation below.</p>
       <p className="text-xs">Accepting records your assessment, not confirmation that the missing clause was found. Review the supporting explanation before approval.</p>
     </div>}
     {checked.issues.length > 0 && <div role="alert" className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
@@ -72,7 +75,7 @@ export function LeaseEndingFields({ value, months, onChange, readOnly, compact }
       <div className="space-y-1"><Label htmlFor={`${id}-source`}>Agreement clauses and your explanation</Label><Textarea id={`${id}-source`} name="leaseEndingSource" value={value.source} onChange={e => update({ source: e.target.value })} placeholder="Quote the purchase, return or sale-shortfall clause and explain the amount." /></div>
       {value.explanation && <p className="text-xs text-blue-800">Amount explanation: {value.explanation}</p>}
     </LeaseReviewDetails>
-    <LeaseReviewDetails title="Taxes, services and refundable deposit" needsAttention={taxAttention}>
+    {!hidePaymentComponents && <LeaseReviewDetails title="Taxes, services and refundable deposit" needsAttention={taxAttention}>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div className="space-y-1"><Label htmlFor={`${id}-tax`}>Taxes in the payment</Label><select id={`${id}-tax`} name="leaseTaxTreatment" className="block w-full rounded border bg-background p-2 text-sm focus-visible:ring-2 focus-visible:ring-ring" value={value.taxTreatment ?? ""} onChange={e => update({ taxTreatment: e.target.value as LeaseEndingTerms["taxTreatment"], paymentComponentsApplied: false })}>
           {!value.taxTreatment && <option value="" disabled>Choose</option>}
@@ -83,8 +86,10 @@ export function LeaseEndingFields({ value, months, onChange, readOnly, compact }
         {value.taxTreatment === "recoverable" && <div className="space-y-1"><Label htmlFor={`${id}-tax-rate`}>Included recoverable tax rate (%)</Label><Input id={`${id}-tax-rate`} name="leaseTaxRate" type="number" min="0" step="any" value={value.taxRate ?? ""} onChange={e => update({ taxRate: e.target.value === "" ? undefined : Number(e.target.value), paymentComponentsApplied: false })} /><p className="text-xs text-muted-foreground">Only needed when the rental includes recoverable tax. If the rental is before tax, choose Payments exclude taxes above.</p></div>}
         <div className="space-y-1"><Label htmlFor={`${id}-deposit`}>Refundable deposit ($, not an upfront payment)</Label><Input id={`${id}-deposit`} name="leaseRefundableDeposit" type="number" min="0" step="0.01" value={value.refundableDeposit ?? ""} onChange={e => update({ refundableDeposit: Number(e.target.value) })} /></div>
       </div>
-    </LeaseReviewDetails>
-    {needsReview && <div className="space-y-1"><Label htmlFor={`${id}-issues`}>Evidence still missing or conflicting</Label><Textarea id={`${id}-issues`} name="leaseEndingIssues" value={value.issues.join("\n")} onChange={e => update({ issues: e.target.value.split("\n").filter(Boolean) })} placeholder="Missing appendix, conflicting terms, unsupported formula… Clear only after documenting the resolution in your explanation." /></div>}
+    </LeaseReviewDetails>}
+    {needsReview && <LeaseReviewDetails title="Missing or conflicting evidence" needsAttention={value.issues.length > 0}>
+      <div className="space-y-1"><Label htmlFor={`${id}-issues`}>Evidence still missing or conflicting</Label><Textarea id={`${id}-issues`} name="leaseEndingIssues" value={value.issues.join("\n")} onChange={e => update({ issues: e.target.value.split("\n").filter(Boolean) })} placeholder="Missing appendix, conflicting terms, unsupported formula… Clear only after documenting the resolution in your explanation." /></div>
+    </LeaseReviewDetails>}
     {value.commencement && <div className="rounded-lg border p-3 text-sm space-y-2">
       <Label htmlFor={`${id}-commencement`}>{!value.commencement.date ? "Lease start date — enter and confirm" : value.commencement.basis === "inferred" ? "Suggested start date — confirm or change" : "Start date from the document"}</Label>
       <Input id={`${id}-commencement`} name="leaseSuggestedStartDate" type="date" value={value.commencement.date} onChange={e => onChange(changeLeaseCommencement(value, e.target.value, false))} />

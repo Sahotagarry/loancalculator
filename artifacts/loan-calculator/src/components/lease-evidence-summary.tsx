@@ -5,7 +5,7 @@ import { Pencil } from "lucide-react";
 
 const fmtRate = (r: number) => Number(r.toFixed(5)).toString();
 
-/** Read-only evidence recap for stages after classification review. Edits happen at review (step 6). */
+/** Read-only recap. Editing returns to the criterion that collects the evidence. */
 export function LeaseEvidenceSummary({ ending, months, rate, onEdit }: {
   ending?: LeaseEndingTerms | null; months: number; rate?: number | null; onEdit?: () => void;
 }) {

@@ -1,5 +1,24 @@
 import type { LeaseEndingTerms } from "@workspace/amortization";
 import type { AssessmentAnswers } from "../components/capital-lease-assessment";
+import { assessmentConclusion } from "./lease-assessment-values";
+
+/** Results only summarize a completed assessment; repair happens in a criterion. */
+export function assessmentStepReady(a: AssessmentAnswers, step: number): boolean {
+  if (step === 3) return Number.isFinite(a.economicLife) && a.economicLife > 0 &&
+    Number.isInteger(a.termMonths) && a.termMonths > 0;
+  if (step >= 4 && step <= 6) {
+    const result = assessmentConclusion(a);
+    return result.status !== "needs_review" && result.minimum != null;
+  }
+  return true;
+}
+
+export function assessmentEntryStep(a: AssessmentAnswers, requested: number): number {
+  if (requested < 6) return requested;
+  if (!assessmentStepReady(a, 3)) return 3;
+  if (!assessmentStepReady(a, 4)) return 4;
+  return requested;
+}
 
 export type LeaseTaxTreatment = NonNullable<LeaseEndingTerms["taxTreatment"]>;
 

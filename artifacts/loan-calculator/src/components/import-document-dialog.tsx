@@ -355,10 +355,10 @@ export default function ImportDocumentDialog({ open, onOpenChange, fileId, onUse
                     const facts: Array<[string, string, boolean]> = [
                       ["Asset", [f?.assetDescription, f?.assetType].filter(Boolean).join(" · ") || "Not found", !f?.assetDescription && !f?.assetType],
                       ["Start date", date ? `${date}${!f?.startDate && c && !c.confirmed ? " · proposed, confirm" : ""}` : "Not found", !date || (!f?.startDate && !!c && !c.confirmed)],
-                      ["Term", durationLabel(f?.termMonths, f?.termQuote) ?? "Not found", f?.termMonths == null],
+                      ["Term", f?.termMonths != null ? `${f.termMonths} months` : "Not found", f?.termMonths == null],
                       ["Rent", f?.monthlyPayment != null ? `${formatCurrency(f.monthlyPayment)}/mo${f.paymentAtBeginning ? " · in advance" : ""}` : "Not found", f?.monthlyPayment == null],
                       ["Fair value", f?.fairValue != null ? `${formatCurrency(f.fairValue)}${f.fieldNotes?.fairValue?.startsWith("Proposed fair value") ? " · proposed" : ""}` : "Not stated", false],
-                      ["Ending", ending ? `${leaseEndingTreatmentLabel(ending.kind)}${ending.amount != null ? ` · ${formatCurrency(ending.amount as number)}` : ""}` : "Not found", !ending || ending.kind === "unresolved"],
+                      ["Ending", ending ? `${leaseEndingTreatmentLabel(ending.kind === "unresolved" && ending.suggestedTreatment ? ending.suggestedTreatment.kind : ending.kind)}${ending.amount != null ? ` · ${formatCurrency(ending.amount as number)}` : ""}${ending.kind === "unresolved" && ending.suggestedTreatment ? " · proposed, confirm" : ""}` : "Not found", !ending || ending.kind === "unresolved"],
                     ];
                     return <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 rounded-lg border bg-muted/20 p-3 text-sm" data-testid="lease-import-facts">
                       {facts.map(([k, v, warn]) => <div key={k} className="contents"><dt className="text-muted-foreground">{k}</dt><dd className={`min-w-0 break-words font-medium ${warn ? "text-amber-800" : ""}`}>{v}</dd></div>)}
@@ -366,7 +366,7 @@ export default function ImportDocumentDialog({ open, onOpenChange, fileId, onUse
                   })()}
                   {isLease && <p className="text-xs text-muted-foreground">Next: classify under ASPE 3065. Imported details are not approved evidence; opening amounts follow classification.</p>}
                   {isLease ? <LeaseReviewDetails title="Details read from the agreement">
-                    <dl className="space-y-2 text-sm">{rows.map(r => <div key={r.label} className="grid grid-cols-1 gap-1 border-b pb-2 sm:grid-cols-2">
+                    <dl className="space-y-2 text-sm">{rows.filter(r => !r.optional || r.value != null).map(r => <div key={r.label} className="grid grid-cols-1 gap-1 border-b pb-2 sm:grid-cols-2">
                       <dt className="text-muted-foreground">{r.label}</dt><dd className="break-words font-medium">{r.value ?? (r.optional ? "Not stated" : "Not found — verify in assessment")}</dd>
                     </div>)}</dl>
                   </LeaseReviewDetails> : <div className="rounded-lg border divide-y max-h-56 overflow-y-auto text-sm">

@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { AssessmentAnswers } from "../components/capital-lease-assessment";
 import { LeasePaymentCriterion } from "../components/lease-payment-criterion";
 import { assessmentConclusion, assessmentAnswersForReview, normalizedAssessmentAnswers, preTaxMonthlyPayment } from "./lease-assessment-values";
-import { currentTaxTreatment, changeCriterionTaxTreatment, changeCriterionTaxRate } from "./lease-payment-inputs";
+import { currentTaxTreatment, changeCriterionTaxTreatment, changeCriterionTaxRate, assessmentStepReady, assessmentEntryStep } from "./lease-payment-inputs";
 
 const answers: AssessmentAnswers = {
   transferOfOwnership: false, bargainPurchaseOption: false, specializedAsset: false,
@@ -26,7 +26,7 @@ function render(a = answers, readOnly = false) {
 }
 
 describe("compact lease-payment criterion", () => {
-  it("shows the core figures and full draft result without approval checklists or repeated tutorials", async () => {
+  it("puts the ending choice and every confirmation before the calculation result", async () => {
     const before = JSON.stringify(answers);
     const html = render();
     expect(html).toContain("100.0% of fair value");
@@ -35,15 +35,23 @@ describe("compact lease-payment criterion", () => {
     expect(html).toContain("Calculate implicit rate");
     expect(html).toContain('value="7.36878"');
     expect(html).not.toContain('value="7.368783479401797"');
-    expect(html).toContain("Draft result. Confirm at classification review.");
-    expect(html).not.toContain("Confirm or correct the proposed start date");
-    expect(html).not.toContain("leaseEndingReviewed");
+    expect(html).toContain("Complete the inputs and confirmations above");
+    expect(html).toContain("leaseEndingReviewed");
+    expect(html).toContain('name="leaseEndingKind"');
+    expect(html).toContain('name="leaseEndingAmount"');
+    expect(html).toContain('name="leaseCommencementConfirmed"');
+    const resultPosition = html.indexOf('data-testid="lease-minimum-payment-test"');
+    for (const name of ["leaseEndingKind", "leaseEndingAmount", "leaseCommencementConfirmed", "leaseEndingReviewed"]) {
+      expect(html.indexOf(`name="${name}"`)).toBeLessThan(resultPosition);
+    }
+    expect(html).not.toContain("Edit at classification review");
+    expect(html).not.toContain("Confirm at classification review");
+    expect((html.match(/name="leaseTaxTreatment"/g) ?? [])).toHaveLength(0);
     expect(html).not.toContain("How to Determine Fair Value");
     expect(html).not.toContain("How to Determine the Right Rate");
     expect(html).not.toContain("Use and verify");
     expect(html).not.toContain("lease-rate-fallback");
     for (const details of html.match(/<details[^>]*>/g) ?? []) expect(details).not.toMatch(/\bopen=/);
-    expect(html.match(/<details[^>]*>/g)).toHaveLength(3);
     expect(JSON.stringify(answers)).toBe(before);
     if (process.env.LEASE_CRITERION_PREVIEW) {
       const { writeFileSync } = await import("node:fs");
@@ -54,7 +62,7 @@ describe("compact lease-payment criterion", () => {
   it("retains optional payment controls without opening them automatically", () => {
     const html = render({ ...answers, downPayment: 100, firstPaymentAmount: 2000,
       leaseEndingTerms: { ...answers.leaseEndingTerms!, servicesMonthly: 20 } });
-    expect(html).toContain("Additional payments (3 entered)");
+    expect(html).toContain("Additional payments (2 entered)");
     for (const id of ["input-first-payment", "input-down-payment", "input-services-monthly"]) expect(html).toContain(id);
     expect(html.match(/<details[^>]*data-testid="details-additional-payments"[^>]*>/)?.[0]).not.toContain("open=");
   });
@@ -66,13 +74,35 @@ describe("compact lease-payment criterion", () => {
     expect(html).toContain('<option value="recoverable" selected="">');
     expect(html).toContain("input-tax-rate");
     expect(html).toContain("Enter the included tax rate.");
-    expect(html).not.toContain("Confirm or correct the proposed start date");
+    expect(html).toContain('name="leaseCommencementConfirmed"');
   });
   it("does not display a tax-rate input when the rental excludes taxes", () => {
     expect(render()).not.toContain("input-tax-rate");
   });
   it("preserves read-only mode for core and optional inputs", () => {
-    expect(render(answers, true).match(/<fieldset[^>]*disabled=""[^>]*>/g)).toHaveLength(2);
+    expect(render(answers, true).match(/<fieldset[^>]*disabled=""[^>]*>/g)).toHaveLength(3);
+  });
+  it("shows a proposed obligation with an actionable confirmation beside the ending amount", () => {
+    const html = render({ ...answers, leaseEndingTerms: { ...answers.leaseEndingTerms!, kind: "unresolved",
+      suggestedTreatment: { kind: "guaranteed_residual", reason: "Client covers the sale shortfall.", accepted: false } } });
+    expect(html).toContain("Confirm proposed treatment");
+    expect(html).toContain("What must the client do at the end?");
+    expect(html).toContain('name="leaseEndingAmount"');
+  });
+  it("does not allow incomplete evidence to be deferred to results", () => {
+    expect(assessmentStepReady(answers, 4)).toBe(false);
+    expect(assessmentStepReady(answers, 5)).toBe(false);
+    expect(assessmentEntryStep(answers, 6)).toBe(4);
+    const ready = { ...answers, leaseEndingTerms: { ...answers.leaseEndingTerms!, status: "reviewed" as const,
+      commencement: { ...answers.leaseEndingTerms!.commencement!, confirmed: true } } };
+    for (const step of [3, 4, 5, 6]) expect(assessmentStepReady(ready, step)).toBe(true);
+    expect(assessmentEntryStep(ready, 6)).toBe(6);
+    expect(assessmentStepReady({ ...ready, economicLife: 0 }, 3)).toBe(false);
+    expect(assessmentEntryStep({ ...ready, economicLife: 0 }, 6)).toBe(3);
+    expect(assessmentStepReady({ ...ready, leaseEndingTerms: { ...ready.leaseEndingTerms, taxTreatment: "unresolved" } }, 4)).toBe(false);
+    // A different passing test must not expose an unfinished payment test on results.
+    expect(assessmentStepReady({ ...ready, transferOfOwnership: true, fairValue: 0 }, 4)).toBe(false);
+    expect(assessmentStepReady({ ...ready, economicLife: 4, fairValue: 0 }, 5)).toBe(false);
   });
 });
 

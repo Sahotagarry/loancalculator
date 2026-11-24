@@ -5,12 +5,15 @@ export { preTaxMonthlyPayment, calculatePVFromAnswers } from "@/lib/lease-assess
 import { formatCurrency } from "@/lib/format";
 import { useState, useCallback, useEffect, useRef } from "react";
 import type { LeaseEndingTerms } from "@workspace/amortization";
-import { LeaseEndingFields } from "./lease-ending-fields";
+import { assessmentEntryStep, assessmentStepReady } from "@/lib/lease-payment-inputs";
 import { LeaseOpeningSummary } from "./lease-opening-summary";
 import { LeasePaymentTest } from "./lease-payment-test";
 import { LeasePaymentCriterion } from "./lease-payment-criterion";
 import { LeaseReviewDetails } from "./lease-review-details";
 import { LeaseEvidenceSummary } from "./lease-evidence-summary";
+import { LeaseUsefulLifeFields } from "./lease-useful-life-fields";
+import { ASSET_TYPE_LIVES, ASSET_TYPE_OPTIONS, chooseUsefulLife, withUsefulLife, applyUsefulLifeCategory, type UsefulLifeSource } from "@/lib/lease-useful-life";
+export { ASSET_TYPE_LIVES } from "@/lib/lease-useful-life";
 import {
   Dialog,
   DialogContent,
@@ -139,40 +142,6 @@ function DocSourceNote({ label, note }: { label: string; note: string }) {
   );
 }
 
-/** Amber suggestion card: an AI estimate for a value the document doesn't state. */
-function EstimateSuggestion({
-  label,
-  display,
-  reasoning,
-  applied,
-  onApply,
-}: {
-  label: string;
-  display: string;
-  reasoning?: string | null;
-  applied: boolean;
-  onApply: () => void;
-}) {
-  return (
-    <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 space-y-2">
-      <div className="flex items-start gap-2">
-        <Lightbulb className="h-4 w-4 text-amber-600 mt-0.5 flex-shrink-0" />
-        <div className="flex-1 space-y-1">
-          <p className="text-xs text-amber-900">
-            <span className="inline-flex items-center rounded bg-amber-100 border border-amber-300 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-900 mr-1.5">AI estimate — not in document</span>
-            <strong>{label}:</strong> {display}
-          </p>
-          {reasoning && <p className="text-xs text-amber-800">{reasoning}</p>}
-          <p className="text-xs text-amber-700 italic">This was not stated in the lease — it's a suggestion to verify, not an extracted fact.</p>
-        </div>
-        <Button size="sm" variant="outline" className="h-7 text-xs flex-shrink-0" onClick={onApply} disabled={applied}>
-          {applied ? "Applied" : "Use estimate"}
-        </Button>
-      </div>
-    </div>
-  );
-}
-
 /** Which imported document fields are relevant to each wizard criterion. */
 const FIELDS_BY_CRITERION: Record<string, Array<[string, string]>> = {
   transferOfOwnership: [["transferOfOwnership", "Transfer of ownership"]],
@@ -212,45 +181,6 @@ type Criterion = {
   min?: number;
   max?: number;
 };
-
-/** Typical economic life (years) by asset type — used to pre-fill Criterion 3. */
-export const ASSET_TYPE_LIVES: Record<string, number> = {
-  vehicle_light: 8,
-  vehicle_heavy: 12,
-  equipment_manufacturing: 15,
-  equipment_office: 10,
-  it_hardware: 5,
-  it_software: 3,
-  furniture: 15,
-  building_leasehold: 20,
-  building_industrial: 40,
-  office_commercial: 40,
-  land_lease: 99,
-  aircraft: 25,
-  rail_equipment: 30,
-  medical: 12,
-  other: 0,
-};
-
-const ASSET_TYPE_OPTIONS: Array<[string, string]> = [
-  ["vehicle", "Vehicle (confirm useful life)"],
-  ["vehicle_light", "Light Vehicle / Car (~8 years)"],
-  ["vehicle_heavy", "Heavy Truck / Fleet (~12 years)"],
-  ["equipment", "Equipment (confirm useful life)"],
-  ["equipment_manufacturing", "Manufacturing Equipment (~15 years)"],
-  ["equipment_office", "Office Equipment (~10 years)"],
-  ["it_hardware", "IT / Computer Hardware (~5 years)"],
-  ["it_software", "Software / SaaS License (~3 years)"],
-  ["furniture", "Office Furniture / Fixtures (~15 years)"],
-  ["building_leasehold", "Leasehold Improvements (~20 years)"],
-  ["building_industrial", "Industrial Building (~40 years)"],
-  ["office_commercial", "Office / Commercial Property (~40 years)"],
-  ["land_lease", "Land Lease / Ground Lease (~99 years)"],
-  ["aircraft", "Aircraft (~25 years)"],
-  ["rail_equipment", "Rail / Rolling Stock (~30 years)"],
-  ["medical", "Medical Equipment (~12 years)"],
-  ["other", "Other / Custom (enter manually)"],
-];
 
 /** Real-property asset types eligible for the operating-lease fast track. */
 const REAL_PROPERTY_TYPES = ["office_commercial", "building_industrial"];
@@ -401,22 +331,20 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
   const paymentTest = assessmentConclusion(inputs);
   const answers = { ...inputs, pvPctFairValue: paymentTest.minimum?.percent ?? 0 };
   const [straightLine, setStraightLine] = useState<StraightLineAnswers>(defaultStraightLine);
+  const [usefulLifeSource, setUsefulLifeSource] = useState<UsefulLifeSource>("manual");
 
-  /** Set the asset type, pre-fill its typical economic life, and recompute
-   * the lease-term % if a term is already entered. Shared by the intro step
-   * and Criterion 3. */
+  /** Intro asset classification never replaces an existing or asset-specific life. */
   const applyAssetType = useCallback((val: string) => {
-    const defaultLife = ASSET_TYPE_LIVES[val] || 0;
-    setAnswers((prev) => ({
-      ...prev,
-      assetType: val,
-      economicLife: defaultLife,
-      leaseTermPct:
-        prev.termMonths > 0 && defaultLife > 0
-          ? Math.round((prev.termMonths / (defaultLife * 12)) * 1000) / 10
-          : prev.leaseTermPct,
-    }));
-  }, []);
+    if (!(inputs.economicLife > 0)) {
+      setUsefulLifeSource(chooseUsefulLife(inputs.economicLife, importedEstimates?.economicLifeYears, val).source);
+    }
+    setAnswers(prev => withUsefulLife(prev, chooseUsefulLife(prev.economicLife, importedEstimates?.economicLifeYears, val).years, val));
+  }, [inputs.economicLife, importedEstimates?.economicLifeYears]);
+
+  const applyStandardLife = (category: string) => {
+    setUsefulLifeSource(ASSET_TYPE_LIVES[category] > 0 ? "category" : "manual");
+    setAnswers(prev => applyUsefulLifeCategory(prev, category));
+  };
 
   // When opening with initialAnswers (e.g., reevaluating an existing lease),
   // pre-fill the form and jump straight to the conclusion step so the user
@@ -440,13 +368,24 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
   const prefilledRef = useRef(false);
   useEffect(() => {
     if (open && !prefilledRef.current) {
-      setInputs({ ...(initialRef.current ?? defaultAnswers), ...(initialRef.current && initialSLRef.current ? {
+      const startingAnswers = { ...(initialRef.current ?? defaultAnswers), ...(initialRef.current && initialSLRef.current ? {
         rentSteps: initialSLRef.current.rentSteps,
         freeRentMonths: initialSLRef.current.freeRentMonths,
         rentEscalationRate: initialSLRef.current.rentEscalationRate,
-      } : {}) });
+      } : {}) };
+      // Saved/documented values win; new imports prefer the asset-specific suggestion.
+      const life = chooseUsefulLife(startingAnswers.economicLife,
+        initialRef.current && initialStepRef.current === 1 ? importedEstimates?.economicLifeYears : null,
+        initialRef.current && initialStepRef.current === 1 ? startingAnswers.assetType : "");
+      setUsefulLifeSource(life.source);
+      if (initialRef.current && initialStepRef.current === 1 && !(startingAnswers.economicLife > 0)) {
+        startingAnswers.economicLife = life.years;
+        startingAnswers.leaseTermPct = startingAnswers.economicLife > 0 && startingAnswers.termMonths > 0
+          ? Math.round(startingAnswers.termMonths / (startingAnswers.economicLife * 12) * 1000) / 10 : 0;
+      }
+      setInputs(startingAnswers);
       setStraightLine(initialSLRef.current ?? defaultStraightLine);
-      setStep(initialRef.current ? initialStepRef.current ?? 6 : 0);
+      setStep(initialRef.current ? assessmentEntryStep(startingAnswers, initialStepRef.current ?? 6) : 0);
       setConfirmedAssessment(null);
       setExpandedCriterion(null);
       setShowImplicitRateDialog(false);
@@ -496,17 +435,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
     });
   };
 
-  const canProceed = () => {
-    if (step === 6) return assessmentConclusion(answers).status !== "needs_review";
-    if (step === 0) return true;
-    if (step >= 1 && step <= 5) {
-      const criterion = CRITERIA[step - 1];
-      // Missing numeric inputs are surfaced at review; approval is gated at step 6.
-      void criterion;
-      return true;
-    }
-    return true;
-  };
+  const canProceed = () => assessmentStepReady(answers, step);
 
   const result = computeResult();
   const conclusion = assessmentConclusion(answers);
@@ -516,6 +445,13 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
   const pricingEnd = leasePricingAssumption(answers);
   const hasPricingEnd = pricingEnd.fromEnding;
 
+  useEffect(() => {
+    // Also protects back-navigation and a currently open assessment after a preview update.
+    if (open && step === 6) {
+      const next = assessmentEntryStep(inputs, 6);
+      if (next !== 6) setStep(next);
+    }
+  }, [open, step, inputs]);
 
   return (
     <>
@@ -535,7 +471,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
           <DialogDescription>
             {step === 0 && "First classify the lease under ASPE 3065. Calculate the amounts to record in a separate step."}
             {step >= 1 && step <= 5 && CRITERIA[step - 1].title}
-            {step === 6 && "Review the answer and its evidence. Confirm classification before calculating amounts to record."}
+            {step === 6 && "Your completed tests are summarized below. Accept classification before calculating amounts to record."}
             {step === 8 && (changedSinceConclusion ? "Classification needs reconfirmation. Go back after reviewing your changes." : finalAction === "save" ? "Classification confirmed. Review opening amounts, then save changes to this lease." : "Classification confirmed. Review opening amounts, then continue to the lease form.")}
             {step === 7 && "Capture straight-line lease adjustments required for operating lease accounting."}
           </DialogDescription>
@@ -641,7 +577,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                 </SelectContent>
               </Select>
               <p className="text-xs text-muted-foreground">
-                Picking the asset type now pre-fills its typical useful life for Criterion 3. Confirm that life against the asset's circumstances.
+                The asset-specific useful-life suggestion takes priority over category defaults. Review or override it in Criterion 3.
               </p>
             </div>
 
@@ -723,24 +659,6 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                       <div className="space-y-4">
                         {c.key === "leaseTermPct" ? (
                           <div className="space-y-4">
-                            {/* Asset Type */}
-                            <div className="space-y-2">
-                              <Label htmlFor="assetType">Type of Asset</Label>
-                              <Select value={answers.assetType} onValueChange={applyAssetType}>
-                                <SelectTrigger id="assetType">
-                                  <SelectValue placeholder="Select an asset type" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  {ASSET_TYPE_OPTIONS.map(([value, label]) => (
-                                    <SelectItem key={value} value={value}>{label}</SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                              <p className="text-xs text-muted-foreground">
-                                Select the asset type to auto-fill a typical economic life. You can adjust it below if needed.
-                              </p>
-                            </div>
-
                             {/* Lease Term in Months */}
                             <div className="space-y-2">
                               <Label htmlFor="termMonths">Lease Term (months)</Label>
@@ -755,38 +673,10 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                               />
                             </div>
 
-                            {/* Economic Life */}
-                            <div className="space-y-2">
-                              <div className="flex items-center justify-between">
-                                <Label htmlFor="economicLife">Economic Life (years)</Label>
-                                {answers.assetType && (
-                                  <span className="text-xs text-muted-foreground">
-                                    Default for selected type
-                                  </span>
-                                )}
-                              </div>
-                              <Input disabled={readOnly}
-                                id="economicLife"
-                                type="number"
-                                step="0.5"
-                                min={0.5}
-                                value={answers.economicLife || ""}
-                                onChange={(e) => updateNumber("economicLife", Number(e.target.value))}
-                                placeholder="e.g. 7 years"
-                              />
-                              <p className="text-xs text-muted-foreground">
-                                You can override the default if your asset's useful life differs.
-                              </p>
-                              {importedEstimates?.economicLifeYears != null && importedEstimates.economicLifeYears > 0 && (
-                                <EstimateSuggestion
-                                  label="Economic life"
-                                  display={`${importedEstimates.economicLifeYears} years`}
-                                  reasoning="A useful-life suggestion only. Check the asset's expected working life and the client's circumstances."
-                                  applied={answers.economicLife === importedEstimates.economicLifeYears}
-                                  onApply={() => updateNumber("economicLife", importedEstimates.economicLifeYears as number)}
-                                />
-                              )}
-                            </div>
+                            <LeaseUsefulLifeFields years={answers.economicLife} source={usefulLifeSource}
+                              assetType={answers.assetType} reasoning={importedEstimates?.reasoning} readOnly={readOnly}
+                              onChange={years => { setUsefulLifeSource("manual"); updateNumber("economicLife", years); }}
+                              onCategory={applyStandardLife} />
 
                             {/* Calculated Result */}
                             {answers.leaseTermPct > 0 && (
@@ -817,7 +707,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                             </p>
                           </div>
                         )}
-                        <div className="flex items-center gap-2 p-3 rounded-lg bg-muted/30 text-sm">
+                        {c.key === "leaseTermPct" && !assessmentStepReady(answers, 3) ? <p role="alert" className="text-sm text-amber-800">Enter the lease term and expected economic life above to calculate this test.</p> : <div className="flex items-center gap-2 p-3 rounded-lg bg-muted/30 text-sm">
                           {(answerVal as number) >= (c.threshold ?? 0) ? (
                             <>
                               <CheckCircle2 className="h-4 w-4 text-emerald-600" />
@@ -829,7 +719,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                               <span>This criterion is <strong>not met</strong> ({displayVal}{c.unit}{" < "}{c.threshold}{c.unit})</span>
                             </>
                           )}
-                        </div>
+                        </div>}
                       </div>
                     )}
                   </div>
@@ -917,7 +807,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                   </p>
                 </div>
                 <p className="text-sm text-muted-foreground">{result.rationale}</p>
-                <p className="text-xs">{conclusion.status === "needs_review" ? "Next: resolve the missing or conflicting evidence below. Classification cannot be confirmed yet." : "Not yet confirmed. Check the supporting evidence, then confirm to continue."}</p>
+                <p className="text-xs">Review the completed tests, then accept classification to continue. To change an answer, use its Edit button.</p>
               </CardContent>
             </Card>
             <div className="rounded-lg border divide-y" data-testid="classification-test-rows">
@@ -943,8 +833,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                         ? (answers[c.key] ? "Yes" : "No")
                         : (c.key === "pvPctFairValue"
                           ? paymentTest.minimum ? `${percentLabel(paymentTest.minimum.percent)}%`
-                            : paymentTest.draftComparison ? `${percentLabel(paymentTest.draftComparison.minimum.percent)}% — draft, confirm below`
-                            : "Inputs needed — see checklist"
+                            : "Return to Criterion 4"
                           : c.key === "leaseTermPct" && conclusion.lifePercent == null ? "Enter term and useful life" : `${answers[c.key]}${c.unit}`)}
                       <Button type="button" size="sm" variant="ghost" className="ml-2 h-8 px-2 text-xs text-foreground" data-testid={`button-edit-criterion-${ci + 1}`} aria-label={`Edit ${c.title}`} onClick={() => setStep(ci + 1)}>Edit</Button>
                     </span>
@@ -957,7 +846,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
               <summary className="cursor-pointer font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Full minimum lease payment breakdown</summary>
               <div className="mt-2"><LeasePaymentTest conclusion={conclusion} /></div>
             </details>
-            <LeaseEndingFields compact value={answers.leaseEndingTerms} months={answers.termMonths} readOnly={readOnly} onChange={leaseEndingTerms => setAnswers(prev => ({ ...prev, leaseEndingTerms }))} />
+            <LeaseEvidenceSummary ending={answers.leaseEndingTerms} months={answers.termMonths} rate={assessmentRate(answers)} onEdit={() => setStep(4)} />
 
             {conclusion.status === "operating" && (
               <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-50 border border-amber-200 text-sm">
@@ -1214,10 +1103,14 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
               {answers.firstPaymentAmount != null && <p className="text-sm">First rent used (after tax and services): <strong>{formatCurrency(financingFirstPayment(answers) ?? 0)}</strong>. This replaces the first regular rent; it is not an extra payment.</p>}
               <p className="text-xs text-muted-foreground">To change rent, term, fair value or payment timing, use Edit classification. Changes require classification to be confirmed again.</p>
             </LeaseReviewDetails>
-            <LeaseEvidenceSummary ending={answers.leaseEndingTerms} months={answers.termMonths} rate={assessmentRate(answers)} onEdit={() => setStep(6)} />
+            <LeaseEvidenceSummary ending={answers.leaseEndingTerms} months={answers.termMonths} rate={assessmentRate(answers)} onEdit={() => setStep(4)} />
           </div>
         )}
-        {step === 7 && <LeaseEvidenceSummary ending={answers.leaseEndingTerms} months={answers.termMonths} onEdit={() => setStep(6)} />}
+        {step === 7 && <LeaseEvidenceSummary ending={answers.leaseEndingTerms} months={answers.termMonths} onEdit={() => setStep(4)} />}
+        {step === 5 && !canProceed() && <div role="alert" className="rounded-lg border p-3 text-sm text-amber-800">
+          Changes affect the payment test. Complete Criterion 4 before viewing assessment results.
+          <Button type="button" variant="outline" className="ml-2" onClick={() => setStep(4)}>Return to Criterion 4</Button>
+        </div>}
         {changedSinceConclusion && <div role="alert" className="flex flex-wrap items-center gap-2 text-sm text-amber-800"><span>These changes affect the assessment. Confirm the classification again before saving.</span><Button type="button" size="sm" variant="outline" onClick={() => setStep(6)}>Return to review</Button></div>}
         </DialogBody>
         <DialogFooter className="shrink-0 border-t pt-3 gap-2">

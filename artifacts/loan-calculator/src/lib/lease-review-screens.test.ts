@@ -48,8 +48,13 @@ describe("plain-language lease review components", () => {
     const assessment = source.slice(source.indexOf("{/* Step 6:"), source.indexOf("{/* Step 7:"));
     expect(assessment).toContain("<LeasePaymentTest conclusion={conclusion}");
     expect(assessment).not.toContain("Supplementary rent-only comparison");
-    expect(assessment).toContain("paymentTest.draftComparison");
-    expect(assessment).toContain("Inputs needed");
+    expect(assessment).not.toContain("paymentTest.draftComparison");
+    expect(assessment).not.toContain("<LeaseEndingFields");
+    expect(assessment).not.toMatch(/<(Input|Textarea|select|Checkbox)\b/);
+    expect(assessment).toContain("<LeaseEvidenceSummary");
+    expect(assessment).toContain("onEdit={() => setStep(4)}");
+    expect(source).toContain("assessmentStepReady(answers, step)");
+    expect(source).toContain("assessmentEntryStep(startingAnswers");
     expect(source).toContain("<LeasePaymentCriterion answers={answers}");
     expect(source).not.toContain("reasoning={importedEstimates.reasoning}");
   });
