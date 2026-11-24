@@ -99,5 +99,16 @@ describe("one useful-life field with optional fallbacks", () => {
     expect(source).toContain('setUsefulLifeSource("manual"); updateNumber("economicLife", years)');
     expect(source).toContain("onCategory={applyStandardLife}");
     expect(source).not.toContain("ASSET_TYPE_LIVES[startingAnswers.assetType] ||");
+    expect(source).toContain("importedEstimates?.economicLifeReasoning ?? importedEstimates?.reasoning");
+  });
+  it("keeps the introduction explanatory and collects useful life only in Criterion 3", () => {
+    const source = readFileSync(new URL("../components/capital-lease-assessment.tsx", import.meta.url), "utf8");
+    const intro = source.slice(source.indexOf("{step === 0 && ("), source.indexOf("{/* Steps 1-5:"));
+    expect(intro).toContain("Begin Criterion 1");
+    expect(intro).not.toContain("introAssetType");
+    expect(intro).not.toContain("What kind of asset is being leased?");
+    expect(intro).not.toMatch(/<(Select|Input|LeaseUsefulLifeFields)\b/);
+    expect(source).toContain("<LeaseUsefulLifeFields years={answers.economicLife}");
+    expect(source).toContain("onCategory={applyStandardLife}");
   });
 });

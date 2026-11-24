@@ -12,7 +12,7 @@ import { LeasePaymentCriterion } from "./lease-payment-criterion";
 import { LeaseReviewDetails } from "./lease-review-details";
 import { LeaseEvidenceSummary } from "./lease-evidence-summary";
 import { LeaseUsefulLifeFields } from "./lease-useful-life-fields";
-import { ASSET_TYPE_LIVES, ASSET_TYPE_OPTIONS, chooseUsefulLife, withUsefulLife, applyUsefulLifeCategory, type UsefulLifeSource } from "@/lib/lease-useful-life";
+import { ASSET_TYPE_LIVES, ASSET_TYPE_OPTIONS, chooseUsefulLife, applyUsefulLifeCategory, type UsefulLifeSource } from "@/lib/lease-useful-life";
 export { ASSET_TYPE_LIVES } from "@/lib/lease-useful-life";
 import {
   Dialog,
@@ -42,13 +42,6 @@ import {
   FileText,
   Calculator,
 } from "lucide-react";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 
 export type AssessmentAnswers = {
   leaseEndingTerms?: LeaseEndingTerms | null;
@@ -104,6 +97,7 @@ export type AssessmentResult = {
 
 export type ImportedEstimates = {
   economicLifeYears?: number | null;
+  economicLifeReasoning?: string | null;
   fairValue?: number | null;
   interestRate?: number | null;
   reasoning?: string | null;
@@ -333,14 +327,6 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
   const [straightLine, setStraightLine] = useState<StraightLineAnswers>(defaultStraightLine);
   const [usefulLifeSource, setUsefulLifeSource] = useState<UsefulLifeSource>("manual");
 
-  /** Intro asset classification never replaces an existing or asset-specific life. */
-  const applyAssetType = useCallback((val: string) => {
-    if (!(inputs.economicLife > 0)) {
-      setUsefulLifeSource(chooseUsefulLife(inputs.economicLife, importedEstimates?.economicLifeYears, val).source);
-    }
-    setAnswers(prev => withUsefulLife(prev, chooseUsefulLife(prev.economicLife, importedEstimates?.economicLifeYears, val).years, val));
-  }, [inputs.economicLife, importedEstimates?.economicLifeYears]);
-
   const applyStandardLife = (category: string) => {
     setUsefulLifeSource(ASSET_TYPE_LIVES[category] > 0 ? "category" : "manual");
     setAnswers(prev => applyUsefulLifeCategory(prev, category));
@@ -563,24 +549,6 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
               </p>
             </div>
 
-            {/* Asset type pre-fills useful life, but never replaces evidence. */}
-            <div className="space-y-2 pt-1 border-t">
-              <Label htmlFor="introAssetType">What kind of asset is being leased?</Label>
-              <Select value={answers.assetType} onValueChange={applyAssetType}>
-                <SelectTrigger id="introAssetType">
-                  <SelectValue placeholder="Select an asset type (optional — you can also pick it later)" />
-                </SelectTrigger>
-                <SelectContent>
-                  {ASSET_TYPE_OPTIONS.map(([value, label]) => (
-                    <SelectItem key={value} value={value}>{label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground">
-                The asset-specific useful-life suggestion takes priority over category defaults. Review or override it in Criterion 3.
-              </p>
-            </div>
-
             {REAL_PROPERTY_TYPES.includes(answers.assetType) && (
               <div className="p-4 rounded-lg bg-emerald-50 border border-emerald-200 space-y-3">
                 <div className="flex items-center gap-2">
@@ -674,7 +642,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                             </div>
 
                             <LeaseUsefulLifeFields years={answers.economicLife} source={usefulLifeSource}
-                              assetType={answers.assetType} reasoning={importedEstimates?.reasoning} readOnly={readOnly}
+                              assetType={answers.assetType} reasoning={importedEstimates?.economicLifeReasoning ?? importedEstimates?.reasoning} readOnly={readOnly}
                               onChange={years => { setUsefulLifeSource("manual"); updateNumber("economicLife", years); }}
                               onCategory={applyStandardLife} />
 

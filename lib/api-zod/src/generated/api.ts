@@ -2128,6 +2128,7 @@ export const ImportDocumentResponse = zod.object({
   "fieldNotes": zod.record(zod.string(), zod.string()).nullish(),
   "estimates": zod.object({
   "economicLifeYears": zod.number().nullish(),
+  "economicLifeReasoning": zod.string().nullish().describe('Asset-specific basis and assumptions for the suggested economic life, separate from rate or fair-value commentary.'),
   "fairValue": zod.number().nullish(),
   "interestRate": zod.number().nullish(),
   "reasoning": zod.string().nullish()

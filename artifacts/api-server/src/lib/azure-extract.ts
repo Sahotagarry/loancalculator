@@ -10,6 +10,7 @@ import { parseImportedLeaseEnding } from "./import-lease-ending";
 import { leaseSourceChecks, leaseSourceFacts, recoverLeaseReserveOperands } from "./import-lease-source-facts";
 import { unresolvedLeaseEnding } from "./lease-ending";
 import { UserFacingError, type AzureSettings } from "./azure-settings";
+import { LEASE_USEFUL_LIFE_GUIDANCE } from "./lease-useful-life-guidance";
 
 const LEGACY_API_VERSION = "2024-10-21";
 
@@ -107,6 +108,7 @@ const leaseFieldsSchema = z.object({
   estimates: z
     .object({
       economicLifeYears: z.number().nullable().catch(null),
+      economicLifeReasoning: z.string().max(2000).nullish().catch(null),
       fairValue: z.number().nullable().catch(null),
       interestRate: z.number().nullable().catch(null),
       reasoning: z.string().nullable().catch(null),
@@ -235,7 +237,8 @@ Extraction rules — CRITICAL:
 - paymentAtBeginning: true if payments are due at the beginning of each period, false if at end, null if not stated.
 - In "reasoning", briefly explain the classification and note anything important the user should verify (2-4 sentences, plain language for an accountant).
 - For a lease, also fill "fieldNotes": an object mapping each NON-NULL extracted lease field name to a short note (max ~15 words) citing where/how you found it — quote the section or clause wording (e.g. "termMonths": "Section 2.1: term of five (5) years", "monthlyPayment": "$28.00/sf × 3,200 sf ÷ 12 (Section 4.1)"). Only include fields you actually extracted. Booleans you inferred as false because nothing was stated should NOT get a note.
-- For a lease, also fill "estimates": ONLY for economicLifeYears, fairValue, and interestRate that are NOT stated in the document, you may provide a reasonable professional ESTIMATE to help the accountant (e.g. typical economic life for the asset class, an approximate market financing rate). These are clearly labelled estimates, NOT extractions — never put them in the main lease fields. Set "reasoning" inside estimates to 1-2 sentences explaining the basis of each estimate. If you cannot estimate responsibly, use null.
+- For a lease, also fill "estimates": ONLY for economicLifeYears, fairValue, and interestRate that are NOT stated in the document, provide the best-supported professional ESTIMATE using the actual asset and agreement information. These are clearly labelled estimates, NOT extractions — never put them in the main lease fields. Set "reasoning" inside estimates to explain fair-value and interest-rate assumptions, and use the separate economicLifeReasoning for useful life. If you cannot estimate responsibly, use null.
+${LEASE_USEFUL_LIFE_GUIDANCE}
 
 Lease rentals:
 - Return firstPaymentAmount only when the agreement states a distinct first rental. It replaces the first monthly rental; it is not a separate down payment, refundable deposit or terminal amount. Keep it on the same tax and service basis as monthlyPayment. Otherwise return null.
@@ -261,7 +264,7 @@ Respond with JSON only, matching this shape plus the lease ending fields above:
   "masterAgreement": { lender, description, facilityLimit, securityDescription, covenantDescription } or null if not a master agreement,
   "facilities": [ same shape as "loan", one per facility ] or null if not a master agreement,
   "loan": { termQuote, amortizationQuote, paymentScheduleQuote, name, lender, principal, downPayment, interestRate, primeSpread, statedPrimeRate, amortizationYears, termYears, startDate, interestMethod, interestMethodQuote, paymentFrequency ("monthly"|"semi-monthly"|"bi-weekly"|"weekly"), paymentTiming ("beginning"|"end"|null), graceTermMode ("included"|"added"|null), firstPaymentDate, semiMonthlyFirstDueDay, semiMonthlySecondDueDay, paymentAmount, interestOnlyMonths, graceMonths, graceInterestTreatment ("capitalized"|"none"|null), balloonPayment, securityDescription, suggestedEvents ([{kind:"principal_prepayment",effectiveDate,ordering,amount,treatment,classification,source,reason,requiresConfirmation:true}] or null) } or null if not a loan,
-  "lease": { termQuote, paymentScheduleQuote, name, lessor, assetDescription, assetType ("vehicle"|"equipment"|"office_commercial"|"other"), startDate, expiryDate, termMonths, monthlyPayment, firstPaymentAmount, downPayment, interestRate, fairValue, economicLifeYears, buyoutAmount, leaseEndingTerms: {version:1, kind, amount, basis, source, baseAmount, percentage, reserves:[{fromMonth,toMonth,monthlyAmount}], sumAmounts, settlementMonth, issues:[], status:"draft", taxTreatment, suggestedTreatment:{kind,reason,accepted:false}}, transferOfOwnership, bargainPurchaseOption, specializedAsset, paymentAtBeginning, rentableSquareFeet, rentSteps ([{fromYear, toYear, monthlyRent, annualRatePerSquareFoot}] or null), tenantImprovementAllowance, freeRentMonths, camAnnualPerSquareFoot, camMonthly, percentageRentNote, fieldNotes ({fieldName: note} or null), estimates ({economicLifeYears, fairValue, interestRate, reasoning} or null) } or null if not a lease.
+  "lease": { termQuote, paymentScheduleQuote, name, lessor, assetDescription, assetType ("vehicle"|"equipment"|"office_commercial"|"other"), startDate, expiryDate, termMonths, monthlyPayment, firstPaymentAmount, downPayment, interestRate, fairValue, economicLifeYears, buyoutAmount, leaseEndingTerms: {version:1, kind, amount, basis, source, baseAmount, percentage, reserves:[{fromMonth,toMonth,monthlyAmount}], sumAmounts, settlementMonth, issues:[], status:"draft", taxTreatment, suggestedTreatment:{kind,reason,accepted:false}}, transferOfOwnership, bargainPurchaseOption, specializedAsset, paymentAtBeginning, rentableSquareFeet, rentSteps ([{fromYear, toYear, monthlyRent, annualRatePerSquareFoot}] or null), tenantImprovementAllowance, freeRentMonths, camAnnualPerSquareFoot, camMonthly, percentageRentNote, fieldNotes ({fieldName: note} or null), estimates ({economicLifeYears, economicLifeReasoning, fairValue, interestRate, reasoning} or null) } or null if not a lease.
   Include leaseEndingTerms for every lease. Omit inapplicable optional formula operands; do not emit null for arrays. Set startDate to null when only the signature date is known; expiryDate is the documented end date, not the signature date.
   "name" should be a short human label like "Truck Loan — TD Bank" based on the document.
 }`;

@@ -2810,6 +2810,10 @@ components:
         economicLifeYears:
           type: number
           nullable: true
+        economicLifeReasoning:
+          type: string
+          nullable: true
+          description: Asset-specific basis and assumptions for the suggested economic life, separate from rate or fair-value commentary.
         fairValue:
           type: number
           nullable: true

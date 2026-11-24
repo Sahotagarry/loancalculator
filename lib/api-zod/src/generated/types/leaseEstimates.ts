@@ -8,6 +8,8 @@
 
 export interface LeaseEstimates {
   economicLifeYears?: number | null;
+  /** Asset-specific basis and assumptions for the suggested economic life, separate from rate or fair-value commentary. */
+  economicLifeReasoning?: string | null;
   fairValue?: number | null;
   interestRate?: number | null;
   reasoning?: string | null;

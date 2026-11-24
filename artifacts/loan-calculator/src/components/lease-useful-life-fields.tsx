@@ -15,7 +15,7 @@ export function LeaseUsefulLifeFields({ years, source, assetType, reasoning, rea
         : source === "category" ? "Standard category suggestion — confirm or change for this asset."
         : source === "existing" ? "Documented or previously entered value retained. Change it only if needed."
         : years > 0 ? "Your override." : "Enter the asset's expected useful life."}
-      {" "}Use the total expected working life, not the lease term.
+      {" "}Assess the asset's economic working life at lease start, not the lease term or the client's planned holding period.
     </p>
     {source === "asset_specific" && reasoning && <details className="text-xs" data-testid="useful-life-reason">
       <summary className="cursor-pointer rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Why this suggestion?</summary>
