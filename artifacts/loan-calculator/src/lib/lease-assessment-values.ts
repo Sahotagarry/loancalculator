@@ -1,4 +1,4 @@
-import { assessLeaseClassification, leaseRentalPresentValue, leasePresentValue, normalizeLeaseEnding, updateLeaseSettlementForTerm, type LeaseEndingTerms } from "@workspace/amortization";
+import { assessLeaseClassification, leaseRentalPresentValue, leasePresentValue, leaseImplicitRate, normalizeLeaseEnding, updateLeaseSettlementForTerm, type LeaseEndingTerms } from "@workspace/amortization";
 import type { AssessmentAnswers, AssessmentResult } from "../components/capital-lease-assessment";
 import { calculateStraightLineLease } from "./straight-line";
 
@@ -50,6 +50,38 @@ export function applyCalculatedLeaseRate(a: AssessmentAnswers, rate: number): As
   };
   const selected = assessmentRate({ interestRate: rate, leaseEndingTerms: ending });
   return { ...a, interestRate: selected, leaseEndingTerms: { ...ending, discountRate: selected } };
+}
+
+/** Pricing can use an imported ending value before unrelated review questions
+ * are resolved. This does not approve the ending obligation for accounting. */
+export function leasePricingAssumption(a: AssessmentAnswers) {
+  const ending = a.leaseEndingTerms ? normalizeLeaseEnding(a.leaseEndingTerms, a.termMonths) : null;
+  const fromEnding = !!ending && ending.kind !== "optional_purchase" &&
+    ending.amount != null && Number.isFinite(ending.amount) && ending.amount >= 0;
+  const amount = fromEnding ? ending!.amount! : ending && !(a.buyoutForImplicitRate > 0) ? null : a.buyoutForImplicitRate;
+  return {
+    amount,
+    settlementMonth: fromEnding ? ending!.settlementMonth ?? a.termMonths : a.termMonths,
+    fromEnding,
+    provisional: !!ending && (ending.status !== "reviewed" || ending.issues.length > 0),
+  };
+}
+
+export function calculateAssessmentImplicitRate(a: AssessmentAnswers): number | null {
+  const pricing = leasePricingAssumption(a);
+  if (!(a.fairValue > 0 && a.monthlyPayment > 0 && a.termMonths > 0) ||
+      pricing.amount == null || !Number.isFinite(pricing.amount) || pricing.amount < 0 ||
+      !Number.isInteger(pricing.settlementMonth) || pricing.settlementMonth < a.termMonths) return null;
+  try {
+    return leaseImplicitRate({
+      monthlyPayment: preTaxMonthlyPayment(a), firstPaymentAmount: financingFirstPayment(a),
+      termMonths: a.termMonths, downPayment: a.downPayment, paymentAtBeginning: a.paymentAtBeginning,
+      // This is pricing only: never change the saved obligation, review state
+      // or missing clauses merely to solve a rate.
+      ending: { version: 1, kind: "lessor_residual", amount: pricing.amount, basis: "stated",
+        settlementMonth: pricing.settlementMonth, source: "Pricing assumption only", issues: [], status: "draft" },
+    }, a.fairValue);
+  } catch { return null; }
 }
 
 export const percentLabel = (value: number) => (value < 90 && value >= 89.95) ? "<90" : value.toFixed(1);

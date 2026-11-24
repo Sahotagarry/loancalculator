@@ -1,8 +1,8 @@
-import { assessmentConfirmationKey, assessmentConclusion, preTaxMonthlyPayment, financingFirstPayment, rentalAssessment, calculatePVFromAnswers, assessmentRate, percentLabel, normalizedAssessmentAnswers, changeAssessmentTerm, applyCalculatedLeaseRate } from "@/lib/lease-assessment-values";
+import { assessmentConfirmationKey, assessmentConclusion, preTaxMonthlyPayment, financingFirstPayment, rentalAssessment, calculatePVFromAnswers, assessmentRate, percentLabel, normalizedAssessmentAnswers, changeAssessmentTerm, applyCalculatedLeaseRate, leasePricingAssumption, calculateAssessmentImplicitRate } from "@/lib/lease-assessment-values";
 export { preTaxMonthlyPayment, calculatePVFromAnswers } from "@/lib/lease-assessment-values";
 import { formatCurrency } from "@/lib/format";
 import { useState, useCallback, useEffect, useRef } from "react";
-import { leaseImplicitRate, normalizeLeaseEnding, type LeaseEndingTerms } from "@workspace/amortization";
+import type { LeaseEndingTerms } from "@workspace/amortization";
 import { LeaseEndingFields } from "./lease-ending-fields";
 import { LeaseOpeningSummary } from "./lease-opening-summary";
 import { LeasePaymentTest } from "./lease-payment-test";
@@ -472,54 +472,6 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
 
 
 
-  const calculateImplicitRate = useCallback((a: AssessmentAnswers) => {
-    if (a.leaseEndingTerms) {
-      const terms = normalizeLeaseEnding(a.leaseEndingTerms, a.termMonths);
-      if (terms.kind === "unresolved" || terms.issues.length) {
-        // A separately supplied price may be used to estimate the rate; it does not establish an obligation.
-        if (!(a.buyoutForImplicitRate > 0)) return 0;
-        try { return leaseImplicitRate({ ...a, monthlyPayment: preTaxMonthlyPayment(a), firstPaymentAmount: financingFirstPayment(a), ending: { ...terms, kind: "lessor_residual", amount: a.buyoutForImplicitRate, issues: [], settlementMonth: a.termMonths } }, a.fairValue) ?? 0; }
-        catch { return 0; }
-      }
-      try { return leaseImplicitRate({ ...a, monthlyPayment: preTaxMonthlyPayment(a), firstPaymentAmount: financingFirstPayment(a), ending: normalizeLeaseEnding(a.leaseEndingTerms, a.termMonths) }, a.fairValue) ?? 0; }
-      catch { return 0; }
-    }
-    if (a.fairValue <= 0 || a.monthlyPayment <= 0 || a.termMonths <= 0) return 0;
-    const fv = a.fairValue;
-    const pmt = preTaxMonthlyPayment(a);
-    const n = a.termMonths;
-    const buyout = a.buyoutForImplicitRate || 0;
-    const atBeginning = a.paymentAtBeginning;
-
-    // Bisection method to find monthly rate r where PV(payments) + PV(buyout) = FV
-    let low = 0.0001;  // 0.01% monthly
-    let high = 0.05;   // 5% monthly (60% annual)
-    let mid = 0;
-    let pv = 0;
-
-    for (let i = 0; i < 50; i++) {
-      mid = (low + high) / 2;
-      let annuityPV: number;
-      if (atBeginning) {
-        annuityPV = pmt * ((1 - Math.pow(1 + mid, -n)) / mid) * (1 + mid);
-      } else {
-        annuityPV = pmt * ((1 - Math.pow(1 + mid, -n)) / mid);
-      }
-      const buyoutPV = buyout > 0 ? buyout / Math.pow(1 + mid, n) : 0;
-      pv = annuityPV + buyoutPV + (a.downPayment || 0);
-
-      if (pv > fv) {
-        low = mid;
-      } else {
-        high = mid;
-      }
-      if (Math.abs(pv - fv) < 0.01) break;
-    }
-
-    const annualRate = mid * 12 * 100;
-    return Math.round(annualRate * 100) / 100;
-  }, []);
-
   const updateNumber = (key: "leaseTermPct" | "pvPctFairValue" | "fairValue" | "economicLife" | "termMonths" | "monthlyPayment" | "downPayment" | "interestRate" | "buyoutAmount" | "taxRate" | "buyoutForImplicitRate", value: number) => {
     setAnswers((prev) => {
       if (key === "termMonths") return changeAssessmentTerm(prev, value);
@@ -559,8 +511,8 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
   // Bind confirmation to all evidence, not just the rounded percentage or outcome.
   const assessmentKey = assessmentConfirmationKey(answers);
   const changedSinceConclusion = (step === 8 || step === 7) && confirmedAssessment !== assessmentKey;
-  const documentedEnd = answers.leaseEndingTerms ? normalizeLeaseEnding(answers.leaseEndingTerms, answers.termMonths) : null;
-  const hasPricingEnd = documentedEnd?.amount != null && documentedEnd.kind !== "unresolved" && documentedEnd.issues.length === 0;
+  const pricingEnd = leasePricingAssumption(answers);
+  const hasPricingEnd = pricingEnd.fromEnding;
 
   const firstInstallmentField = <div className="space-y-2">
     <Label htmlFor="wizardFirstPayment">Distinct first rental ($, optional)</Label>
@@ -1593,7 +1545,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
             Calculate Implicit Rate
           </DialogTitle>
           <DialogDescription>
-            Estimate the discount rate from the lease pricing. A value used to estimate the rate is not added to the rent comparison.
+            Estimate the implicit rate from the asset's fair value, rentals and ending value. The ending amount's treatment in the 90% test depends on the reviewed lease terms.
           </DialogDescription>
         </DialogHeader>
 
@@ -1618,13 +1570,15 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
               type="number"
               step="1"
               min={0}
-              value={hasPricingEnd ? (documentedEnd!.kind === "optional_purchase" ? 0 : documentedEnd!.amount!) : answers.buyoutForImplicitRate || ""}
+              value={hasPricingEnd ? pricingEnd.amount ?? "" : answers.buyoutForImplicitRate || ""}
               onChange={(e) => updateNumber("buyoutForImplicitRate", Number(e.target.value))}
               placeholder="e.g. 10,000"
             />
             <p className="text-xs text-muted-foreground">
-              Use the supported ending value from the agreement. This value is for estimating the rate only; it is not another rental.
+              {hasPricingEnd ? "Carried forward from the ending terms. Change the amount there if needed. " : "Enter a supported expected ending value for the rate estimate. "}
+              A qualifying residual guarantee or bargain purchase price also belongs in minimum lease payments; an unguaranteed residual does not.
             </p>
+            {pricingEnd.provisional && <p className="text-xs text-amber-800">Provisional rate estimate: confirm the ending terms, start date, taxes and services before approving the accounting. Calculating a rate does not confirm those answers.</p>}
           </div>
 
           {/* Formula explanation */}
@@ -1634,7 +1588,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
               We find the rate where: <strong>PV of rent and the supported ending value = fair value</strong>
             </p>
             <p className="text-xs text-blue-800">
-              This is the rate the lessor used internally. If it is higher than your IBR, use your IBR instead (ASPE requires the lower rate).
+              This estimates an implicit rate from the inputs shown; it does not prove the lessor's actual internal rate. Use the lower of the determinable implicit rate and the client's supported borrowing rate.
             </p>
           </div>
 
@@ -1642,8 +1596,8 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
           {answers.fairValue > 0 && answers.monthlyPayment > 0 && answers.termMonths > 0 && (
             <div className="space-y-3">
               {(() => {
-                const rate = calculateImplicitRate(answers);
-                if (rate <= 0) return null;
+                const rate = calculateAssessmentImplicitRate(answers);
+                if (rate == null || rate <= 0) return <p className="text-sm text-muted-foreground">No positive implicit rate could be calculated. Check the payment, ending value, timing and fair value.</p>;
                 return (
                   <>
                     <div className="flex items-center gap-2 p-3 rounded-lg bg-emerald-50 border border-emerald-200">

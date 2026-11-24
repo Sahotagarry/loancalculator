@@ -11,6 +11,16 @@ const ending: LeaseEndingTerms = { version: 1, kind: "guaranteed_residual", amou
   commencement: { date: "2026-04-01", basis: "inferred", confirmed: false, source: "Based on the agreement date—confirm." } };
 
 describe("clear ASPE lease presentation", () => {
+  it("distinguishes a source-cost fair-value proposal from a separately supplied fair value", () => {
+    const result = { classification: "lease", lease: { fairValue: 139994,
+      fieldNotes: { fairValue: "Proposed fair value based on stated asset cost: Agreed Cost of Vehicle $139994.00. Confirm." } } } as DocumentImportResult;
+    const rows = buildFieldRows(result);
+    expect(rows.find(r => r.label === "Proposed fair value — confirm")?.value).toContain("139,994");
+    expect(rows.find(r => r.label === "Fair value basis")?.value).toContain("Confirm.");
+    const direct = buildFieldRows({ ...result, lease: { ...result.lease!, fieldNotes: { fairValue: "Independent appraisal" } } });
+    expect(direct.find(r => r.label === "Fair value")?.value).toContain("139,994");
+    expect(direct.some(r => r.label === "Proposed fair value — confirm")).toBe(false);
+  });
   it("shows the proposed date in the main date row without falsely confirming it", () => {
     const rows = buildFieldRows({ classification: "lease", lease: { startDate: null, buyoutAmount: null, leaseEndingTerms: ending } } as DocumentImportResult);
     expect(rows).toContainEqual({ label: "Proposed start date — confirm", value: "2026-04-01" });

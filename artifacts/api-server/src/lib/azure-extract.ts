@@ -4,6 +4,7 @@ import { INTEREST_METHODS } from "@workspace/amortization";
 import { z } from "zod";
 import { normalizeLeaseEnding } from "@workspace/amortization";
 import { suggestLeaseCommencement } from "./import-lease-commencement";
+import { proposedLeaseFairValue } from "./import-lease-fair-value";
 import { addLeaseEndingSuggestion } from "./import-lease-suggestion";
 import { parseImportedLeaseEnding } from "./import-lease-ending";
 import { leaseSourceChecks, leaseSourceFacts, recoverLeaseReserveOperands } from "./import-lease-source-facts";
@@ -380,6 +381,13 @@ export async function extractLoanOrLease(settings: AzureSettings, documentText: 
     const duration = verifyDurations(documentText, lease, "lease");
     Object.assign(lease, { termMonths: duration.termMonths, termQuote: duration.termQuote, durationWarnings: duration.durationWarnings });
     const notes = { ...lease.fieldNotes };
+    if (lease.fairValue == null) {
+      const proposedValue = proposedLeaseFairValue(documentText);
+      if (proposedValue) {
+        lease.fairValue = proposedValue.amount;
+        notes.fairValue = proposedValue.note;
+      }
+    }
     delete notes.termMonths;
     if (duration.termQuote) notes.termMonths = duration.termQuote;
     const proposedCommencement = suggestLeaseCommencement(documentText, lease.expiryDate, lease.termMonths);

@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { updateLeaseSettlementForTerm } from "@workspace/amortization";
 import { parseAssetType, formatAssetType, type AssessmentAnswers } from "../components/capital-lease-assessment";
 import { LeaseEndingFields } from "../components/lease-ending-fields";
-import { applyCalculatedLeaseRate, assessmentAnswersForReview, assessmentRate, changeAssessmentTerm, normalizedAssessmentAnswers } from "./lease-assessment-values";
+import { applyCalculatedLeaseRate, assessmentAnswersForReview, assessmentRate, changeAssessmentTerm, normalizedAssessmentAnswers, leasePricingAssumption, calculateAssessmentImplicitRate, assessmentConclusion } from "./lease-assessment-values";
 
 const answers: AssessmentAnswers = {
   transferOfOwnership: false, bargainPurchaseOption: false, leaseTermPct: 0, pvPctFairValue: 0,
@@ -62,6 +62,47 @@ describe("term and settlement timing handoff", () => {
 });
 
 describe("calculated rate handoff", () => {
+  it("carries the imported ending amount into pricing despite unconfirmed commencement and tax review", () => {
+    const draft = { ...changeAssessmentTerm(answers, 48), buyoutForImplicitRate: 0 };
+    draft.leaseEndingTerms = { ...draft.leaseEndingTerms!,
+      commencement: { date: "2026-04-01", basis: "inferred", source: "Agreement date", confirmed: false },
+      taxTreatment: "unresolved", issues: ["Review the taxes."] };
+    const before = JSON.stringify(draft);
+    expect(leasePricingAssumption(draft)).toMatchObject({ amount: 13322, settlementMonth: 48, fromEnding: true, provisional: true });
+    expect(calculateAssessmentImplicitRate(draft)).toBeCloseTo(7.3687834794, 7);
+    expect(assessmentConclusion(draft).status).toBe("needs_review");
+    expect(JSON.stringify(draft)).toBe(before);
+    const chosen = applyCalculatedLeaseRate(draft, calculateAssessmentImplicitRate(draft)!);
+    expect(chosen.leaseEndingTerms).toMatchObject({ status: "draft", commencement: { confirmed: false } });
+    expect(assessmentConclusion(chosen).status).toBe("needs_review");
+  });
+  it("uses a calculated ending value for pricing without turning an unresolved obligation into a guarantee", () => {
+    const draft = { ...changeAssessmentTerm(answers, 48), buyoutForImplicitRate: 0 };
+    draft.leaseEndingTerms = { ...draft.leaseEndingTerms!, kind: "unresolved" };
+    expect(calculateAssessmentImplicitRate(draft)).toBeCloseTo(7.3687834794, 7);
+    expect(draft.leaseEndingTerms.kind).toBe("unresolved");
+    expect(assessmentConclusion(draft).status).toBe("needs_review");
+  });
+  it("does not silently replace an unusable formula with a zero residual", () => {
+    const draft = { ...changeAssessmentTerm(answers, 48), buyoutForImplicitRate: 0 };
+    draft.leaseEndingTerms = { ...draft.leaseEndingTerms!, basis: "unsupported" };
+    expect(leasePricingAssumption(draft).fromEnding).toBe(false);
+    expect(calculateAssessmentImplicitRate(draft)).toBeNull();
+  });
+  it("does not treat a non-bargain optional purchase price as an expected resale value", () => {
+    const a = { ...changeAssessmentTerm(answers, 48), buyoutForImplicitRate: 0 };
+    a.leaseEndingTerms = { ...a.leaseEndingTerms!, kind: "optional_purchase" };
+    expect(leasePricingAssumption(a).fromEnding).toBe(false);
+    expect(calculateAssessmentImplicitRate(a)).toBeNull();
+    expect(calculateAssessmentImplicitRate({ ...a, buyoutForImplicitRate: 13322 })).toBeCloseTo(7.3687834794, 7);
+  });
+  it("honours separately supported settlement timing and a distinct first rental", () => {
+    const a = changeAssessmentTerm(answers, 48);
+    const later = { ...a, leaseEndingTerms: { ...a.leaseEndingTerms!, settlementMonth: 60 } };
+    expect(leasePricingAssumption(later).settlementMonth).toBe(60);
+    expect(calculateAssessmentImplicitRate(later)).toBeLessThan(calculateAssessmentImplicitRate(a)!);
+    expect(calculateAssessmentImplicitRate({ ...a, firstPaymentAmount: 5000 })).toBeGreaterThan(calculateAssessmentImplicitRate(a)!);
+  });
   it("carries the calculated rate through normalization and reopening without inventing a borrowing rate", () => {
     const selected = applyCalculatedLeaseRate(changeAssessmentTerm(answers, 48), 7.53219);
     expect(selected.interestRate).toBe(7.53219);

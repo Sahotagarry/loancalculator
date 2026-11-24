@@ -98,7 +98,10 @@ export function buildFieldRows(result: DocumentImportResult): FieldRow[] {
       { label: "Monthly payment", value: fmtMoney(f?.monthlyPayment) },
       { label: "Down payment", value: fmtMoney(f?.downPayment), optional: true },
       { label: "Interest rate", value: fmtNum(f?.interestRate, "%") },
-      { label: "Fair value", value: fmtMoney(f?.fairValue) },
+      { label: f?.fieldNotes?.fairValue?.startsWith("Proposed fair value based on stated asset cost:") ? "Proposed fair value — confirm" : "Fair value", value: fmtMoney(f?.fairValue) },
+      ...(f?.fieldNotes?.fairValue?.startsWith("Proposed fair value based on stated asset cost:") ? [
+        { label: "Fair value basis", value: f.fieldNotes.fairValue },
+      ] : []),
       { label: "Economic life", value: fmtNum(f?.economicLifeYears, " years") },
       ...(!ending || ["optional_purchase", "bargain_purchase"].includes(ending.kind)
         ? [{ label: "Purchase option amount", value: fmtMoney(f?.buyoutAmount), optional: true }] : []),
