@@ -14,4 +14,9 @@ describe("settlement timing intent", () => {
   it("does not treat a provider's timing declaration as a reviewer choice", () => {
     expect(parseImportedLeaseEnding({ ...ending, settlementMonthBasis: "separate" })).not.toHaveProperty("settlementMonthBasis");
   });
+  it("round-trips deliberate ASPE amortization policy without injecting it into historical or AI evidence", () => {
+    expect(leaseEndingSchema.parse({ ...ending, assetAmortizationPolicy: "aspe_3065" }).assetAmortizationPolicy).toBe("aspe_3065");
+    expect(leaseEndingSchema.parse(ending)).not.toHaveProperty("assetAmortizationPolicy");
+    expect(parseImportedLeaseEnding({ ...ending, assetAmortizationPolicy: "aspe_3065" })).not.toHaveProperty("assetAmortizationPolicy");
+  });
 });

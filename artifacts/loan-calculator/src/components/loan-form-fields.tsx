@@ -1,4 +1,4 @@
-import { DEFAULT_LOAN_INTEREST_METHOD, isDaily, updateLeaseSettlementForTerm, type InterestMethod } from "@workspace/amortization";
+import { DEFAULT_LOAN_INTEREST_METHOD, isDaily, updateLeaseSettlementForTerm, leaseAssetAmortizationYears, type InterestMethod } from "@workspace/amortization";
 import { InterestMethodField } from "./interest-method-field";
 import { useState, type Dispatch, type SetStateAction } from "react";
 import { LeaseEndingFields } from "./lease-ending-fields";
@@ -875,13 +875,16 @@ export function LoanFormFields({ form, setForm: persistForm, mode = "loan" }: Lo
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="assetLife">Useful Life (years)</Label>
+              <Label htmlFor="assetLife">Asset economic life (years)</Label>
               <Input
                 id="assetLife"
                 type="number"
                 value={form.assetUsefulLife}
                 onChange={(e) => setForm({ ...form, assetUsefulLife: Number(e.target.value) })}
               />
+              {form.isCapitalLease && form.leaseEndingTerms?.assetAmortizationPolicy === "aspe_3065" &&
+                <p className="text-xs text-muted-foreground">Asset amortization: {leaseAssetAmortizationYears(form)} years
+                  {form.transferOfOwnership || form.bargainPurchaseOption ? " — economic life." : " — lease term, because there is no ownership transfer or bargain purchase option."}</p>}
             </div>
           </div>
         </div>

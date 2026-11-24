@@ -5,6 +5,7 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { leaseImplicitRate, normalizeLeaseEnding, type LeaseEndingTerms } from "@workspace/amortization";
 import { LeaseEndingFields } from "./lease-ending-fields";
 import { LeaseOpeningSummary } from "./lease-opening-summary";
+import { LeasePaymentTest } from "./lease-payment-test";
 import { LeaseReviewDetails } from "./lease-review-details";
 import {
   Dialog,
@@ -311,15 +312,15 @@ const CRITERIA: Criterion[] = [
   },
   {
     key: "pvPctFairValue",
-    title: "Rent compared with fair value (90% test)",
-    question: "Do the rent payments alone cover at least 90% of the asset’s fair value?",
-    concept: "This assessment compares the rent, in today’s dollars, with the asset’s cash price at the start. Ownership, bargain purchase and useful life are assessed separately.",
-    guide: "Enter the rents, payment dates, fair value and discount rate. Do not add an optional purchase price or the vehicle’s expected sale value to the rent.",
+    title: "Minimum lease payments compared with fair value (90% test)",
+    question: "Does the present value of minimum lease payments cover at least 90% of the asset’s fair value?",
+    concept: "Minimum lease payments include rentals and qualifying ending amounts, including the full residual guarantee or bargain purchase price. Ownership and useful life are assessed separately.",
+    guide: "Enter rentals, timing, fair value and the supported discount rate. Review the ending terms: include a qualifying guarantee, required final payment or bargain purchase price; exclude a non-bargain optional purchase and unguaranteed residual.",
     documentHint: "Check the rental schedule and the asset’s cash price at the start of the lease.",
-    example: "If rent is worth $93,000 today and the asset is worth $100,000, rent alone covers 93%.",
-    quickTip: "If rent alone reaches 90%, this test supports capital classification without assuming a purchase.",
+    example: "If rentals have a present value of $85,000 and the guaranteed ending amount has a present value of $8,000, minimum lease payments cover 93% of a $100,000 fair value.",
+    quickTip: "A guarantee is included because the client covers a shortfall, not because the client must buy the asset.",
     isYesNo: false,
-    thresholdLabel: "Rent as % of fair value",
+    thresholdLabel: "PV of minimum lease payments as % of fair value",
     threshold: 90,
     unit: "%",
     min: 0,
@@ -385,8 +386,9 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
 
   const [inputs, setAnswers] = useState<AssessmentAnswers>(defaultAnswers);
   const rent = rentalAssessment(inputs);
-  // A saved accounting PV percentage is not evidence of the rent-only test.
-  const answers = { ...inputs, pvPctFairValue: rent?.percent ?? 0 };
+  // Recompute the formal comparison from current evidence, never a stored percentage.
+  const paymentTest = assessmentConclusion(inputs);
+  const answers = { ...inputs, pvPctFairValue: paymentTest.minimum?.percent ?? 0 };
   const [straightLine, setStraightLine] = useState<StraightLineAnswers>(defaultStraightLine);
 
   const reset = useCallback(() => {
@@ -1158,7 +1160,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                               <div className="p-3 rounded-lg bg-blue-50 border border-blue-200 space-y-2">
                                 <p className="text-sm font-semibold text-blue-900">How to Determine the Right Rate</p>
                                 <p className="text-xs text-blue-800 leading-relaxed">
-                                  ASPE requires the <strong>lower</strong> of the lease's implicit rate or the lessee's incremental borrowing rate (IBR). If you can't determine either, use the IBR as a practical default.
+                                  ASPE requires the <strong>lower</strong> of the lease's implicit rate, if determinable, and the lessee's supported incremental borrowing rate (IBR). If the implicit rate cannot be determined, use the supported IBR. If neither is supported, keep the assessment in review.
                                 </p>
                                 <div className="space-y-2 mt-2">
                                   <div className="p-2 rounded bg-white/60 border border-blue-100">
@@ -1184,15 +1186,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                             </div>
 
                             {/* Calculated Result */}
-                            {rent && (
-                              <div className="flex items-center gap-2 p-3 rounded-lg bg-muted/30 text-sm">
-                                <Calculator className="h-4 w-4 text-brand flex-shrink-0" />
-                                <span>
-                                  Present value of rent: <strong>{formatCurrency(rent!.pv)}</strong> / Fair Value <strong>${answers.fairValue.toLocaleString()}</strong> ={" "}
-                                  <strong>{percentLabel(answers.pvPctFairValue)}%</strong>
-                                </span>
-                              </div>
-                            )}
+                            <LeasePaymentTest conclusion={paymentTest} />
                           </div>
                         ) : (
                           <div className="space-y-2">
@@ -1213,7 +1207,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                           </div>
                         )}
                         <div className="flex items-center gap-2 p-3 rounded-lg bg-muted/30 text-sm">
-                          {c.key === "pvPctFairValue" && !rent ? <span>Enter the rental terms, fair value and discount rate to run this test.</span> : (answerVal as number) >= (c.threshold ?? 0) ? (
+                          {c.key === "pvPctFairValue" && !paymentTest.minimum ? <span>Review the rental terms, ending amount, fair value and discount rate to run this test.</span> : (answerVal as number) >= (c.threshold ?? 0) ? (
                             <>
                               <CheckCircle2 className="h-4 w-4 text-emerald-600" />
                               <span>This criterion is <strong>met</strong> ({displayVal}{c.unit}{" >= "}{c.threshold}{c.unit})</span>
@@ -1253,11 +1247,10 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                 <p className="text-xs">{conclusion.status === "needs_review" ? "Next: resolve the missing or conflicting evidence below. Classification cannot be confirmed yet." : "Not yet confirmed. Check the supporting evidence, then confirm to continue."}</p>
               </CardContent>
             </Card>
-            {rent && rent.percent >= 90 && <p className="text-sm">Rent alone: <strong>{percentLabel(rent.percent)}% of fair value</strong> — meets the 90% guideline without relying on an ending payment. This is classification evidence, not an opening book value.</p>}
-            {conclusion.required && (!rent || rent.percent < 90) && <p className="text-sm">Required-payment support: <strong>{percentLabel(conclusion.required.percent)}% of fair value</strong>, including the reviewed {answers.leaseEndingTerms?.kind === "guaranteed_residual" ? "shortfall guarantee (not a purchase)" : "mandatory ending payment"}. Rent alone: {rent ? `${percentLabel(rent.percent)}%` : "Unavailable"}. This is classification support, not an opening book value.</p>}
+            <LeasePaymentTest conclusion={conclusion} />
 
             <LeaseReviewDetails title="Classification tests and evidence" needsAttention={conclusion.status === "needs_review"}>
-              {conclusion.required && rent && rent.percent >= 90 && <p className="text-sm">Additional required-payment support: {percentLabel(conclusion.required.percent)}% of fair value, including the reviewed {answers.leaseEndingTerms?.kind === "guaranteed_residual" ? "shortfall guarantee (not a purchase)" : "mandatory ending payment"}. Rent alone already meets the guideline; this does not assume buyout cash.</p>}
+              {rent && <p className="text-xs">Supplementary rent-only comparison: {percentLabel(rent.percent)}% of fair value. This excludes ending amounts and is not the formal minimum lease payments test.</p>}
               {CRITERIA.map((c) => {
                 let met = false;
                 if (c.isYesNo) {
@@ -1278,7 +1271,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                     <span className={met ? "text-emerald-600 font-medium" : "text-muted-foreground"}>
                       {c.isYesNo
                         ? (answers[c.key] ? "Yes" : "No")
-                        : (c.key === "pvPctFairValue" && !rent || c.key === "leaseTermPct" && conclusion.lifePercent == null ? "Unavailable" : `${c.key === "pvPctFairValue" ? percentLabel(answers.pvPctFairValue) : answers[c.key]}${c.unit}`)}
+                        : (c.key === "pvPctFairValue" && !paymentTest.minimum || c.key === "leaseTermPct" && conclusion.lifePercent == null ? "Unavailable" : `${c.key === "pvPctFairValue" ? percentLabel(answers.pvPctFairValue) : answers[c.key]}${c.unit}`)}
                     </span>
                   </div>
                 );
@@ -1526,6 +1519,9 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
           <div className="space-y-4 py-2" data-testid="capital-lease-measurement">
             <p className="text-xs font-medium">{!answers.leaseEndingTerms ? "Previous ending treatment retained" : answers.leaseEndingTerms.status !== "reviewed" ? "Calculation draft — ending evidence needs review" : "Ending evidence reviewed — check amounts before continuing"}</p>
             <LeaseOpeningSummary pvValue={result.pvValue} fairValue={answers.fairValue} downPayment={answers.downPayment} ending={answers.leaseEndingTerms} classificationChanged={changedSinceConclusion || !result.isCapitalLease} />
+            <p className="text-sm"><strong>Asset amortization period:</strong> {answers.transferOfOwnership || answers.bargainPurchaseOption
+              ? `${answers.economicLife} years — economic life, because ownership transfers or there is a bargain purchase option.`
+              : `${answers.termMonths} months — lease term, because ownership does not transfer and there is no bargain purchase option.`}</p>
             <LeaseReviewDetails title="Rent payments and calculation inputs">
               <dl className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
                 <div><dt className="text-muted-foreground">Monthly rent used (after tax and services)</dt><dd>{formatCurrency(preTaxMonthlyPayment(answers))}</dd></div>

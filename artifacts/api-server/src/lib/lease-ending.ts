@@ -39,6 +39,7 @@ export const leaseEndingSchema = z.object({
   })).optional(),
   settlementMonth: z.number().int().nonnegative().nullable(),
   settlementMonthBasis: z.enum(["lease_end", "separate"]).optional(),
+  assetAmortizationPolicy: z.literal("aspe_3065").optional(),
   issues: z.array(z.string()),
   status: z.enum(["draft", "reviewed"]),
   explanation: z.string().optional(),

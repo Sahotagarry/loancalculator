@@ -99,7 +99,7 @@ export function normalizedAssessmentAnswers(a: AssessmentAnswers): AssessmentAns
   const rate = assessmentRate(a);
   return { ...a, interestRate: rate, monthlyPayment: preTaxMonthlyPayment(a),
     firstPaymentAmount: financingFirstPayment(a), paymentIncludesTax: false,
-    ...(ending ? { leaseEndingTerms: { ...ending, discountRate: rate, paymentComponentsApplied: true,
+    ...(ending ? { leaseEndingTerms: { ...ending, assetAmortizationPolicy: "aspe_3065" as const, discountRate: rate, paymentComponentsApplied: true,
       grossMonthlyPayment: ending.grossMonthlyPayment ?? a.monthlyPayment,
       taxRate: ending.taxRate ?? a.taxRate,
       ...(a.firstPaymentAmount == null ? {} : {

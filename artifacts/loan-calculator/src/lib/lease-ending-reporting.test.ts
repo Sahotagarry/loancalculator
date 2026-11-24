@@ -29,14 +29,14 @@ describe("lease ending lifecycle reporting", () => {
     expect(saved.status).toBe("capital");
     expect(saved.rental?.percent).toBeCloseTo(87.7, 1);
     expect(saved.required?.percent).toBeCloseTo(94.7, 1);
-    expect(saved.reasons).toEqual(["Required payments meet the 90% guideline, although rent alone does not"]);
+    expect(saved.reasons).toEqual(["Minimum lease payments meet the 90% guideline"]);
     const findings = runLoanDiagnostics(classified, { id: "synthetic", clientId: "synthetic", fiscalYearEnd: "2026-12-31" }).findings;
     expect(findings.some(f => /lease-classification|cap-no-criteria/.test(f.id))).toBe(false);
     for (const cells of [undefined, excelNumbers]) {
       const wp = buildLoanWorkpaper(classified, { clientName: "Synthetic", fiscalYearEnd: "2026-12-31" }, null, cells)!;
       const section = wp.sections.find(s => s.title.startsWith("Lease Classification"))!;
       expect(section.rows).toContainEqual(["Confirmed supporting reasons", saved.reasons.join("; ")]);
-      expect(section.rows.find(r => r[0] === "Required-payment support as % of fair value")?.[1])
+      expect(section.rows.find(r => r[0] === "90% test — PV of minimum lease payments / fair value")?.[1])
         .toEqual(cells ? saved.required!.percent / 100 : "94.68%");
       expect(section.rows.some(r => /opening|obligation/i.test(String(r[0])))).toBe(false);
     }
@@ -86,7 +86,7 @@ describe("lease ending lifecycle reporting", () => {
     const wp = buildLoanWorkpaper(historical, { clientName: "Synthetic", fiscalYearEnd: "2026-12-31" })!;
     const section = wp.sections.find(s => s.title.startsWith("Lease Classification"))!;
     expect(section.rows).toContainEqual(["Saved classification", "Capital lease"]);
-    expect(section.rows).toContainEqual(["Rent as % of fair value", "Unavailable — not a failed test"]);
+    expect(section.rows).toContainEqual(["90% test — PV of minimum lease payments / fair value", "Unavailable — not a failed test"]);
     expect(section.rows).toContainEqual(["Evidence status", "Needs review — historical classification retained"]);
   });
   it("does not round a below-90 required-payment comparison into a pass", () => {
@@ -142,7 +142,7 @@ describe("lease ending lifecycle reporting", () => {
     expect(rentalAssessment({ ...a, interestRate: 7.53, leaseEndingTerms: null })?.pv).toBeCloseTo(83322.38, 2);
     const wp = buildLoanWorkpaper({ ...loan, fairValue: a.fairValue }, { clientName: "Example", fiscalYearEnd: "2026-12-31" })!;
     const assessment = wp.sections.find(s => s.title.startsWith("Lease Classification"))!;
-    expect(assessment.rows.some(r => r[0] === "Rent as % of fair value")).toBe(true);
+    expect(assessment.rows.some(r => r[0] === "90% test — PV of minimum lease payments / fair value")).toBe(true);
     expect(assessment.rows.some(r => String(r[0]).includes("Obligation"))).toBe(false);
     expect(wp.sections.find(s => s.title === "Capital Lease Calculation")?.rows.some(r => String(r[0]).includes("Obligation"))).toBe(true);
   });

@@ -168,15 +168,17 @@ export function buildLoanWorkpaper(
         ["Evidence status", assessment.status === "needs_review" || conflict ? "Needs review — historical classification retained" : "Reviewed evidence supports saved classification"],
         ["Conclusion / review explanation", assessment.rationale],
         ["Confirmed supporting reasons", assessment.status === "needs_review" ? "Unavailable until evidence is reviewed" : assessment.reasons.join("; ") || "Reviewed operating conclusion"],
-        ["Present value of rents", assessment.rental ? cells.amount(assessment.rental.pv) : "Unavailable"],
-        ["Rent as % of fair value", assessment.rental ? cells.rate(assessment.rental.percent) : "Unavailable — not a failed test"],
+        ["Rentals during the lease term, including any separate upfront payment", assessment.payments ? cells.amount(assessment.payments.rentals) : "Unavailable"],
+        ["Qualifying end-of-term amount", assessment.payments ? cells.amount(assessment.payments.ending) : "Unavailable"],
+        ["Total minimum lease payments before discounting", assessment.payments ? cells.amount(assessment.payments.rentals + assessment.payments.ending) : "Unavailable"],
+        ["Present value of minimum lease payments", assessment.minimum ? cells.amount(assessment.minimum.pv) : "Unavailable"],
+        ["90% test — PV of minimum lease payments / fair value", assessment.minimum ? cells.rate(assessment.minimum.percent) : "Unavailable — not a failed test"],
         ["Useful-life comparison", assessment.lifePercent == null ? "Unavailable — not a failed test" : cells.rate(assessment.lifePercent)],
         ...(assessment.required ? [
-          ["Required-payment support as % of fair value", cells.rate(assessment.required.percent)],
-          ["Required-payment basis", loan.leaseEndingTerms?.kind === "guaranteed_residual" ? "Reviewed shortfall guarantee — not a purchase" : "Reviewed mandatory ending payment"],
+          ["Included ending amount basis", loan.leaseEndingTerms?.kind === "guaranteed_residual" ? "Full stated residual guarantee — not a purchase" : loan.leaseEndingTerms?.kind === "bargain_purchase" ? "Bargain purchase option" : "Reviewed mandatory ending payment"],
         ] : []),
       ],
-      notes: ["Rent alone excludes ending amounts. Supported mandatory payments and guarantees remain relevant under ASPE 3065. Optional purchases and unguaranteed lessor residuals are not required lessee payments. Genuine bargain purchases are a separate basis; all criteria need not pass. Classification support is not an opening asset or liability. Missing historical evidence does not change the saved classification."],
+      notes: ["ASPE 3065.03(r), .06(c): the formal 90% test includes qualifying ending amounts in minimum lease payments, including the full stated residual guarantee or bargain purchase price. A non-bargain optional purchase and an unguaranteed lessor residual are excluded. If the implicit rate is calculated from fair value and the same cash flows, 100% follows from that calculation and is not independent fair-value evidence. Classification support is separate from opening measurement. Missing historical evidence does not change the saved classification."],
     });
   }
   if (loan.leaseEndingTerms) {

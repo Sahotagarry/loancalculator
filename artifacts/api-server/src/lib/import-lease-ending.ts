@@ -19,7 +19,7 @@ export function parseImportedLeaseEnding(value: unknown): LeaseEndingTerms | nul
   const issues = Array.isArray(raw.issues) ? raw.issues.filter((v): v is string => typeof v === "string")
     : typeof raw.issues === "string" ? [raw.issues] : [];
   for (const [key, field] of Object.entries(leaseEndingSchema.shape)) {
-    if (key === "status" || key === "issues" || key === "commencement" || key === "settlementMonthBasis") continue;
+    if (key === "status" || key === "issues" || key === "commencement" || key === "settlementMonthBasis" || key === "assetAmortizationPolicy") continue;
     const input = raw[key];
     // Optional nulls mean unavailable, not corruption of the whole evidence object.
     if (input == null) {

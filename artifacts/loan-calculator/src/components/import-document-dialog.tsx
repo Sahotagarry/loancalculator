@@ -37,7 +37,7 @@ function fmtText(v: string | null | undefined): string | null {
   return v == null || v === "" ? null : v;
 }
 
-function buildFieldRows(result: DocumentImportResult): FieldRow[] {
+export function buildFieldRows(result: DocumentImportResult): FieldRow[] {
   if (result.classification === "loan") {
     const f = result.loan;
     return [
@@ -89,9 +89,10 @@ function buildFieldRows(result: DocumentImportResult): FieldRow[] {
       { label: "Lessor", value: fmtText(f?.lessor) },
       { label: "Asset", value: fmtText(f?.assetDescription) },
       { label: "Asset type", value: fmtText(f?.assetType ?? null) },
-      { label: "Start date", value: fmtText(f?.startDate) },
-      ...(commencement?.basis === "inferred" ? [
-        { label: "Suggested start date — confirm", value: `${commencement.date}. ${commencement.source}` },
+      { label: !f?.startDate && commencement?.basis === "inferred" && !commencement.confirmed ? "Proposed start date — confirm" : "Start date",
+        value: fmtText(f?.startDate || commencement?.date || null) },
+      ...(!f?.startDate && commencement?.basis === "inferred" ? [
+        { label: "Start date basis", value: commencement.source },
       ] : []),
       { label: "Term", value: durationLabel(f?.termMonths, f?.termQuote) },
       { label: "Monthly payment", value: fmtMoney(f?.monthlyPayment) },
@@ -99,13 +100,14 @@ function buildFieldRows(result: DocumentImportResult): FieldRow[] {
       { label: "Interest rate", value: fmtNum(f?.interestRate, "%") },
       { label: "Fair value", value: fmtMoney(f?.fairValue) },
       { label: "Economic life", value: fmtNum(f?.economicLifeYears, " years") },
-      { label: "Buyout amount", value: fmtMoney(f?.buyoutAmount), optional: true },
+      ...(!ending || ["optional_purchase", "bargain_purchase"].includes(ending.kind)
+        ? [{ label: "Purchase option amount", value: fmtMoney(f?.buyoutAmount), optional: true }] : []),
       ...(ending?.suggestedTreatment ? [{
         label: "Best assessment — confirm",
         value: `Likely: ${leaseEndingTreatmentLabel(ending.suggestedTreatment.kind)}. ${ending.suggestedTreatment.reason}`,
       }] : []),
       { label: ending?.suggestedTreatment ? "Confirmed ending terms" : "Ending terms to review", value: ending ? leaseEndingTreatmentLabel(ending.kind) : null },
-      { label: "Ending value", value: fmtMoney(f?.leaseEndingTerms?.amount as number | null) },
+      { label: ending?.kind === "guaranteed_residual" ? "Guaranteed end-of-term value" : "End-of-term amount", value: fmtMoney(f?.leaseEndingTerms?.amount as number | null) },
       { label: "Ending evidence", value: fmtText(f?.leaseEndingTerms?.source as string | null) },
       { label: "Calculated basis", value: fmtText(f?.leaseEndingTerms?.explanation as string | null), optional: true },
       { label: "Ownership transfers", value: fmtBool(f?.transferOfOwnership) },

@@ -61,21 +61,30 @@ export function assessLeaseClassification(a: LeaseClassificationInput) {
     } catch { /* Missing evidence is not a failed test. */ }
   }
   const required = rental && ending?.status === "reviewed" && !ending.issues.length &&
-    ["mandatory_payment", "guaranteed_residual"].includes(ending.kind)
+    ["mandatory_payment", "guaranteed_residual", "bargain_purchase"].includes(ending.kind)
     ? (() => {
       const pv = rental.pv + ending.amount! / (1 + rate / 1200) ** ending.settlementMonth!;
       return { pv, percent: pv / fairValue * 100, meets: pv >= fairValue * 0.9 };
     })() : null;
+  // ASPE .03(r), .06(c): the formal comparison includes qualifying terminal
+  // obligations. Rent alone is supplementary, never a substitute for MLP.
+  const minimum = rental && ending?.status === "reviewed" && !ending.issues.length
+    ? required ?? (["none", "optional_purchase", "lessor_residual"].includes(ending.kind) ? rental : null)
+    : null;
+  const payments = minimum && ending ? {
+    rentals: leaseRentalPresentValue({ monthlyPayment: payment, firstPaymentAmount: first,
+      termMonths: months, downPayment: Number(a.downPayment ?? 0), paymentAtBeginning: a.paymentTiming === "beginning" }, 0),
+    ending: required ? ending.amount! : 0,
+  } : null;
   const lifePercent = Number(a.assetUsefulLife) > 0 && months > 0
     ? months / (Number(a.assetUsefulLife) * 12) * 100
     : Number(a.leaseTermPct) > 0 ? Number(a.leaseTermPct) : null;
   if (a.transferOfOwnership) reasons.push("Transfer of ownership");
   if (a.bargainPurchaseOption) reasons.push("Bargain purchase option — separate assessment basis");
   if (lifePercent != null && lifePercent >= 75) reasons.push("Lease term >= 75% of useful life");
-  if (rental?.meets) reasons.push("Rent alone meets the 90% guideline");
-  else if (required?.meets) reasons.push("Required payments meet the 90% guideline, although rent alone does not");
+  if (minimum?.meets) reasons.push("Minimum lease payments meet the 90% guideline");
   if (!reasons.length) {
-    if (!rental) issues.push("Rental comparison unavailable: verify rents, fair value, timing and discount rate.");
+    if (!minimum) issues.push("Minimum lease payment comparison unavailable: verify rentals, ending terms, fair value, timing and discount rate.");
     if (lifePercent == null) issues.push("Useful-life comparison unavailable: verify the term and economic life.");
     if (a.transferOfOwnership == null || a.bargainPurchaseOption == null) issues.push("Confirm ownership and bargain-purchase answers.");
     if (a.specializedAsset) issues.push("Specialized use requires a documented risks-and-rewards review; it is not a separate bright-line test.");
@@ -84,5 +93,5 @@ export function assessLeaseClassification(a: LeaseClassificationInput) {
   const rationale = status === "needs_review" ? `Needs review — ${[...new Set(issues)].join(" ")}`
     : status === "capital" ? `Under ASPE 3065, capital lease classification is supported by: ${reasons.join("; ")}.`
     : "Under ASPE 3065, the reviewed evidence supports operating lease classification; no capital classification basis is met.";
-  return { status, reasons, issues: [...new Set(issues)], rental, required, lifePercent, rationale } as const;
+  return { status, reasons, issues: [...new Set(issues)], rental, required, minimum, payments, lifePercent, rationale } as const;
 }

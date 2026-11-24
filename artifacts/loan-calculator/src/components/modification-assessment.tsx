@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { AgreementModificationAssessment, Loan } from "@workspace/api-client-react";
-import { assessAspe3856Modification, assessLeaseChange, calculateProspectiveModificationSchedule, type Aspe3856DatedCashFlow } from "@workspace/amortization";
+import { assessAspe3856Modification, assessLeaseChange, calculateProspectiveModificationSchedule, leaseAssetAmortizationYears, type Aspe3856DatedCashFlow } from "@workspace/amortization";
 import { AlertTriangle, CheckCircle2, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -85,7 +85,7 @@ export default function ModificationAssessment({
         Number(initialPredecessor.assetCost) * Math.max(0,
           (new Date(`${initialEffective}T00:00:00`).getFullYear() - new Date(initialPredecessor.startDate).getFullYear()) * 12 +
           (new Date(`${initialEffective}T00:00:00`).getMonth() - new Date(initialPredecessor.startDate).getMonth()),
-        ) / (initialPredecessor.assetUsefulLife * 12),
+        ) / (leaseAssetAmortizationYears(initialPredecessor) * 12),
       )
     : 0;
   const [predecessorId, setPredecessorId] = useState(initialPredecessorId ?? "");

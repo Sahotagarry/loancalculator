@@ -1,5 +1,6 @@
-import { savedLeaseConclusion, percentLabel, savedRentalAssessment, assessmentPaymentSaveValues, assessmentAnswersForReview, calculateOperatingLeaseAssessment } from "@/lib/lease-assessment-values";
-import { DEFAULT_LOAN_INTEREST_METHOD, interestMethods, isDaily } from "@workspace/amortization";
+import { savedLeaseConclusion, percentLabel, assessmentPaymentSaveValues, assessmentAnswersForReview, calculateOperatingLeaseAssessment } from "@/lib/lease-assessment-values";
+import { LeasePaymentTest } from "@/components/lease-payment-test";
+import { DEFAULT_LOAN_INTEREST_METHOD, interestMethods, isDaily, leaseAssetAmortizationYears } from "@workspace/amortization";
 import { useAuth } from "@/hooks/use-auth";
 import { useState, useMemo } from "react";
 import { useRoute } from "wouter";
@@ -630,12 +631,12 @@ export default function LoanDetail() {
 
     // Fall back to the tracked asset (e.g. capital lease right-of-use asset),
     // amortized straight-line from the inception date.
-    if (Number(loan.assetCost ?? 0) > 0 && (loan.assetUsefulLife ?? 0) > 0 && loan.startDate) {
+    if (Number(loan.assetCost ?? 0) > 0 && leaseAssetAmortizationYears(loan) > 0 && loan.startDate) {
       const rows = buildAssetDepreciationSchedule(
         Number(loan.assetCost),
         loan.startDate,
         "straight_line",
-        loan.assetUsefulLife,
+        leaseAssetAmortizationYears(loan),
         0,
         0,
         month,
@@ -646,7 +647,7 @@ export default function LoanDetail() {
           rows,
           reportFY,
           description: loan.assetDescription || "Amortized asset",
-          methodLabel: `Straight-line over ${loan.assetUsefulLife} years`,
+          methodLabel: `Straight-line over ${leaseAssetAmortizationYears(loan)} years${loan.leaseEndingTerms?.assetAmortizationPolicy === "aspe_3065" && !loan.transferOfOwnership && !loan.bargainPurchaseOption ? " (lease term)" : ""}`,
           cost: Number(loan.assetCost),
           salvage: 0,
           landCost: 0,
@@ -822,7 +823,6 @@ export default function LoanDetail() {
       </div>
     );
   }
-  const rentAssessment = savedRentalAssessment(loan);
   const leaseConclusion = savedLeaseConclusion(loan);
   const openPayments = (add: boolean) => {
     if (!canWrite) return;
@@ -1708,9 +1708,13 @@ export default function LoanDetail() {
                             <span className="font-semibold">{formatCurrency(Number(loan.assetCost))}</span>
                           </div>
                           <div className="flex justify-between">
-                            <span className="text-muted-foreground">Useful Life</span>
+                            <span className="text-muted-foreground">Asset economic life</span>
                             <span className="font-semibold">{loan.assetUsefulLife} years</span>
                           </div>
+                          {loan.leaseEndingTerms?.assetAmortizationPolicy === "aspe_3065" && <div className="flex justify-between">
+                            <span className="text-muted-foreground">Asset amortization period</span>
+                            <span className="font-semibold">{leaseAssetAmortizationYears(loan)} years</span>
+                          </div>}
                         </>
                       )}
                       {loan.rolledFromId && (
@@ -1731,10 +1735,7 @@ export default function LoanDetail() {
                       <CardContent className="space-y-3">
                         <p className="text-sm">{leaseConclusion.rationale}</p>
                         {loan.capitalLeaseRationale && <LeaseReviewDetails title="Previous assessment explanation"><p className="text-xs text-muted-foreground">{loan.capitalLeaseRationale}</p></LeaseReviewDetails>}
-                        {rentAssessment && rentAssessment.meets && <p className="text-sm">Rent alone: <strong>{percentLabel(rentAssessment.percent)}% of fair value</strong> — meets the 90% guideline without relying on an ending payment.</p>}
-                        {leaseConclusion.required && (rentAssessment?.meets
-                          ? <LeaseReviewDetails title="Additional required-payment support"><p className="text-sm">{percentLabel(leaseConclusion.required.percent)}% of fair value, including the reviewed {loan.leaseEndingTerms?.kind === "guaranteed_residual" ? "shortfall guarantee — not a purchase" : "mandatory payment"}. Rent alone already meets the guideline; this does not assume buyout cash.</p></LeaseReviewDetails>
-                          : <p className="text-sm">Required-payment support: {percentLabel(leaseConclusion.required.percent)}% of fair value, including the reviewed {loan.leaseEndingTerms?.kind === "guaranteed_residual" ? "shortfall guarantee — not a purchase" : "mandatory payment"}. Rent alone: {rentAssessment ? `${percentLabel(rentAssessment.percent)}%` : "Unavailable"}.</p>)}
+                        <LeasePaymentTest conclusion={leaseConclusion} />
                         <div className="space-y-1 pt-2">
                           <div className="flex justify-between text-sm">
                             <span className="text-muted-foreground">Transfer of Ownership</span>
@@ -1749,8 +1750,8 @@ export default function LoanDetail() {
                             <span>{leaseConclusion.lifePercent == null ? "Unavailable" : `${percentLabel(leaseConclusion.lifePercent)}%`}</span>
                           </div>
                           <div className="flex justify-between text-sm">
-                            <span className="text-muted-foreground">Rent as % of fair value</span>
-                            <span>{rentAssessment ? `${percentLabel(rentAssessment.percent)}%` : "Not calculated"}</span>
+                            <span className="text-muted-foreground">PV of minimum lease payments / fair value</span>
+                            <span>{leaseConclusion.minimum ? `${percentLabel(leaseConclusion.minimum.percent)}%` : "Needs review"}</span>
                           </div>
                           {loan.fairValue && (
                             <div className="flex justify-between text-sm">
@@ -2113,8 +2114,8 @@ export default function LoanDetail() {
                         <span>{loan.leaseTermPct}%</span>
                       </div>
                       <div className="flex justify-between text-sm">
-                        <span className="text-muted-foreground">Rent as % of fair value</span>
-                        <span>{rentAssessment ? `${percentLabel(rentAssessment.percent)}%` : "Not calculated"}</span>
+                        <span className="text-muted-foreground">PV of minimum lease payments / fair value</span>
+                        <span>{leaseConclusion.minimum ? `${percentLabel(leaseConclusion.minimum.percent)}%` : "Needs review"}</span>
                       </div>
                       {loan.fairValue && (
                         <div className="flex justify-between text-sm">
@@ -2180,9 +2181,13 @@ export default function LoanDetail() {
                           <span className="font-semibold">{formatCurrency(Number(loan.assetCost))}</span>
                         </div>
                         <div className="flex justify-between">
-                          <span className="text-muted-foreground">Useful Life</span>
+                          <span className="text-muted-foreground">Asset economic life</span>
                           <span className="font-semibold">{loan.assetUsefulLife} years</span>
                         </div>
+                        {loan.leaseEndingTerms?.assetAmortizationPolicy === "aspe_3065" && <div className="flex justify-between">
+                          <span className="text-muted-foreground">Asset amortization period</span>
+                          <span className="font-semibold">{leaseAssetAmortizationYears(loan)} years</span>
+                        </div>}
                       </>
                     )}
                   </CardContent>

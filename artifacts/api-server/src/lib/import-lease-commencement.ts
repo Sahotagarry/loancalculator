@@ -18,7 +18,7 @@ export function suggestLeaseCommencement(document: string, expiry: string | null
   if (dates.size === 1) {
     const [date, source] = [...dates][0];
     return { date, basis: "inferred", confirmed: false,
-      source: `Agreement date: “${source}”. This is not a confirmed delivery date. Check the first invoice or delivery record.${expiry ? ` The agreement ends ${expiry}; check that the dates and rental period agree.` : ""}` };
+      source: `Agreement date: “${source}”. Used as the proposed start date; not a confirmed delivery date. Confirm or adjust it using the first payment, invoice or other available records.${expiry ? ` The agreement ends ${expiry}; check that the dates and rental period agree.` : ""}` };
   }
   return expiry && term ? inferLeaseCommencement(expiry, term) : null;
 }

@@ -15,6 +15,8 @@ export interface LeaseEndingTerms {
   settlementMonth: number | null;
   /** Working lease-end timing follows term edits; a separate reviewer timing does not. */
   settlementMonthBasis?: "lease_end" | "separate";
+  /** Opt-in on a newly completed assessment; absent preserves historical depreciation. */
+  assetAmortizationPolicy?: "aspe_3065";
   issues: string[];
   status: "draft" | "reviewed";
   explanation?: string;
@@ -35,6 +37,19 @@ export interface LeaseEndingTerms {
   grossFirstPaymentAmount?: number;
   firstPaymentComponentsApplied?: boolean;
   taxRate?: number;
+}
+
+/** .17: ownership transfer/BPO uses economic life; otherwise use the lease term.
+ * Legacy agreements retain their saved period until deliberately reassessed. */
+export function leaseAssetAmortizationYears(loan: {
+  isCapitalLease?: boolean | null; transferOfOwnership?: boolean | null;
+  bargainPurchaseOption?: boolean | null; assetUsefulLife?: number | null;
+  termMonths?: number | null; termYears?: number | null; leaseEndingTerms?: unknown;
+}): number {
+  const ending = loan.leaseEndingTerms as LeaseEndingTerms | undefined | null;
+  if (!loan.isCapitalLease || ending?.assetAmortizationPolicy !== "aspe_3065" ||
+      loan.transferOfOwnership || loan.bargainPurchaseOption) return loan.assetUsefulLife ?? 0;
+  return (loan.termMonths ?? (loan.termYears ?? 0) * 12) / 12;
 }
 
 /** Only draft/default timing follows a term correction. Preserve separately
@@ -102,7 +117,7 @@ export function normalizeLeaseEnding(input: LeaseEndingTerms, termMonths: number
       issue("Reserve periods must cover the full term once, with valid monthly amounts not exceeding cost.");
     } else {
       result.amount = cents(input.baseAmount! - total);
-      result.explanation = `${input.baseAmount} − reserves ${cents(total)} = ${result.amount}. The table alone does not establish a guarantee.`;
+      result.explanation = `${input.baseAmount} − reserves ${cents(total)} = ${result.amount}.${input.kind === "unresolved" ? " Confirm the ending obligation from the agreement or a documented assessment." : ""}`;
     }
   }
   if (!nonnegative(result.amount)) issue("Ending amount is missing or invalid.");

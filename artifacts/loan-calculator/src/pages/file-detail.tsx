@@ -501,7 +501,7 @@ export default function FileDetail() {
     setImportedLeaseMeta({
       name: f?.name ?? "",
       lessor: f?.lessor ?? null,
-      startDate: f?.startDate ?? "",
+      startDate: f?.startDate || (f?.leaseEndingTerms as { commencement?: { date?: string } } | undefined)?.commencement?.date || "",
     });
     setImportedNotes(f?.fieldNotes ?? null);
     setImportedEstimates(f?.estimates ?? null);

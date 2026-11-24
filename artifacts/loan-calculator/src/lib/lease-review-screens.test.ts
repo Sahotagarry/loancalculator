@@ -38,15 +38,16 @@ describe("plain-language lease review components", () => {
     expect(source).toContain("onClick={() => setStep(1)}");
     expect(source).toContain('aria-controls={`criterion-guide-${i}`}');
   });
-  it("prioritizes passing rent and keeps the extra required-payment percentage in details", () => {
+  it("uses minimum lease payments as the formal test, with rent-only evidence supplementary", () => {
     const conclusion = assessmentConclusion({ ...answers, fairValue: 89949.50 });
     expect(conclusion.rental?.percent).toBeCloseTo(92.6, 1);
     expect(conclusion.required?.percent).toBeCloseTo(100, 1);
-    expect(conclusion.reasons).toContain("Rent alone meets the 90% guideline");
+    expect(conclusion.minimum?.percent).toBeCloseTo(100, 1);
+    expect(conclusion.reasons).toContain("Minimum lease payments meet the 90% guideline");
     const source = readFileSync(new URL("../components/capital-lease-assessment.tsx", import.meta.url), "utf8");
     const assessment = source.slice(source.indexOf("{/* Step 6:"), source.indexOf("{/* Step 7:"));
-    expect(assessment).toContain("(!rent || rent.percent < 90)");
-    expect(assessment.indexOf("Additional required-payment support")).toBeGreaterThan(assessment.indexOf('<LeaseReviewDetails title="Classification tests and evidence"'));
+    expect(assessment).toContain("<LeasePaymentTest conclusion={conclusion}");
+    expect(assessment.indexOf("Supplementary rent-only comparison")).toBeGreaterThan(assessment.indexOf('<LeaseReviewDetails title="Classification tests and evidence"'));
   });
   it("counts 48 rentals separately from the unpaid settlement accrual without assuming a buyout", () => {
     const result = calculateLeaseSchedule({
