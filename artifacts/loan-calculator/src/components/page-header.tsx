@@ -18,6 +18,10 @@ interface PageHeaderProps {
   title: ReactNode;
   meta?: ReactNode;
   actions?: ReactNode;
+  subtitle?: ReactNode;
+  /** Keep a wide action group out of the identity row. */
+  actionLayout?: "inline" | "toolbar";
+  toolbarMeta?: ReactNode;
 }
 
 const ROLE_LABELS: Record<string, string> = {
@@ -27,8 +31,9 @@ const ROLE_LABELS: Record<string, string> = {
   read_only: "Read Only",
 };
 
-export function PageHeader({ backHref, breadcrumb, title, meta, actions }: PageHeaderProps) {
+export function PageHeader({ backHref, breadcrumb, title, meta, actions, subtitle, actionLayout = "inline", toolbarMeta }: PageHeaderProps) {
   const { user, isDevIdentity } = useAuth();
+  const toolbar = actionLayout === "toolbar";
   return (
     <header className="dark sticky top-0 z-40 border-b border-[#3a3a3a] bg-[#262626] text-foreground">
       <div className="max-w-6xl mx-auto px-4 md:px-8 py-2.5 flex flex-wrap items-center gap-x-3 gap-y-2">
@@ -41,18 +46,21 @@ export function PageHeader({ backHref, breadcrumb, title, meta, actions }: PageH
         )}
         <div className="min-w-0 flex-1 basis-52">
           {breadcrumb && (
-            <nav className="flex items-center gap-1.5 text-xs text-muted-foreground overflow-hidden whitespace-nowrap">
+            <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-xs text-muted-foreground overflow-hidden whitespace-nowrap">
               {breadcrumb}
             </nav>
           )}
           <div className="flex items-baseline gap-x-3 gap-y-0.5 flex-wrap">
-            <h1 className="text-lg md:text-xl font-bold tracking-tight text-foreground font-display truncate max-w-full">
+            <h1 className={`${toolbar ? "text-xl md:text-2xl" : "text-lg md:text-xl"} font-bold tracking-tight text-foreground font-display truncate max-w-full`} title={typeof title === "string" ? title : undefined}>
               {title}
             </h1>
             {meta}
           </div>
+          {subtitle && <div className="text-sm text-muted-foreground mt-0.5 break-words" data-testid="page-header-subtitle">{subtitle}</div>}
         </div>
-        <div className="flex w-full flex-col items-end gap-2.5 sm:ml-auto sm:w-auto sm:flex-shrink-0 min-w-0">
+        <div className={toolbar
+          ? "flex items-center gap-3 ml-auto shrink-0"
+          : "flex w-full flex-col items-end gap-2.5 sm:ml-auto sm:w-auto sm:flex-shrink-0 min-w-0"}>
           <div className="hidden sm:flex items-center gap-2 flex-shrink-0">
             <img
               src={logoWhite}
@@ -76,7 +84,7 @@ export function PageHeader({ backHref, breadcrumb, title, meta, actions }: PageH
             </Tooltip>
           </div>
           <div className="flex w-full flex-wrap items-center gap-2 justify-end min-w-0 sm:w-auto">
-            {actions}
+            {!toolbar && actions}
             <HelpDialog />
             {user && (
               <div className="flex items-center gap-2 min-w-0">
@@ -119,6 +127,12 @@ export function PageHeader({ backHref, breadcrumb, title, meta, actions }: PageH
             )}
           </div>
         </div>
+        {toolbar && (actions || toolbarMeta) && (
+          <div className="w-full flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t border-white/10 pt-2" data-testid="page-header-toolbar">
+            <div className="min-w-0">{actions}</div>
+            {toolbarMeta && <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">{toolbarMeta}</div>}
+          </div>
+        )}
       </div>
     </header>
   );

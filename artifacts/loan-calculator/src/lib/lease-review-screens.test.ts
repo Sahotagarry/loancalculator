@@ -38,7 +38,7 @@ describe("plain-language lease review components", () => {
     expect(source).toContain("onClick={() => setStep(1)}");
     expect(source).toContain('aria-controls={`criterion-guide-${i}`}');
   });
-  it("uses minimum lease payments as the formal test, with rent-only evidence supplementary", () => {
+  it("uses minimum lease payments as the formal test without a competing rent-only assessment result", () => {
     const conclusion = assessmentConclusion({ ...answers, fairValue: 89949.50 });
     expect(conclusion.rental?.percent).toBeCloseTo(92.6, 1);
     expect(conclusion.required?.percent).toBeCloseTo(100, 1);
@@ -47,7 +47,11 @@ describe("plain-language lease review components", () => {
     const source = readFileSync(new URL("../components/capital-lease-assessment.tsx", import.meta.url), "utf8");
     const assessment = source.slice(source.indexOf("{/* Step 6:"), source.indexOf("{/* Step 7:"));
     expect(assessment).toContain("<LeasePaymentTest conclusion={conclusion}");
-    expect(assessment.indexOf("Supplementary rent-only comparison")).toBeGreaterThan(assessment.indexOf('<LeaseReviewDetails title="Classification tests and evidence"'));
+    expect(assessment).not.toContain("Supplementary rent-only comparison");
+    expect(assessment).toContain("paymentTest.draftComparison");
+    expect(assessment).toContain("Inputs needed — see checklist");
+    expect(source).not.toContain("importedEstimates?.interestRate");
+    expect(source).not.toContain("reasoning={importedEstimates.reasoning}");
   });
   it("counts 48 rentals separately from the unpaid settlement accrual without assuming a buyout", () => {
     const result = calculateLeaseSchedule({
@@ -125,7 +129,8 @@ describe("plain-language lease review components", () => {
     const html = renderToStaticMarkup(createElement(LeaseEndingFields, { value: draft.leaseEndingTerms, months: 48, onChange: () => {} }));
     expect(html).toContain('role="alert"');
     expect(html).toContain("Missing return appendix");
-    expect(html.indexOf("Resolve before approval")).toBeLessThan(html.indexOf("<details"));
+    expect(html.indexOf("Before you can confirm this review")).toBeGreaterThan(-1);
+    expect(html.indexOf("Before you can confirm this review")).toBeLessThan(html.indexOf("<details"));
     expect(html).toContain('open=""');
     expect(html).toContain("Evidence still missing or conflicting");
   });

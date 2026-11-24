@@ -60,22 +60,51 @@ export function assessLeaseClassification(a: LeaseClassificationInput) {
       rental = { pv, percent, meets: percent >= 90 };
     } catch { /* Missing evidence is not a failed test. */ }
   }
-  const required = rental && ending?.status === "reviewed" && !ending.issues.length &&
-    ["mandatory_payment", "guaranteed_residual", "bargain_purchase"].includes(ending.kind)
-    ? (() => {
-      const pv = rental.pv + ending.amount! / (1 + rate / 1200) ** ending.settlementMonth!;
-      return { pv, percent: pv / fairValue * 100, meets: pv >= fairValue * 0.9 };
-    })() : null;
+  // Show the arithmetic while staff review the evidence, without treating that
+  // draft result as an approved classification basis.
+  const comparisonInputsMissing: string[] = [];
+  if (!Number.isFinite(fairValue) || fairValue <= 0) comparisonInputsMissing.push("Enter the asset's fair value.");
+  if (!Number.isFinite(payment) || payment <= 0) comparisonInputsMissing.push("Enter a positive monthly rental, excluding the applicable taxes and services.");
+  if (!Number.isInteger(months) || months <= 0) comparisonInputsMissing.push("Enter the lease term in whole months.");
+  if (!Number.isFinite(rate) || rate < 0 ||
+      (rate === 0 && ![ending?.implicitRate, ending?.incrementalBorrowingRate, ending?.discountRate].includes(0))) {
+    comparisonInputsMissing.push("Calculate the implicit rate or enter a supported discount rate.");
+  }
+  if (!ending || ending.version !== 1 || !["mandatory_payment", "guaranteed_residual", "bargain_purchase", "none", "optional_purchase", "lessor_residual"].includes(ending.kind)) {
+    comparisonInputsMissing.push("Choose what the client must do at the end of the lease.");
+  }
+  if (ending && (ending.amount == null || !Number.isFinite(ending.amount) || ending.amount < 0 || ending.kind === "none" && ending.amount !== 0)) {
+    comparisonInputsMissing.push("Enter or resolve the ending-value calculation; use an explicit zero if there is no ending amount.");
+  }
+  if (ending && (!Number.isInteger(ending.settlementMonth) || ending.settlementMonth! < months)) {
+    comparisonInputsMissing.push("Confirm when the ending amount is settled, at or after the final rental.");
+  }
+  if (ending && (ending.servicesMonthly != null && (!Number.isFinite(ending.servicesMonthly) || ending.servicesMonthly < 0) ||
+      ending.taxRate != null && (!Number.isFinite(ending.taxRate) || ending.taxRate < 0) ||
+      ending.taxTreatment === "recoverable" && !(Number(ending.taxRate) > 0))) {
+    comparisonInputsMissing.push("Correct the tax rate and monthly service amount.");
+  }
+  if (!rental && !comparisonInputsMissing.length) {
+    comparisonInputsMissing.push("Check payment timing, the first rental and any upfront payment; these inputs could not produce a rental present value.");
+  }
+  const hasRequiredEnding = !!ending && ["mandatory_payment", "guaranteed_residual", "bargain_purchase"].includes(ending.kind);
+  const comparison = rental && ending && !comparisonInputsMissing.length ? (() => {
+    const pv = rental.pv + (hasRequiredEnding ? ending.amount! / (1 + rate / 1200) ** ending.settlementMonth! : 0);
+    return { pv, percent: pv / fairValue * 100, meets: pv >= fairValue * 0.9 };
+  })() : null;
+  const reviewed = ending?.status === "reviewed" && !ending.issues.length;
+  const required = reviewed && hasRequiredEnding ? comparison : null;
   // ASPE .03(r), .06(c): the formal comparison includes qualifying terminal
   // obligations. Rent alone is supplementary, never a substitute for MLP.
-  const minimum = rental && ending?.status === "reviewed" && !ending.issues.length
-    ? required ?? (["none", "optional_purchase", "lessor_residual"].includes(ending.kind) ? rental : null)
-    : null;
-  const payments = minimum && ending ? {
+  const minimum = reviewed ? comparison : null;
+  const comparisonPayments = comparison && ending ? {
     rentals: leaseRentalPresentValue({ monthlyPayment: payment, firstPaymentAmount: first,
       termMonths: months, downPayment: Number(a.downPayment ?? 0), paymentAtBeginning: a.paymentTiming === "beginning" }, 0),
-    ending: required ? ending.amount! : 0,
+    ending: hasRequiredEnding ? ending.amount! : 0,
   } : null;
+  const payments = minimum ? comparisonPayments : null;
+  const draftComparison = !minimum && comparison && comparisonPayments
+    ? { minimum: comparison, payments: comparisonPayments } : null;
   const lifePercent = Number(a.assetUsefulLife) > 0 && months > 0
     ? months / (Number(a.assetUsefulLife) * 12) * 100
     : Number(a.leaseTermPct) > 0 ? Number(a.leaseTermPct) : null;
@@ -93,5 +122,6 @@ export function assessLeaseClassification(a: LeaseClassificationInput) {
   const rationale = status === "needs_review" ? `Needs review — ${[...new Set(issues)].join(" ")}`
     : status === "capital" ? `Under ASPE 3065, capital lease classification is supported by: ${reasons.join("; ")}.`
     : "Under ASPE 3065, the reviewed evidence supports operating lease classification; no capital classification basis is met.";
-  return { status, reasons, issues: [...new Set(issues)], rental, required, minimum, payments, lifePercent, rationale } as const;
+  return { status, reasons, issues: [...new Set(issues)], rental, required, minimum, payments,
+    draftComparison, comparisonInputsMissing, lifePercent, rationale } as const;
 }

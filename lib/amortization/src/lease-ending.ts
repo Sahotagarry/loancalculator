@@ -71,24 +71,47 @@ export function updateLeaseSettlementForTerm(value: LeaseEndingTerms, previousMo
 const nonnegative = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n) && n >= 0;
 const cents = (n: number) => Math.round(n * 100) / 100;
 
+// Recompute machine-generated validation messages after edits. Preserve all
+// documentary/reviewer concerns; fixing a field must not require staff to
+// manually delete an obsolete machine warning from the evidence textbox.
+const validationMessages = {
+  version: "Unsupported ending-term version.",
+  term: "A positive whole-month lease term is required.",
+  source: "Source clauses or reviewer evidence are required.",
+  kind: "Ending obligation remains unresolved.",
+  suggestion: "Confirm the suggested ending treatment or choose a different treatment.",
+  unsupported: "Formula requires professional review; no amount was guessed.",
+  sum: "A sum requires documented, non-negative amounts in the same currency, without alternative or duplicated settlements.",
+  percentage: "Percentage requires a supported base and a percentage from 0 to 100.",
+  reserve: "Reserve periods must cover the full term once, with valid monthly amounts not exceeding cost.",
+  amount: "Ending amount is missing or invalid.",
+  zero: "No obligation requires an explicitly supported zero amount.",
+  settlement: "Confirm settlement timing at or after the final rental period.",
+  commencement: "Confirm inferred commencement against delivery or commencement evidence.",
+  tax: "Resolve recoverable taxes, non-recoverable taxes and services separately.",
+  services: "Service amount must be non-negative.",
+  deposit: "Refundable deposit must be non-negative.",
+} as const;
+const machineValidationMessages = new Set<string>(Object.values(validationMessages));
+
 /** AI supplies operands and operative clauses; only this function supplies arithmetic. */
 export function normalizeLeaseEnding(input: LeaseEndingTerms, termMonths: number): LeaseEndingTerms {
-  const result: LeaseEndingTerms = { ...input, issues: [...(input.issues ?? [])] };
+  const result: LeaseEndingTerms = { ...input, issues: (input.issues ?? []).filter(message => !machineValidationMessages.has(message)) };
   const issue = (message: string) => { if (!result.issues.includes(message)) result.issues.push(message); };
-  if (input.version !== 1) issue("Unsupported ending-term version.");
-  if (!Number.isInteger(termMonths) || termMonths <= 0) issue("A positive whole-month lease term is required.");
-  if (!input.source?.trim()) issue("Source clauses or reviewer evidence are required.");
-  if (input.kind === "unresolved") issue("Ending obligation remains unresolved.");
+  if (input.version !== 1) issue(validationMessages.version);
+  if (!Number.isInteger(termMonths) || termMonths <= 0) issue(validationMessages.term);
+  if (!input.source?.trim()) issue(validationMessages.source);
+  if (input.kind === "unresolved") issue(validationMessages.kind);
   if (input.suggestedTreatment && input.kind === input.suggestedTreatment.kind && !input.suggestedTreatment.accepted) {
-    issue("Confirm the suggested ending treatment or choose a different treatment.");
+    issue(validationMessages.suggestion);
   }
   if (input.basis === "unsupported") {
     result.amount = null;
-    issue("Formula requires professional review; no amount was guessed.");
+    issue(validationMessages.unsupported);
   } else if (input.basis === "sum") {
     if (!input.sumAmounts?.length || !input.sumAmounts.every(nonnegative)) {
       result.amount = null;
-      issue("A sum requires documented, non-negative amounts in the same currency, without alternative or duplicated settlements.");
+      issue(validationMessages.sum);
     } else {
       result.amount = cents(input.sumAmounts.reduce((sum, n) => sum + n, 0));
       result.explanation = `${input.sumAmounts.join(" + ")} = ${result.amount}`;
@@ -96,7 +119,7 @@ export function normalizeLeaseEnding(input: LeaseEndingTerms, termMonths: number
   } else if (input.basis === "percentage") {
     if (!nonnegative(input.baseAmount) || !nonnegative(input.percentage) || input.percentage > 100) {
       result.amount = null;
-      issue("Percentage requires a supported base and a percentage from 0 to 100.");
+      issue(validationMessages.percentage);
     } else {
       result.amount = cents(input.baseAmount * input.percentage / 100);
       result.explanation = `${input.baseAmount} × ${input.percentage}% = ${result.amount}`;
@@ -114,19 +137,19 @@ export function normalizeLeaseEnding(input: LeaseEndingTerms, termMonths: number
     }
     if (!valid || next !== termMonths + 1 || total > (input.baseAmount ?? 0)) {
       result.amount = null;
-      issue("Reserve periods must cover the full term once, with valid monthly amounts not exceeding cost.");
+      issue(validationMessages.reserve);
     } else {
       result.amount = cents(input.baseAmount! - total);
       result.explanation = `${input.baseAmount} − reserves ${cents(total)} = ${result.amount}.${input.kind === "unresolved" ? " Confirm the ending obligation from the agreement or a documented assessment." : ""}`;
     }
   }
-  if (!nonnegative(result.amount)) issue("Ending amount is missing or invalid.");
-  if (input.kind === "none" && result.amount !== 0) issue("No obligation requires an explicitly supported zero amount.");
-  if (!Number.isInteger(input.settlementMonth) || input.settlementMonth! < termMonths) issue("Confirm settlement timing at or after the final rental period.");
-  if (input.commencement?.basis === "inferred" && !input.commencement.confirmed) issue("Confirm inferred commencement against delivery or commencement evidence.");
-  if (input.taxTreatment === "unresolved") issue("Resolve recoverable taxes, non-recoverable taxes and services separately.");
-  if (input.servicesMonthly != null && !nonnegative(input.servicesMonthly)) issue("Service amount must be non-negative.");
-  if (input.refundableDeposit != null && !nonnegative(input.refundableDeposit)) issue("Refundable deposit must be non-negative.");
+  if (!nonnegative(result.amount)) issue(validationMessages.amount);
+  if (input.kind === "none" && result.amount !== 0) issue(validationMessages.zero);
+  if (!Number.isInteger(input.settlementMonth) || input.settlementMonth! < termMonths) issue(validationMessages.settlement);
+  if (input.commencement?.basis === "inferred" && !input.commencement.confirmed) issue(validationMessages.commencement);
+  if (input.taxTreatment === "unresolved") issue(validationMessages.tax);
+  if (input.servicesMonthly != null && !nonnegative(input.servicesMonthly)) issue(validationMessages.services);
+  if (input.refundableDeposit != null && !nonnegative(input.refundableDeposit)) issue(validationMessages.deposit);
   if (result.issues.length) result.status = "draft";
   return result;
 }

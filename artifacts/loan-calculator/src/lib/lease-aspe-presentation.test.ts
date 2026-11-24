@@ -5,12 +5,46 @@ import { assessLeaseClassification, type LeaseEndingTerms } from "@workspace/amo
 import type { DocumentImportResult } from "@workspace/api-client-react";
 import { LeasePaymentTest } from "../components/lease-payment-test";
 import { buildFieldRows } from "../components/import-document-dialog";
+import { LeaseEndingFields } from "../components/lease-ending-fields";
 
 const ending: LeaseEndingTerms = { version: 1, kind: "guaranteed_residual", amount: 13322,
   basis: "stated", source: "Client covers sale shortfall.", settlementMonth: 48, issues: [], status: "reviewed",
   commencement: { date: "2026-04-01", basis: "inferred", confirmed: false, source: "Based on the agreement date—confirm." } };
 
 describe("clear ASPE lease presentation", () => {
+  it("shows a draft full-payment comparison and concrete actions, never a rent-only substitute", () => {
+    const conclusion = assessLeaseClassification({ monthlyPayment: 3117.7, termMonths: 48, fairValue: 139994, paymentTiming: "beginning",
+      leaseEndingTerms: { ...ending, implicitRate: 7.3687834794, status: "draft", taxTreatment: "unresolved" } });
+    const html = renderToStaticMarkup(createElement(LeasePaymentTest, { conclusion }));
+    expect(html).toContain("90% test (draft)");
+    expect(html).toContain("100.0% of fair value");
+    expect(html).toContain("13,322");
+    expect(html).toContain("would meet");
+    expect(html).toContain("not yet approved");
+    expect(html).toContain("Confirm or correct the proposed start date");
+    expect(html).toContain("Confirm whether the rental includes taxes or services");
+    expect(html).not.toContain("rent-only");
+    expect(conclusion.minimum).toBeNull();
+    expect(conclusion.status).toBe("needs_review");
+  });
+  it("lists the actual missing values rather than displaying Unavailable", () => {
+    const conclusion = assessLeaseClassification({ termMonths: 48, fairValue: 0, monthlyPayment: 3117.7,
+      leaseEndingTerms: { ...ending, kind: "unresolved", amount: null, status: "draft" } });
+    const html = renderToStaticMarkup(createElement(LeasePaymentTest, { conclusion }));
+    expect(html).toContain("Enter the asset");
+    expect(html).toContain("Calculate the implicit rate");
+    expect(html).toContain("Choose what the client must do");
+    expect(html).not.toContain("Unavailable");
+    expect(html).not.toContain("0.0%");
+  });
+  it("explains why the review confirmation cannot yet be checked", () => {
+    const html = renderToStaticMarkup(createElement(LeaseEndingFields, {
+      value: { ...ending, status: "draft", taxTreatment: "unresolved" }, months: 48, onChange: () => {},
+    }));
+    expect(html).toContain("Before you can confirm this review");
+    expect(html).toContain("Confirm or correct the proposed start date");
+    expect(html.match(/<input[^>]*name="leaseEndingReviewed"[^>]*>/)?.[0]).toContain('disabled=""');
+  });
   it("distinguishes a source-cost fair-value proposal from a separately supplied fair value", () => {
     const result = { classification: "lease", lease: { fairValue: 139994,
       fieldNotes: { fairValue: "Proposed fair value based on stated asset cost: Agreed Cost of Vehicle $139994.00. Confirm." } } } as DocumentImportResult;

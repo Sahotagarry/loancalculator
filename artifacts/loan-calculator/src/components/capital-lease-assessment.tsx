@@ -847,7 +847,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                                 <EstimateSuggestion
                                   label="Economic life"
                                   display={`${importedEstimates.economicLifeYears} years`}
-                                  reasoning={importedEstimates.reasoning}
+                                  reasoning="A useful-life suggestion only. Check the asset's expected working life and the client's circumstances."
                                   applied={answers.economicLife === importedEstimates.economicLifeYears}
                                   onApply={() => updateNumber("economicLife", importedEstimates.economicLifeYears as number)}
                                 />
@@ -1003,7 +1003,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                                 <EstimateSuggestion
                                   label="Fair value"
                                   display={`$${importedEstimates.fairValue.toLocaleString()}`}
-                                  reasoning={importedEstimates.reasoning}
+                                  reasoning="A fair-value suggestion only. Verify against the asset's cash price, comparable sales or a valuation."
                                   applied={answers.fairValue === importedEstimates.fairValue}
                                   onApply={() => updateNumber("fairValue", importedEstimates.fairValue as number)}
                                 />
@@ -1068,15 +1068,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                                 onChange={(e) => updateNumber("interestRate", Number(e.target.value))}
                                 placeholder="e.g. 6.5"
                               />
-                              {importedEstimates?.interestRate != null && importedEstimates.interestRate > 0 && (
-                                <EstimateSuggestion
-                                  label="Discount rate"
-                                  display={`${importedEstimates.interestRate}% annual`}
-                                  reasoning={importedEstimates.reasoning}
-                                  applied={answers.interestRate === importedEstimates.interestRate}
-                                  onApply={() => updateNumber("interestRate", importedEstimates.interestRate as number)}
-                                />
-                              )}
+                              <p className="text-xs text-muted-foreground">Use a supported rate from the agreement, calculate the implicit rate below, or enter the client's supported borrowing rate in the review fields. A general AI market-rate guess is not used.</p>
                               {/* ASPE 3856 low-rate warning inside wizard */}
                               {answers.interestRate > 0 && answers.interestRate < 3 && (
                                 <div className={`rounded-lg border p-3 flex items-start gap-2 ${answers.interestRate < 1 ? "bg-red-50 border-red-200" : "bg-amber-50 border-amber-200"}`}>
@@ -1159,7 +1151,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                           </div>
                         )}
                         <div className="flex items-center gap-2 p-3 rounded-lg bg-muted/30 text-sm">
-                          {c.key === "pvPctFairValue" && !paymentTest.minimum ? <span>Review the rental terms, ending amount, fair value and discount rate to run this test.</span> : (answerVal as number) >= (c.threshold ?? 0) ? (
+                          {c.key === "pvPctFairValue" && !paymentTest.minimum ? <span>{paymentTest.draftComparison ? "Draft calculation shown above. Confirm the supporting inputs before this criterion can be approved." : "Complete the input checklist above to calculate this test."}</span> : (answerVal as number) >= (c.threshold ?? 0) ? (
                             <>
                               <CheckCircle2 className="h-4 w-4 text-emerald-600" />
                               <span>This criterion is <strong>met</strong> ({displayVal}{c.unit}{" >= "}{c.threshold}{c.unit})</span>
@@ -1202,7 +1194,6 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
             <LeasePaymentTest conclusion={conclusion} />
 
             <LeaseReviewDetails title="Classification tests and evidence" needsAttention={conclusion.status === "needs_review"}>
-              {rent && <p className="text-xs">Supplementary rent-only comparison: {percentLabel(rent.percent)}% of fair value. This excludes ending amounts and is not the formal minimum lease payments test.</p>}
               {CRITERIA.map((c) => {
                 let met = false;
                 if (c.isYesNo) {
@@ -1223,7 +1214,11 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                     <span className={met ? "text-emerald-600 font-medium" : "text-muted-foreground"}>
                       {c.isYesNo
                         ? (answers[c.key] ? "Yes" : "No")
-                        : (c.key === "pvPctFairValue" && !paymentTest.minimum || c.key === "leaseTermPct" && conclusion.lifePercent == null ? "Unavailable" : `${c.key === "pvPctFairValue" ? percentLabel(answers.pvPctFairValue) : answers[c.key]}${c.unit}`)}
+                        : (c.key === "pvPctFairValue"
+                          ? paymentTest.minimum ? `${percentLabel(paymentTest.minimum.percent)}%`
+                            : paymentTest.draftComparison ? `${percentLabel(paymentTest.draftComparison.minimum.percent)}% — draft, confirm below`
+                            : "Inputs needed — see checklist"
+                          : c.key === "leaseTermPct" && conclusion.lifePercent == null ? "Enter term and useful life" : `${answers[c.key]}${c.unit}`)}
                     </span>
                   </div>
                 );

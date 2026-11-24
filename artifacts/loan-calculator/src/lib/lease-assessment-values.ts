@@ -86,6 +86,13 @@ export function calculateAssessmentImplicitRate(a: AssessmentAnswers): number | 
 
 export const percentLabel = (value: number) => (value < 90 && value >= 89.95) ? "<90" : value.toFixed(1);
 
+export function leaseReviewIssueLabel(issue: string): string {
+  if (issue === "Confirm inferred commencement against delivery or commencement evidence.") return "Confirm or correct the proposed start date below.";
+  if (issue === "Resolve recoverable taxes, non-recoverable taxes and services separately.") return "Confirm whether the rental includes taxes or services in the review fields below.";
+  if (issue === "Review the ending treatment, amount and supporting clauses.") return "Check the ending amount and clause, then tick the review confirmation below.";
+  return issue;
+}
+
 export function assessmentConclusion(a: AssessmentAnswers) {
   const n = normalizedAssessmentAnswers(a);
   return assessLeaseClassification({ ...n, assetUsefulLife: a.economicLife,

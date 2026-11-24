@@ -6,7 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { LeaseReviewDetails } from "./lease-review-details";
 import { changeLeaseCommencement, validLeaseStartDate } from "@/lib/lease-import-calendar";
-import { assessmentRate } from "@/lib/lease-assessment-values";
+import { assessmentRate, leaseReviewIssueLabel } from "@/lib/lease-assessment-values";
 
 const kinds: Array<[LeaseEndingTerms["kind"], string]> = [
   ["unresolved", "Not yet established"], ["mandatory_payment", "Client must make a final payment / purchase"],
@@ -41,8 +41,8 @@ export function LeaseEndingFields({ value, months, onChange, readOnly }: {
       <p className="text-xs">Accepting records your assessment, not confirmation that the missing clause was found. Review the supporting explanation before approval.</p>
     </div>}
     {checked.issues.length > 0 && <div role="alert" className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
-      <p className="font-semibold">Resolve before approval</p>
-      <ul className="list-disc pl-5">{checked.issues.map((issue, i) => <li key={i}>{issue}</li>)}</ul>
+      <p className="font-semibold">Before you can confirm this review</p>
+      <ul className="list-disc pl-5">{checked.issues.map(issue => <li key={issue}>{leaseReviewIssueLabel(issue).replace(/ below[.]/g, ".")}</li>)}</ul>
     </div>}
     <LeaseReviewDetails title="Ending terms and supporting clauses" needsAttention={needsReview}>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

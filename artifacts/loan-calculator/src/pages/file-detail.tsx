@@ -51,6 +51,7 @@ import { LoanFormFields, validateLoanForm, deriveFirstPaymentDate, type LoanForm
 import { ArrowLeft, ArrowRight, Plus, Trash2, Calculator, FileSpreadsheet, Calendar, Pencil, CheckCircle2, XCircle, ShieldCheck, AlertTriangle, FileText, Landmark, Receipt, Wallet, CalendarPlus, LayoutGrid, Table as TableIcon, ChevronDown, Search, Layers } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { PageHeader } from "@/components/page-header";
+import { yearEndFileSubtitle } from "@/lib/year-end-file-heading";
 import { useMemo } from "react";
 import { buildYearlyStraightLine } from "@/lib/straight-line";
 import { OperatingLeaseCardTerms } from "@/components/operating-lease-card-terms";
@@ -1002,29 +1003,28 @@ export default function FileDetail() {
           <>
             <Link href="/" className="hover:text-foreground transition-colors font-semibold cursor-pointer">Clients</Link>
             <span className="text-border">/</span>
-            <Link href={`/client/${clientId}`} className="hover:text-foreground transition-colors cursor-pointer">{client?.name ?? "Client"}</Link>
-            <span className="text-border">/</span>
-            <span className="text-foreground font-semibold">{file?.fiscalYearEnd ? format(parseISO(file.fiscalYearEnd), "MMM d, yyyy") + " FYE" : (file?.name ?? "Year-End File")}</span>
+            <Link href={`/client/${clientId}`} className="hover:text-foreground transition-colors cursor-pointer">Year-End Files</Link>
           </>
         }
-        title={file?.fiscalYearEnd ? format(parseISO(file.fiscalYearEnd), "MMMM d, yyyy") : "Year-End File"}
-        meta={
-          <span className="inline-flex items-center gap-2 text-sm">
-            {file?.name && <span className="font-medium text-muted-foreground">{file.name}</span>}
+        title={client?.name ?? "Client"}
+        subtitle={yearEndFileSubtitle(file?.fiscalYearEnd, file?.name)}
+        actionLayout="toolbar"
+        toolbarMeta={
+          <>
             {file?.trivialThreshold != null && (
-              <span className="hidden lg:inline-flex items-center gap-1 rounded-md bg-muted px-2 py-0.5 text-xs font-medium">
+              <span className="whitespace-nowrap">
                 Trivial: ${Number(file.trivialThreshold).toLocaleString()}
               </span>
             )}
             {file?.materiality != null && (
-              <span className="hidden lg:inline-flex items-center gap-1 rounded-md bg-muted px-2 py-0.5 text-xs font-medium">
+              <span className="whitespace-nowrap">
                 Materiality: ${Number(file.materiality).toLocaleString()}
               </span>
             )}
-          </span>
+          </>
         }
         actions={
-          <div className="flex flex-wrap items-center justify-end gap-2">
+          <div className="flex flex-wrap items-center justify-start gap-2">
             <DropdownMenu>
               <Tooltip>
                 <TooltipTrigger asChild>

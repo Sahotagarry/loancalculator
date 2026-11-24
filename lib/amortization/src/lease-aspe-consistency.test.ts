@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { assessLeaseClassification } from "./lease-classification";
-import { leaseAssetAmortizationYears, leaseImplicitRate, leasePresentValue, type LeaseEndingTerms } from "./lease-ending";
+import { leaseAssetAmortizationYears, leaseImplicitRate, leasePresentValue, normalizeLeaseEnding, type LeaseEndingTerms } from "./lease-ending";
 
 const ending: LeaseEndingTerms = {
   version: 1, kind: "guaranteed_residual", amount: 13322, basis: "stated",
@@ -14,6 +14,65 @@ const loan = { ...cash, leaseEndingTerms: { ...ending, implicitRate: rate }, fai
   transferOfOwnership: false, bargainPurchaseOption: false };
 
 describe("ASPE 3065 classification and measurement", () => {
+  it("rechecks stored machine warnings after corrections without discarding documentary concerns or approving drafts", () => {
+    const imported = normalizeLeaseEnding({ ...ending, status: "draft", kind: "unresolved", source: "",
+      amount: null, taxTreatment: "unresolved", issues: ["Obtain the missing appendix."],
+      commencement: { date: "2026-04-01", basis: "inferred", confirmed: false, source: "Agreement date" } }, 48);
+    expect(imported.issues.length).toBeGreaterThan(4);
+    const corrected = normalizeLeaseEnding({ ...imported, kind: "guaranteed_residual", amount: 13322,
+      source: ending.source, taxTreatment: "excluded", commencement: { ...imported.commencement!, confirmed: true } }, 48);
+    expect(corrected.issues).toEqual(["Obtain the missing appendix."]);
+    expect(corrected.status).toBe("draft");
+    const resolved = normalizeLeaseEnding({ ...corrected, issues: [], status: "draft" }, 48);
+    expect(resolved.issues).toEqual([]);
+    expect(resolved.status).toBe("draft");
+    expect(assessLeaseClassification({ ...loan, leaseEndingTerms: resolved }).minimum).toBeNull();
+    expect(assessLeaseClassification({ ...loan, leaseEndingTerms: { ...resolved, status: "reviewed" } }).status).toBe("capital");
+    expect(normalizeLeaseEnding({ ...resolved, taxTreatment: "unresolved" }, 48).issues).toContain("Resolve recoverable taxes, non-recoverable taxes and services separately.");
+  });
+  it("shows the complete draft 90% calculation without approving unconfirmed evidence", () => {
+    const terms = { ...ending, implicitRate: rate, status: "draft" as const, taxTreatment: "unresolved" as const,
+      commencement: { date: "2026-04-01", basis: "inferred" as const, confirmed: false, source: "Agreement date" } };
+    const before = JSON.stringify(terms);
+    const result = assessLeaseClassification({ ...loan, leaseEndingTerms: terms });
+    expect(result.status).toBe("needs_review");
+    expect(result.minimum).toBeNull();
+    expect(result.payments).toBeNull();
+    expect(result.required).toBeNull();
+    expect(result.reasons).not.toContain("Minimum lease payments meet the 90% guideline");
+    expect(result.draftComparison?.minimum.percent).toBeCloseTo(100, 8);
+    expect(result.draftComparison?.payments).toEqual({ rentals: 3117.7 * 48, ending: 13322 });
+    expect(result.comparisonInputsMissing).toEqual([]);
+    expect(JSON.stringify(terms)).toBe(before);
+    const approved = assessLeaseClassification({ ...loan, leaseEndingTerms: { ...terms, status: "reviewed", taxTreatment: "excluded", commencement: { ...terms.commencement, confirmed: true } } });
+    expect(approved.minimum).toEqual(result.draftComparison?.minimum);
+    expect(approved.draftComparison).toBeNull();
+    expect(approved.status).toBe("capital");
+  });
+  it.each(["unresolved", "lessor_residual", "optional_purchase"] as const)("does not smuggle an ending amount into draft minimum payments for %s", kind => {
+    const result = assessLeaseClassification({ ...loan, leaseEndingTerms: { ...ending, implicitRate: rate, status: "draft", kind } });
+    expect(result.minimum).toBeNull();
+    if (kind === "unresolved") {
+      expect(result.draftComparison).toBeNull();
+      expect(result.comparisonInputsMissing).toContain("Choose what the client must do at the end of the lease.");
+    } else {
+      expect(result.draftComparison?.minimum).toEqual(result.rental);
+      expect(result.draftComparison?.payments.ending).toBe(0);
+    }
+  });
+  it("explains missing operands instead of calculating a guessed amount or zero rate", () => {
+    const result = assessLeaseClassification({ ...loan, fairValue: 0, interestRate: 0,
+      leaseEndingTerms: { ...ending, basis: "unsupported", amount: 13322, status: "draft" } });
+    expect(result.draftComparison).toBeNull();
+    expect(result.comparisonInputsMissing.join(" ")).toContain("fair value");
+    expect(result.comparisonInputsMissing.join(" ")).toContain("rate");
+    expect(result.comparisonInputsMissing.join(" ")).toContain("ending-value calculation");
+  });
+  it.each([-1, NaN, Infinity])("does not preview using an invalid tax rate %s", taxRate => {
+    const result = assessLeaseClassification({ ...loan, leaseEndingTerms: { ...ending, status: "draft", taxRate } });
+    expect(result.draftComparison).toBeNull();
+    expect(result.comparisonInputsMissing).toContain("Correct the tax rate and monthly service amount.");
+  });
   it("includes the entire guaranteed value, not an expected shortfall, in both PV calculations", () => {
     const result = assessLeaseClassification(loan);
     expect(result.status).toBe("capital");
