@@ -42,7 +42,7 @@ export function changeAssessmentTerm(a: AssessmentAnswers, months: number): Asse
 export function applyCalculatedLeaseRate(a: AssessmentAnswers, rate: number): AssessmentAnswers {
   if (!Number.isFinite(rate) || rate <= 0) return a;
   if (!a.leaseEndingTerms) return { ...a, interestRate: rate };
-  const ending = { ...a.leaseEndingTerms, implicitRate: rate, status: "draft" as const,
+  const ending = { ...a.leaseEndingTerms, implicitRate: rate, implicitRateBasis: "calculated" as const, status: "draft" as const,
     // Unknown imported/draft borrowing rates sometimes arrived as zero. They
     // must not override the positive rate the reviewer has just chosen.
     ...(a.leaseEndingTerms.incrementalBorrowingRate === 0 && a.leaseEndingTerms.status !== "reviewed"
@@ -69,6 +69,9 @@ export function leasePricingAssumption(a: AssessmentAnswers) {
 
 export function calculateAssessmentImplicitRate(a: AssessmentAnswers): number | null {
   const pricing = leasePricingAssumption(a);
+  if (a.leaseEndingTerms?.taxTreatment === "recoverable" && !(Number(a.leaseEndingTerms.taxRate) > 0)) return null;
+  if (Number(a.freeRentMonths ?? 0) > 0 || Number(a.rentEscalationRate ?? 0) !== 0 ||
+      a.rentSteps?.some(step => Math.abs(step.monthlyRent - (a.leaseEndingTerms?.grossMonthlyPayment ?? a.monthlyPayment)) > 0.005)) return null;
   if (!(a.fairValue > 0 && a.monthlyPayment > 0 && a.termMonths > 0) ||
       pricing.amount == null || !Number.isFinite(pricing.amount) || pricing.amount < 0 ||
       !Number.isInteger(pricing.settlementMonth) || pricing.settlementMonth < a.termMonths) return null;
@@ -82,6 +85,50 @@ export function calculateAssessmentImplicitRate(a: AssessmentAnswers): number | 
         settlementMonth: pricing.settlementMonth, source: "Pricing assumption only", issues: [], status: "draft" },
     }, a.fairValue);
   } catch { return null; }
+}
+
+function pricingKey(a: AssessmentAnswers) {
+  const p = leasePricingAssumption(a);
+  return JSON.stringify([a.fairValue, preTaxMonthlyPayment(a), financingFirstPayment(a), a.termMonths,
+    a.downPayment, a.paymentAtBeginning, p.amount, p.settlementMonth,
+    a.leaseEndingTerms?.taxTreatment, a.leaseEndingTerms?.taxRate, a.rentSteps, a.freeRentMonths, a.rentEscalationRate]);
+}
+
+/** Reprice only application-calculated rates. Quoted rates and independent IBR evidence stay intact. */
+export function reconcileCalculatedLeaseRate(previous: AssessmentAnswers, next: AssessmentAnswers): AssessmentAnswers {
+  if (previous.leaseEndingTerms?.implicitRateBasis !== "calculated" ||
+      next.leaseEndingTerms?.implicitRateBasis !== "calculated" || pricingKey(previous) === pricingKey(next)) return next;
+  const rate = calculateAssessmentImplicitRate(next);
+  if (rate != null && rate > 0) return applyCalculatedLeaseRate(next, rate);
+  const borrowing = next.leaseEndingTerms.incrementalBorrowingRate;
+  return { ...next, interestRate: borrowing ?? 0, leaseEndingTerms: {
+    ...next.leaseEndingTerms, implicitRate: null, discountRate: borrowing ?? null, status: "draft",
+  } };
+}
+
+/** A reviewed date must update both accounting calculations and the saved agreement. */
+export function assessmentStartDate(a: AssessmentAnswers, fallback: string): string {
+  return a.leaseEndingTerms?.commencement?.confirmed ? a.leaseEndingTerms.commencement.date : fallback;
+}
+
+/** An AI guess is a last-resort reference, never a competing selectable rate. */
+export function leaseRateGuidance(a: AssessmentAnswers, estimate?: number | null) {
+  const e = a.leaseEndingTerms;
+  const explicitRate = [e?.implicitRate, e?.incrementalBorrowingRate].some(rate =>
+    rate != null && Number.isFinite(rate) && rate >= 0);
+  const selectedRate = [e?.discountRate, a.interestRate].some(rate =>
+    rate != null && Number.isFinite(rate) && rate > 0);
+  const calculatedRate = calculateAssessmentImplicitRate(a);
+  const canCalculate = calculatedRate != null && Number.isFinite(calculatedRate) && calculatedRate >= 0;
+  const showEstimate = !explicitRate && !selectedRate && !canCalculate &&
+    estimate != null && Number.isFinite(estimate) && estimate > 0;
+  const pricing = leasePricingAssumption(a);
+  const reason = !(a.fairValue > 0) ? "The asset's fair value is missing."
+    : !(a.monthlyPayment > 0) ? "The monthly rental is missing."
+    : !(a.termMonths > 0) ? "The lease term is missing."
+    : pricing.amount == null ? "A supported ending value is missing."
+    : "The current payment, ending-value and timing inputs do not produce an implicit rate. Check these inputs first.";
+  return { calculatedRate, showEstimate, reason };
 }
 
 export const percentLabel = (value: number) => (value < 90 && value >= 89.95) ? "<90" : value.toFixed(1);

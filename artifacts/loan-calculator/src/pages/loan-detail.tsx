@@ -1,4 +1,5 @@
 import { savedLeaseConclusion, percentLabel, assessmentPaymentSaveValues, assessmentAnswersForReview, calculateOperatingLeaseAssessment } from "@/lib/lease-assessment-values";
+import { assessmentCalendarUpdate } from "@/lib/lease-assessment-calendar";
 import { LeasePaymentTest } from "@/components/lease-payment-test";
 import { DEFAULT_LOAN_INTEREST_METHOD, interestMethods, isDaily, leaseAssetAmortizationYears } from "@workspace/amortization";
 import { useAuth } from "@/hooks/use-auth";
@@ -2750,6 +2751,9 @@ export default function LoanDetail() {
           buyoutForImplicitRate: 0,
           leaseEndingTerms: loan.leaseEndingTerms as unknown as import("@workspace/amortization").LeaseEndingTerms | null,
           firstPaymentAmount: loan.firstPaymentAmount == null ? null : Number(loan.firstPaymentAmount),
+          rentSteps: (loan.rentSteps as AssessmentAnswers["rentSteps"]) ?? [],
+          freeRentMonths: loan.freeRentMonths ?? 0,
+          rentEscalationRate: Number(loan.rentEscalationRate ?? 0),
         };
         return (
           <CapitalLeaseAssessment
@@ -2758,14 +2762,16 @@ export default function LoanDetail() {
             open={reevaluateOpen}
             onOpenChange={setReevaluateOpen}
             onConfirm={(result) => {
+              const calendar = assessmentCalendarUpdate(result.answers, loan);
               // Operating-lease total commitment must respect rent steps and
               // free-rent months, not just first-year rent × term.
               const slPreview = !result.isCapitalLease
-                ? calculateOperatingLeaseAssessment(result, loan.startDate, loan.fiscalYearEnd)
+                ? calculateOperatingLeaseAssessment(result, calendar.startDate, loan.fiscalYearEnd)
                 : null;
-              updateLoan.mutate({
+              return updateLoan.mutateAsync({
                 id: loanId,
                 data: {
+                  ...calendar,
                   isCapitalLease: result.isCapitalLease,
                   transferOfOwnership: result.answers.transferOfOwnership,
                   bargainPurchaseOption: result.answers.bargainPurchaseOption,

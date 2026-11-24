@@ -69,9 +69,34 @@ describe("ASPE 3065 classification and measurement", () => {
     expect(result.comparisonInputsMissing.join(" ")).toContain("ending-value calculation");
   });
   it.each([-1, NaN, Infinity])("does not preview using an invalid tax rate %s", taxRate => {
-    const result = assessLeaseClassification({ ...loan, leaseEndingTerms: { ...ending, status: "draft", taxRate } });
+    const result = assessLeaseClassification({ ...loan, leaseEndingTerms: { ...ending, status: "draft", taxTreatment: "recoverable", taxRate } });
     expect(result.draftComparison).toBeNull();
-    expect(result.comparisonInputsMissing).toContain("Correct the tax rate and monthly service amount.");
+    expect(result.comparisonInputsMissing.join(" ")).toContain("Enter the included tax rate");
+  });
+  it("resolves an imported recoverable-tax warning when the rental is confirmed to be before tax", () => {
+    const imported = normalizeLeaseEnding({ ...ending, implicitRate: rate, status: "draft", taxTreatment: "recoverable", taxRate: 0 }, 48);
+    const blocked = assessLeaseClassification({ ...loan, leaseEndingTerms: imported });
+    expect(blocked.draftComparison).toBeNull();
+    expect(blocked.comparisonInputsMissing.join(" ")).toContain("choose Payments exclude taxes");
+    const corrected = normalizeLeaseEnding({ ...imported, taxTreatment: "excluded" }, 48);
+    expect(corrected.issues).toEqual([]);
+    expect(corrected.status).toBe("draft");
+    const result = assessLeaseClassification({ ...loan, leaseEndingTerms: corrected });
+    expect(result.draftComparison?.minimum.percent).toBeCloseTo(100, 8);
+    expect(result.minimum).toBeNull();
+    expect(result.status).toBe("needs_review");
+  });
+  it("does not demand a tax rate for payments that exclude tax, even if an unused rate was retained", () => {
+    for (const taxRate of [undefined, 0, -1]) {
+      const result = assessLeaseClassification({ ...loan, leaseEndingTerms: { ...ending, implicitRate: rate, status: "draft", taxTreatment: "excluded", taxRate } });
+      expect(result.comparisonInputsMissing).toEqual([]);
+      expect(result.draftComparison?.minimum.percent).toBeCloseTo(100, 8);
+    }
+  });
+  it("separates an invalid service amount from a missing tax rate", () => {
+    const result = assessLeaseClassification({ ...loan, leaseEndingTerms: { ...ending, implicitRate: rate, servicesMonthly: -1, taxTreatment: "excluded" } });
+    expect(result.comparisonInputsMissing).toContain("Services included each month must be zero or a positive dollar amount.");
+    expect(result.comparisonInputsMissing.join(" ")).not.toContain("tax rate");
   });
   it("includes the entire guaranteed value, not an expected shortfall, in both PV calculations", () => {
     const result = assessLeaseClassification(loan);

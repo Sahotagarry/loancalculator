@@ -72,7 +72,7 @@ import { agreementKind } from "../lib/modification-assessment";
 const ending = {
   version: 1, kind: "none", amount: 0, basis: "stated",
   source: "Reviewed agreement: return at expiry; no required ending payment.",
-  settlementMonth: 12, status: "reviewed", issues: [],
+  settlementMonth: 12, status: "reviewed", issues: [], taxTreatment: "excluded",
 };
 const operating = {
   name: "Operating lease", principal: 11800, interestRate: 0, leaseAssessmentRate: 6,

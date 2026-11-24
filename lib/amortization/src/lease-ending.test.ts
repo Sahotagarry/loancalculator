@@ -4,7 +4,7 @@ import { calculateAmortization, calculateLeaseSchedule, inferLeaseCommencement, 
 const terms = (patch: Partial<LeaseEndingTerms> = {}): LeaseEndingTerms => ({
   version: 1, kind: "guaranteed_residual", amount: 8949.50, basis: "stated",
   source: "Return and sale: lessee pays shortfall against agreed residual; surplus returned.",
-  settlementMonth: 48, issues: [], status: "reviewed", ...patch,
+  settlementMonth: 48, issues: [], status: "reviewed", taxTreatment: "excluded", ...patch,
 });
 const truck = { monthlyPayment: 2003.24, termMonths: 48, paymentAtBeginning: true, downPayment: 0, ending: terms() };
 

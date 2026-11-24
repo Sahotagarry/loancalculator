@@ -1,4 +1,5 @@
-import { rentalAssessment, assessmentPaymentSaveValues, calculateOperatingLeaseAssessment } from "@/lib/lease-assessment-values";
+import { rentalAssessment, assessmentPaymentSaveValues, calculateOperatingLeaseAssessment, assessmentAnswersForReview } from "@/lib/lease-assessment-values";
+import { leaseCreationMode } from "@/lib/lease-form-updates";
 import { DEFAULT_LOAN_INTEREST_METHOD } from "@workspace/amortization";
 import { useAuth } from "@/hooks/use-auth";
 import { leaseScheduleSupportIssue, lesseeEndingAmount, type LeaseEndingTerms } from "@workspace/amortization";
@@ -211,6 +212,7 @@ export default function FileDetail() {
   const [editMateriality, setEditMateriality] = useState<number | undefined>(undefined);
   const [assessmentOpen, setAssessmentOpen] = useState(false);
   const [assessmentResult, setAssessmentResult] = useState<AssessmentResult | null>(null);
+  const [reviewingFormAssessment, setReviewingFormAssessment] = useState(false);
   const [operatingDialogOpen, setOperatingDialogOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
@@ -301,7 +303,7 @@ export default function FileDetail() {
   const withPredecessor = (agreement: any) => reportingLoanById.get(agreement.id) ?? agreement;
 
   const formMode: LoanFormMode = (() => {
-    if (!editingLoanId) return "loan";
+    if (!editingLoanId) return leaseCreationMode(form.isCapitalLease, assessmentResult?.isCapitalLease === true);
     const loan = loans?.find((l) => l.id === editingLoanId);
     if (!loan) return "loan";
     if (loan.isCapitalLease) return "capital_lease";
@@ -445,6 +447,7 @@ export default function FileDetail() {
   };
 
   const handleImportedLease = (result: DocumentImportResult) => {
+    setReviewingFormAssessment(false);
     const f = result.lease;
     setPendingSourceDoc(
       result.documentId ? { id: result.documentId, name: result.documentName ?? "document.pdf" } : null,
@@ -473,9 +476,21 @@ export default function FileDetail() {
       taxType: "none",
       taxRate: 0,
       buyoutForImplicitRate: f?.buyoutAmount ?? 0,
-      leaseEndingTerms: f?.leaseEndingTerms as unknown as LeaseEndingTerms | null,
+      rentSteps: (f?.rentSteps ?? []).map(s => ({ fromYear: s.fromYear, toYear: s.toYear, monthlyRent: s.monthlyRent })),
+      freeRentMonths: f?.freeRentMonths ?? 0,
+      leaseEndingTerms: f?.leaseEndingTerms as unknown as LeaseEndingTerms | null ?? {
+        version: 1, kind: "unresolved", amount: null, basis: "stated", source: "",
+        settlementMonth: termMonths || null, issues: [], status: "draft", taxTreatment: "unresolved",
+      },
     };
-    answers.pvPctFairValue = rentalAssessment(answers)?.percent ?? 0;
+    answers.paymentIncludesTax = answers.leaseEndingTerms?.taxTreatment === "recoverable";
+    answers.taxRate = answers.leaseEndingTerms?.taxRate ?? 0;
+    if (answers.leaseEndingTerms && !answers.leaseEndingTerms.commencement) {
+      answers.leaseEndingTerms = { ...answers.leaseEndingTerms, commencement: {
+        date: f?.startDate ?? "", basis: f?.startDate ? "stated" : "inferred", confirmed: false,
+        source: f?.fieldNotes?.startDate ?? (f?.startDate ? "Start date read from the agreement." : "Enter and confirm the lease start date."),
+      } };
+    }
     setImportedAnswers(answers);
     const hasSLData =
       (f?.freeRentMonths ?? 0) > 0 ||
@@ -1792,6 +1807,7 @@ export default function FileDetail() {
                                 variant="ghost"
                                 size="icon"
                                 className="h-8 w-8 text-muted-foreground hover:text-primary"
+                                aria-label={`Edit ${loan.name}`}
                                 onClick={() => openEditLoan(loan)}
                           >
                             <Pencil className="h-4 w-4" />
@@ -1805,6 +1821,7 @@ export default function FileDetail() {
                             variant="ghost"
                             size="icon"
                             className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                            aria-label={`Delete ${loan.name}`}
                             onClick={() => {
                               setDeleteTarget(loan.id);
                               setDeleteOpen(true);
@@ -1907,7 +1924,7 @@ export default function FileDetail() {
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <Link href={`/client/${clientId}/file/${fileId}/loan/${loan.id}`}>
-                          <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary">
+                          <Button aria-label={`View schedule for ${loan.name}`} variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary">
                             <Calculator className="h-4 w-4" />
                           </Button>
                         </Link>
@@ -1916,7 +1933,7 @@ export default function FileDetail() {
                     </Tooltip>
                     <Tooltip>
                       <TooltipTrigger asChild>
-                        <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary" onClick={() => openEditLoan(loan)}>
+                        <Button aria-label={`Edit ${loan.name}`} variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary" onClick={() => openEditLoan(loan)}>
                           <Pencil className="h-4 w-4" />
                         </Button>
                       </TooltipTrigger>
@@ -1928,6 +1945,7 @@ export default function FileDetail() {
                           variant="ghost"
                           size="icon"
                           className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                          aria-label={`Delete ${loan.name}`}
                           onClick={() => {
                             setDeleteTarget(loan.id);
                             setDeleteOpen(true);
@@ -2840,7 +2858,13 @@ export default function FileDetail() {
               </p>
             </div>
           )}
-          <LoanFormFields key={form.importedDurationMonths ? "import" : "standard"} form={form} setForm={setForm} mode={formMode} />
+          <LoanFormFields key={form.importedDurationMonths ? "import" : "standard"} form={form} setForm={setForm} mode={formMode}
+            onReviewAssessment={!editingLoanId && formMode === "capital_lease" && assessmentResult?.isCapitalLease ? () => {
+              setReviewingFormAssessment(true);
+              setImportedAnswers(assessmentAnswersForReview(assessmentResult.answers));
+              setImportedLeaseMeta({ name: form.name, lessor: form.counterparty, startDate: form.startDate });
+              setAssessmentOpen(true);
+            } : undefined} />
           <ModificationAssessment
             key={`${editingLoanId ?? "new"}-${modification.predecessorAgreementId ?? "none"}`}
             agreements={[...(loans ?? []), ...(priorLoans ?? [])].filter((item, index, all) => all.findIndex((other) => other.id === item.id) === index)}
@@ -3167,21 +3191,22 @@ export default function FileDetail() {
 
       <CapitalLeaseAssessment
         open={assessmentOpen}
-        onOpenChange={setAssessmentOpen}
+        onOpenChange={open => { setAssessmentOpen(open); if (!open) setReviewingFormAssessment(false); }}
         initialAnswers={importedAnswers}
         initialStraightLine={importedStraightLine}
-        initialStep={importedAnswers ? 0 : undefined}
+        initialStep={importedAnswers ? reviewingFormAssessment ? 6 : 1 : undefined}
         importedNotes={importedNotes}
         importedEstimates={importedEstimates}
         onConfirm={(result) => {
           setAssessmentResult(result);
           if (result.isCapitalLease) {
             const termYears = result.answers.termMonths / 12;
-            setForm({
+            setForm(previous => ({
               ...makeBlankLoanForm(),
-              name: importedLeaseMeta?.name ?? "",
-              description: "",
-              counterparty: importedLeaseMeta?.lessor ?? null,
+              ...(reviewingFormAssessment ? previous : {}),
+              name: reviewingFormAssessment ? previous.name : importedLeaseMeta?.name ?? "",
+              description: reviewingFormAssessment ? previous.description : "",
+              counterparty: reviewingFormAssessment ? previous.counterparty : importedLeaseMeta?.lessor ?? null,
               isCapitalLease: true,
               importedDurationMonths: !!importedLeaseMeta,
               principal: result.pvValue > 0 ? Math.min(result.pvValue, result.answers.fairValue || Infinity) : result.answers.fairValue,
@@ -3238,11 +3263,12 @@ export default function FileDetail() {
               collateralUsefulLifeYears: result.answers.economicLife || 0,
               collateralDecliningRate: 0,
               collateralSalvageValue: 0,
-            });
+            }));
             setEditingLoanId(null);
             setModification({ predecessorAgreementId: null, modificationEffectiveDate: null, modificationAssessment: null, valid: true });
             setCreateOpen(true);
           } else {
+            if (reviewingFormAssessment) setCreateOpen(false);
             setOperatingLeaseResult(result);
             setOperatingStartDate(result.answers.leaseEndingTerms?.commencement?.confirmed ? result.answers.leaseEndingTerms.commencement.date : importedLeaseMeta?.startDate ?? "");
             setOperatingCounterparty(importedLeaseMeta?.lessor ?? null);
@@ -3614,11 +3640,12 @@ export default function FileDetail() {
                     modificationEffectiveDate: modification.modificationEffectiveDate,
                     modificationAssessment: modification.modificationAssessment,
                   },
-                });
-                setOperatingDialogOpen(false);
-                setOperatingStartDate("");
-                setOperatingCounterparty(null);
-                setImportedPercentageRent(null);
+                }, { onSuccess: () => {
+                  setOperatingDialogOpen(false);
+                  setOperatingStartDate("");
+                  setOperatingCounterparty(null);
+                  setImportedPercentageRent(null);
+                } });
               }}
               disabled={createLoan.isPending || !operatingStartDate || !modification.valid}
               className="gap-2"

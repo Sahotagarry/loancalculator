@@ -9,7 +9,7 @@ import { calculateStraightLineLease } from "./straight-line";
 
 const ending: LeaseEndingTerms = { version: 1, kind: "guaranteed_residual", amount: 8949.5,
   basis: "stated", source: "Anonymized return/sale shortfall clause", settlementMonth: 48,
-  status: "reviewed", issues: [], implicitRate: 7.5306177, discountRate: 7.5306177 };
+  status: "reviewed", issues: [], taxTreatment: "excluded", implicitRate: 7.5306177, discountRate: 7.5306177 };
 const loan = { id: "fixture", name: "Synthetic truck", principal: 89949.5, downPayment: 0,
   interestRate: 7.53, amortizationYears: 4, termYears: 4, termMonths: 48, startDate: "2026-03-30",
   paymentTiming: "beginning" as const, paymentFrequency: "monthly", monthlyPayment: 2003.24,

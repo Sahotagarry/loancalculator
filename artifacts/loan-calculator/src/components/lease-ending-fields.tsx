@@ -15,8 +15,10 @@ const kinds: Array<[LeaseEndingTerms["kind"], string]> = [
   ["none", "No ending payment or guarantee"],
 ];
 
-export function LeaseEndingFields({ value, months, onChange, readOnly }: {
+export function LeaseEndingFields({ value, months, onChange, readOnly, compact }: {
   value?: LeaseEndingTerms | null; months: number; onChange: (value: LeaseEndingTerms) => void; readOnly?: boolean;
+  /** Wizard review only: open each section only when that section has a concrete issue. */
+  compact?: boolean;
 }) {
   const id = useId();
   if (!value) return <div className="rounded-lg border p-3 space-y-2">
@@ -31,6 +33,14 @@ export function LeaseEndingFields({ value, months, onChange, readOnly }: {
     ...(patch.kind && value.suggestedTreatment ? { suggestedTreatment: { ...value.suggestedTreatment, accepted: false } } : {}),
     ...(patch.paymentComponentsApplied === false ? { firstPaymentComponentsApplied: false } : {}), status: "draft" });
   const needsReview = value.status !== "reviewed" || checked.issues.length > 0;
+  const amountNeeded = ["mandatory_payment", "guaranteed_residual", "bargain_purchase"].includes(value.kind);
+  const endingAttention = compact ? value.kind === "unresolved" || (amountNeeded && value.amount == null) || !value.source.trim() : needsReview;
+  const taxAttention = compact ? !value.taxTreatment || value.taxTreatment === "unresolved" || (value.taxTreatment === "recoverable" && !((value.taxRate ?? 0) > 0)) : needsReview;
+  const kindField = <div className="space-y-1"><Label htmlFor={`${id}-kind`}>What must the client do at the end?</Label><select id={`${id}-kind`} name="leaseEndingKind" className="block w-full min-w-0 rounded border bg-background p-2 text-sm focus-visible:ring-2 focus-visible:ring-ring" value={value.kind} onChange={e => update({ kind: e.target.value as LeaseEndingTerms["kind"] })}>
+          {kinds.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+        </select></div>;
+  const amountField = <div className="space-y-1"><Label htmlFor={`${id}-amount`}>Ending payment or guaranteed amount ($)</Label><Input id={`${id}-amount`} name="leaseEndingAmount" type="number" min="0" step="0.01" value={value.amount ?? ""} onChange={e => update({ amount: e.target.value === "" ? null : Number(e.target.value), basis: "stated", explanation: "Reviewer-entered amount; see source explanation." })} />
+          {compact && amountNeeded && value.amount == null && <p className="text-xs text-amber-800">Amount required for this ending treatment.</p>}</div>;
   return <fieldset disabled={readOnly} className="space-y-3 min-w-0">
     <legend className="mb-2 text-sm font-semibold">Review details</legend>
     {value.suggestedTreatment && <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 space-y-2">
@@ -44,12 +54,11 @@ export function LeaseEndingFields({ value, months, onChange, readOnly }: {
       <p className="font-semibold">Before you can confirm this review</p>
       <ul className="list-disc pl-5">{checked.issues.map(issue => <li key={issue}>{leaseReviewIssueLabel(issue).replace(/ below[.]/g, ".")}</li>)}</ul>
     </div>}
-    <LeaseReviewDetails title="Ending terms and supporting clauses" needsAttention={needsReview}>
+    {compact && <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 rounded-lg border p-3">{kindField}{amountField}</div>}
+    <LeaseReviewDetails title={compact ? "Settlement, rate and source clauses" : "Ending terms and supporting clauses"} needsAttention={endingAttention}>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <div className="space-y-1"><Label htmlFor={`${id}-kind`}>What must the client do at the end?</Label><select id={`${id}-kind`} name="leaseEndingKind" className="block w-full min-w-0 rounded border bg-background p-2 text-sm focus-visible:ring-2 focus-visible:ring-ring" value={value.kind} onChange={e => update({ kind: e.target.value as LeaseEndingTerms["kind"] })}>
-          {kinds.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
-        </select></div>
-        <div className="space-y-1"><Label htmlFor={`${id}-amount`}>Ending payment or guaranteed amount ($)</Label><Input id={`${id}-amount`} name="leaseEndingAmount" type="number" min="0" step="0.01" value={value.amount ?? ""} onChange={e => update({ amount: e.target.value === "" ? null : Number(e.target.value), basis: "stated", explanation: "Reviewer-entered amount; see source explanation." })} /></div>
+        {!compact && kindField}
+        {!compact && amountField}
         <div className="space-y-1"><Label htmlFor={`${id}-month`}>Months from lease start to settlement</Label><Input id={`${id}-month`} name="leaseSettlementMonth" type="number" min="0" value={value.settlementMonth ?? ""} onChange={e => update({ settlementMonth: e.target.value === "" ? null : Number(e.target.value), settlementMonthBasis: "separate" })} />
           <p className="text-xs text-muted-foreground">Lease term: {months || "not entered"} months. Use different settlement timing only when supported by the agreement.</p>
           {months > 0 && value.settlementMonth !== months && <Button type="button" variant="outline" size="sm" onClick={() => update({ settlementMonth: months, settlementMonthBasis: "lease_end" })}>Use lease end ({months} months)</Button>}
@@ -63,20 +72,21 @@ export function LeaseEndingFields({ value, months, onChange, readOnly }: {
       <div className="space-y-1"><Label htmlFor={`${id}-source`}>Agreement clauses and your explanation</Label><Textarea id={`${id}-source`} name="leaseEndingSource" value={value.source} onChange={e => update({ source: e.target.value })} placeholder="Quote the purchase, return or sale-shortfall clause and explain the amount." /></div>
       {value.explanation && <p className="text-xs text-blue-800">Amount explanation: {value.explanation}</p>}
     </LeaseReviewDetails>
-    <LeaseReviewDetails title="Taxes, services and refundable deposit" needsAttention={needsReview}>
+    <LeaseReviewDetails title="Taxes, services and refundable deposit" needsAttention={taxAttention}>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <div className="space-y-1"><Label htmlFor={`${id}-tax`}>Taxes in the payment</Label><select id={`${id}-tax`} name="leaseTaxTreatment" className="block w-full rounded border bg-background p-2 text-sm focus-visible:ring-2 focus-visible:ring-ring" value={value.taxTreatment ?? "excluded"} onChange={e => update({ taxTreatment: e.target.value as LeaseEndingTerms["taxTreatment"], paymentComponentsApplied: false })}>
+        <div className="space-y-1"><Label htmlFor={`${id}-tax`}>Taxes in the payment</Label><select id={`${id}-tax`} name="leaseTaxTreatment" className="block w-full rounded border bg-background p-2 text-sm focus-visible:ring-2 focus-visible:ring-ring" value={value.taxTreatment ?? ""} onChange={e => update({ taxTreatment: e.target.value as LeaseEndingTerms["taxTreatment"], paymentComponentsApplied: false })}>
+          {!value.taxTreatment && <option value="" disabled>Choose</option>}
           <option value="excluded">Payments exclude taxes</option><option value="recoverable">Recoverable tax included</option>
           <option value="nonrecoverable">Non-recoverable tax included</option><option value="unresolved">Not yet established</option>
         </select></div>
         <div className="space-y-1"><Label htmlFor={`${id}-services`}>Services included each month ($)</Label><Input id={`${id}-services`} name="leaseServicesMonthly" type="number" min="0" value={value.servicesMonthly ?? 0} onChange={e => update({ servicesMonthly: Number(e.target.value), paymentComponentsApplied: false })} /></div>
-        <div className="space-y-1"><Label htmlFor={`${id}-tax-rate`}>Supported tax rate (%)</Label><Input id={`${id}-tax-rate`} name="leaseTaxRate" type="number" min="0" step="any" value={value.taxRate ?? ""} onChange={e => update({ taxRate: Number(e.target.value), paymentComponentsApplied: false })} /></div>
+        {value.taxTreatment === "recoverable" && <div className="space-y-1"><Label htmlFor={`${id}-tax-rate`}>Included recoverable tax rate (%)</Label><Input id={`${id}-tax-rate`} name="leaseTaxRate" type="number" min="0" step="any" value={value.taxRate ?? ""} onChange={e => update({ taxRate: e.target.value === "" ? undefined : Number(e.target.value), paymentComponentsApplied: false })} /><p className="text-xs text-muted-foreground">Only needed when the rental includes recoverable tax. If the rental is before tax, choose Payments exclude taxes above.</p></div>}
         <div className="space-y-1"><Label htmlFor={`${id}-deposit`}>Refundable deposit ($, not an upfront payment)</Label><Input id={`${id}-deposit`} name="leaseRefundableDeposit" type="number" min="0" step="0.01" value={value.refundableDeposit ?? ""} onChange={e => update({ refundableDeposit: Number(e.target.value) })} /></div>
       </div>
     </LeaseReviewDetails>
     {needsReview && <div className="space-y-1"><Label htmlFor={`${id}-issues`}>Evidence still missing or conflicting</Label><Textarea id={`${id}-issues`} name="leaseEndingIssues" value={value.issues.join("\n")} onChange={e => update({ issues: e.target.value.split("\n").filter(Boolean) })} placeholder="Missing appendix, conflicting terms, unsupported formula… Clear only after documenting the resolution in your explanation." /></div>}
     {value.commencement && <div className="rounded-lg border p-3 text-sm space-y-2">
-      <Label htmlFor={`${id}-commencement`}>{value.commencement.basis === "inferred" ? "Suggested start date — confirm or change" : "Start date from the document"}</Label>
+      <Label htmlFor={`${id}-commencement`}>{!value.commencement.date ? "Lease start date — enter and confirm" : value.commencement.basis === "inferred" ? "Suggested start date — confirm or change" : "Start date from the document"}</Label>
       <Input id={`${id}-commencement`} name="leaseSuggestedStartDate" type="date" value={value.commencement.date} onChange={e => onChange(changeLeaseCommencement(value, e.target.value, false))} />
       <p>{value.commencement.source}</p>
       <label className="flex items-start gap-2"><input name="leaseCommencementConfirmed" type="checkbox" className="mt-1" disabled={!validLeaseStartDate(value.commencement.date)} checked={value.commencement.confirmed} onChange={e => onChange(changeLeaseCommencement(value, value.commencement!.date, e.target.checked))} /> I checked the start date against the agreement, first invoice or delivery record.</label>

@@ -3,7 +3,7 @@ import { acceptSuggestedLeaseTreatment, lesseeEndingAmount, normalizeLeaseEnding
 
 const ending: LeaseEndingTerms = {
   version: 1, kind: "unresolved", amount: 13322, basis: "stated", source: "Agreed value and reserve table",
-  settlementMonth: 48, status: "draft", issues: ["Ending obligation remains unresolved."],
+  settlementMonth: 48, status: "draft", taxTreatment: "excluded", issues: ["Ending obligation remains unresolved."],
   suggestedTreatment: { kind: "guaranteed_residual", reason: "Reserve pattern suggests a sale-shortfall obligation; settlement wording unconfirmed.", accepted: false },
 };
 

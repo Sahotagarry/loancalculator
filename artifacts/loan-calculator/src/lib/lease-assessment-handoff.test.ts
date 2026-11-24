@@ -5,6 +5,8 @@ import { updateLeaseSettlementForTerm } from "@workspace/amortization";
 import { parseAssetType, formatAssetType, type AssessmentAnswers } from "../components/capital-lease-assessment";
 import { LeaseEndingFields } from "../components/lease-ending-fields";
 import { applyCalculatedLeaseRate, assessmentAnswersForReview, assessmentRate, changeAssessmentTerm, normalizedAssessmentAnswers, leasePricingAssumption, calculateAssessmentImplicitRate, assessmentConclusion } from "./lease-assessment-values";
+import { reconcileCalculatedLeaseRate } from "./lease-assessment-values";
+import { assessmentCalendarUpdate } from "./lease-assessment-calendar";
 
 const answers: AssessmentAnswers = {
   transferOfOwnership: false, bargainPurchaseOption: false, leaseTermPct: 0, pvPctFairValue: 0,
@@ -14,6 +16,83 @@ const answers: AssessmentAnswers = {
   leaseEndingTerms: { version: 1, kind: "guaranteed_residual", amount: 13322, basis: "stated",
     source: "Anonymous settlement evidence", settlementMonth: 60, issues: [], status: "draft" },
 };
+
+describe("PDF lease calculation changes", () => {
+  const base = { ...answers, termMonths: 48, leaseEndingTerms: {
+    ...answers.leaseEndingTerms!, settlementMonth: 48, taxTreatment: "excluded" as const,
+  } };
+  const calculated = applyCalculatedLeaseRate(base, calculateAssessmentImplicitRate(base)!);
+  it.each([
+    { monthlyPayment: 3300 }, { fairValue: 130000 }, { downPayment: 1000 },
+    { firstPaymentAmount: 2500 }, { paymentAtBeginning: false },
+  ])("recalculates a solved rate when cash-flow input changes: %j", patch => {
+    const next = { ...calculated, ...patch };
+    const result = reconcileCalculatedLeaseRate(calculated, next);
+    expect(result.leaseEndingTerms?.implicitRate).toBeCloseTo(calculateAssessmentImplicitRate(next)!, 9);
+    expect(result.leaseEndingTerms?.implicitRate).not.toBe(calculated.leaseEndingTerms?.implicitRate);
+    expect(result.leaseEndingTerms?.status).toBe("draft");
+    expect(assessmentConclusion(result).minimum).toBeNull();
+  });
+  it.each([
+    { amount: 15000 }, { servicesMonthly: 50 }, { taxTreatment: "recoverable" as const, taxRate: 5 },
+  ])("recalculates when ending or payment-component evidence changes: %j", patch => {
+    const next = { ...calculated, leaseEndingTerms: { ...calculated.leaseEndingTerms!, ...patch } };
+    const result = reconcileCalculatedLeaseRate(calculated, next);
+    expect(result.leaseEndingTerms?.implicitRate).toBeCloseTo(calculateAssessmentImplicitRate(next)!, 9);
+    expect(result.leaseEndingTerms?.implicitRate).not.toBe(calculated.leaseEndingTerms?.implicitRate);
+  });
+  it("reprices a term correction and retains independent borrowing-rate support", () => {
+    const before = { ...calculated, leaseEndingTerms: { ...calculated.leaseEndingTerms!, incrementalBorrowingRate: 5 } };
+    const result = reconcileCalculatedLeaseRate(before, changeAssessmentTerm(before, 60));
+    expect(result.leaseEndingTerms?.implicitRate).toBeCloseTo(calculateAssessmentImplicitRate(result)!, 9);
+    expect(result.leaseEndingTerms?.incrementalBorrowingRate).toBe(5);
+    expect(result.interestRate).toBe(5);
+  });
+  it("does not reprice a quoted rate or invent calculated provenance on old evidence", () => {
+    const quoted = { ...base, interestRate: 7, leaseEndingTerms: { ...base.leaseEndingTerms, implicitRate: 7 } };
+    const next = { ...quoted, monthlyPayment: 3300 };
+    expect(reconcileCalculatedLeaseRate(quoted, next)).toBe(next);
+    expect(next.leaseEndingTerms).not.toHaveProperty("implicitRateBasis");
+  });
+  it("removes a stale result when inputs become uncalculable and restores it after repair", () => {
+    const invalid = reconcileCalculatedLeaseRate(calculated, { ...calculated, monthlyPayment: 0 });
+    expect(invalid.leaseEndingTerms?.implicitRate).toBeNull();
+    expect(invalid.interestRate).toBe(0);
+    const repaired = reconcileCalculatedLeaseRate(invalid, { ...invalid, monthlyPayment: 3117.7 });
+    expect(repaired.leaseEndingTerms?.implicitRate).toBeCloseTo(calculated.leaseEndingTerms!.implicitRate!, 9);
+  });
+  it("blocks stepped and rent-free rentals instead of treating them as level payments", () => {
+    for (const patch of [{ rentSteps: [{ fromYear: 1, toYear: 2, monthlyRent: 3500 }] }, { freeRentMonths: 2 }]) {
+      const a = { ...base, ...patch, leaseEndingTerms: { ...base.leaseEndingTerms, status: "reviewed" as const } };
+      expect(assessmentConclusion(a).status).toBe("needs_review");
+      expect(assessmentConclusion(a).draftComparison).toBeNull();
+      expect(assessmentConclusion(a).issues.join(" ")).toContain("level rentals only");
+      expect(calculateAssessmentImplicitRate(a)).toBeNull();
+    }
+  });
+  it("keeps equal-rent table bands usable", () => {
+    expect(calculateAssessmentImplicitRate({ ...base, rentSteps: [{ fromYear: 1, toYear: 4, monthlyRent: 3117.7 }] })).toBeCloseTo(7.3687834794, 8);
+  });
+});
+
+describe("reviewed commencement handoff", () => {
+  const a = { ...answers, leaseEndingTerms: { ...answers.leaseEndingTerms!, commencement: {
+    date: "2026-05-01", basis: "inferred" as const, confirmed: true, source: "Reviewed first invoice",
+  } } };
+  it("moves the normal first-payment anchor with a corrected confirmed start date", () => {
+    expect(assessmentCalendarUpdate(a, { startDate: "2026-04-01", paymentTiming: "beginning", firstPaymentDate: "2026-04-01" }))
+      .toEqual({ startDate: "2026-05-01", firstPaymentDate: "2026-05-01" });
+  });
+  it("preserves a separately entered first rental date", () => {
+    expect(assessmentCalendarUpdate(a, { startDate: "2026-04-01", paymentTiming: "beginning", firstPaymentDate: "2026-06-15" }))
+      .toEqual({ startDate: "2026-05-01" });
+  });
+  it("does not turn an unconfirmed suggestion into a saved start date", () => {
+    expect(assessmentCalendarUpdate({ ...a, leaseEndingTerms: { ...a.leaseEndingTerms, commencement: {
+      ...a.leaseEndingTerms.commencement, confirmed: false,
+    } } }, { startDate: "2026-04-01", paymentTiming: "beginning" }).startDate).toBe("2026-04-01");
+  });
+});
 
 describe("asset type handoff", () => {
   it.each(["vehicle", "equipment", "office_commercial", "other"])("accepts the importer's broad asset code %s", type => {

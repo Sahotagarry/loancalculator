@@ -1,4 +1,6 @@
-import { assessmentConfirmationKey, assessmentConclusion, preTaxMonthlyPayment, financingFirstPayment, rentalAssessment, calculatePVFromAnswers, assessmentRate, percentLabel, normalizedAssessmentAnswers, changeAssessmentTerm, applyCalculatedLeaseRate, leasePricingAssumption, calculateAssessmentImplicitRate } from "@/lib/lease-assessment-values";
+import { assessmentConfirmationKey, assessmentConclusion, preTaxMonthlyPayment, financingFirstPayment, calculatePVFromAnswers, assessmentRate, percentLabel, normalizedAssessmentAnswers, changeAssessmentTerm, applyCalculatedLeaseRate, leasePricingAssumption, calculateAssessmentImplicitRate, reconcileCalculatedLeaseRate } from "@/lib/lease-assessment-values";
+import { toast } from "@/hooks/use-toast";
+import { getErrorMessage } from "@/lib/errors";
 export { preTaxMonthlyPayment, calculatePVFromAnswers } from "@/lib/lease-assessment-values";
 import { formatCurrency } from "@/lib/format";
 import { useState, useCallback, useEffect, useRef } from "react";
@@ -6,7 +8,9 @@ import type { LeaseEndingTerms } from "@workspace/amortization";
 import { LeaseEndingFields } from "./lease-ending-fields";
 import { LeaseOpeningSummary } from "./lease-opening-summary";
 import { LeasePaymentTest } from "./lease-payment-test";
+import { LeasePaymentCriterion } from "./lease-payment-criterion";
 import { LeaseReviewDetails } from "./lease-review-details";
+import { LeaseEvidenceSummary } from "./lease-evidence-summary";
 import {
   Dialog,
   DialogContent,
@@ -63,6 +67,9 @@ export type AssessmentAnswers = {
   taxType: "gst" | "hst" | "pst" | "none";
   taxRate: number;
   buyoutForImplicitRate: number;
+  rentSteps?: RentStepInput[];
+  freeRentMonths?: number;
+  rentEscalationRate?: number;
 };
 
 export type RentStepInput = {
@@ -105,7 +112,7 @@ interface Props {
   readOnly?: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onConfirm: (result: AssessmentResult) => void;
+  onConfirm: (result: AssessmentResult) => void | Promise<unknown>;
   initialAnswers?: AssessmentAnswers;
   initialStraightLine?: StraightLineAnswers;
   /** Step to open at when initialAnswers is provided. Defaults to the conclusion
@@ -339,8 +346,10 @@ const CRITERIA: Criterion[] = [
   },
 ];
 
-export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, initialAnswers, initialStraightLine, initialStep, importedNotes, importedEstimates, readOnly, finalAction = "continue" }: Props) {
+export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, initialAnswers, initialStraightLine, initialStep, importedNotes, importedEstimates, readOnly: suppliedReadOnly, finalAction = "continue" }: Props) {
   const [step, setStep] = useState(0);
+  const [saving, setSaving] = useState(false);
+  const readOnly = suppliedReadOnly || saving;
   const [confirmedAssessment, setConfirmedAssessment] = useState<string | null>(null);
   const [expandedCriterion, setExpandedCriterion] = useState<number | null>(null);
   const [showImplicitRateDialog, setShowImplicitRateDialog] = useState(false);
@@ -371,7 +380,8 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
     taxType: "none",
     taxRate: 0,
     buyoutForImplicitRate: 0,
-    leaseEndingTerms: { version: 1, kind: "unresolved", amount: null, basis: "stated", source: "", settlementMonth: null, issues: [], status: "draft" },
+    leaseEndingTerms: { version: 1, kind: "unresolved", amount: null, basis: "stated", source: "", settlementMonth: null, issues: [], status: "draft",
+      commencement: { date: "", basis: "inferred", source: "Enter and confirm the lease start date.", confirmed: false } },
   };
 
   const defaultStraightLine: StraightLineAnswers = {
@@ -384,20 +394,13 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
     camMonthly: 0,
   };
 
-  const [inputs, setAnswers] = useState<AssessmentAnswers>(defaultAnswers);
-  const rent = rentalAssessment(inputs);
+  const [inputs, setInputs] = useState<AssessmentAnswers>(defaultAnswers);
+  const setAnswers: typeof setInputs = useCallback(action => setInputs(previous =>
+    reconcileCalculatedLeaseRate(previous, typeof action === "function" ? action(previous) : action)), []);
   // Recompute the formal comparison from current evidence, never a stored percentage.
   const paymentTest = assessmentConclusion(inputs);
   const answers = { ...inputs, pvPctFairValue: paymentTest.minimum?.percent ?? 0 };
   const [straightLine, setStraightLine] = useState<StraightLineAnswers>(defaultStraightLine);
-
-  const reset = useCallback(() => {
-    setStep(0);
-    setConfirmedAssessment(null);
-    setExpandedCriterion(null);
-    setAnswers(defaultAnswers);
-    setStraightLine(defaultStraightLine);
-  }, []);
 
   /** Set the asset type, pre-fill its typical economic life, and recompute
    * the lease-term % if a term is already entered. Shared by the intro step
@@ -436,12 +439,17 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
 
   const prefilledRef = useRef(false);
   useEffect(() => {
-    if (open && initialRef.current && !prefilledRef.current) {
-      setAnswers(initialRef.current);
-      if (initialSLRef.current) {
-        setStraightLine(initialSLRef.current);
-      }
-      setStep(initialStepRef.current ?? 6);
+    if (open && !prefilledRef.current) {
+      setInputs({ ...(initialRef.current ?? defaultAnswers), ...(initialRef.current && initialSLRef.current ? {
+        rentSteps: initialSLRef.current.rentSteps,
+        freeRentMonths: initialSLRef.current.freeRentMonths,
+        rentEscalationRate: initialSLRef.current.rentEscalationRate,
+      } : {}) });
+      setStraightLine(initialSLRef.current ?? defaultStraightLine);
+      setStep(initialRef.current ? initialStepRef.current ?? 6 : 0);
+      setConfirmedAssessment(null);
+      setExpandedCriterion(null);
+      setShowImplicitRateDialog(false);
       prefilledRef.current = true;
     }
     if (!open) {
@@ -451,8 +459,8 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
 
   const handleClose = useCallback(() => {
     onOpenChange(false);
-    setTimeout(reset, 300);
-  }, [onOpenChange, reset]);
+    setShowImplicitRateDialog(false);
+  }, [onOpenChange]);
 
   const computeResult = useCallback((): AssessmentResult => {
     const conclusion = assessmentConclusion(answers);
@@ -462,7 +470,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
     const pvValue = step === 8 && isCapitalLease ? calculatePVFromAnswers(answers) : 0;
     const finalAnswers = normalizedAssessmentAnswers(answers);
     return { isCapitalLease, metCriteria: met, rationale, answers: finalAnswers, pvValue, straightLine: isCapitalLease ? null : straightLine, isOfficeProperty: answers.assetType === "office_commercial" };
-  }, [answers, rent, step, straightLine]);
+  }, [answers, step, straightLine]);
 
   const totalSteps = 8;
 
@@ -478,7 +486,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
       const next = { ...prev, [key]: value,
         ...(prev.leaseEndingTerms ? { leaseEndingTerms: { ...prev.leaseEndingTerms, status: "draft" as const,
           ...(key === "monthlyPayment" ? { grossMonthlyPayment: value, paymentComponentsApplied: false } : {}),
-          ...(key === "interestRate" ? { discountRate: value, implicitRate: null, incrementalBorrowingRate: null } : {}) } } : {}) };
+          ...(key === "interestRate" ? { discountRate: value, implicitRate: null, implicitRateBasis: undefined, incrementalBorrowingRate: null } : {}) } } : {}) };
       // Term edits are handled above; keep useful-life edits in sync too.
       if (key === "economicLife") {
         next.leaseTermPct = next.termMonths > 0 && next.economicLife > 0
@@ -493,14 +501,8 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
     if (step === 0) return true;
     if (step >= 1 && step <= 5) {
       const criterion = CRITERIA[step - 1];
-      if (!criterion.isYesNo) {
-        if (criterion.key === "pvPctFairValue") {
-          return rent !== null;
-        }
-        if (criterion.key === "leaseTermPct") {
-          return answers.termMonths > 0 && answers.economicLife > 0;
-        }
-      }
+      // Missing numeric inputs are surfaced at review; approval is gated at step 6.
+      void criterion;
       return true;
     }
     return true;
@@ -514,23 +516,10 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
   const pricingEnd = leasePricingAssumption(answers);
   const hasPricingEnd = pricingEnd.fromEnding;
 
-  const firstInstallmentField = <div className="space-y-2">
-    <Label htmlFor="wizardFirstPayment">Distinct first rental ($, optional)</Label>
-    <Input id="wizardFirstPayment" disabled={readOnly} type="number" min="0.01" step="0.01"
-      value={answers.firstPaymentAmount ?? ""}
-      onChange={e => {
-        const value = e.target.value === "" ? null : Number(e.target.value);
-        setAnswers(prev => ({ ...prev, firstPaymentAmount: value,
-          ...(prev.leaseEndingTerms ? { leaseEndingTerms: { ...prev.leaseEndingTerms,
-            grossFirstPaymentAmount: value ?? undefined, firstPaymentComponentsApplied: false, status: "draft" as const } } : {}),
-        }));
-      }} placeholder="Leave blank when the first rental equals the regular rental" />
-    <p className="text-xs text-muted-foreground">Replaces the first rental, not an additional down payment. Use the same tax and service basis as the monthly payment.</p>
-  </div>;
 
   return (
     <>
-      <Dialog open={open} onOpenChange={(o) => { if (!o) handleClose(); }}>
+      <Dialog open={open} onOpenChange={(o) => { if (!o && !saving) handleClose(); }}>
       <DialogContent scrollable className="max-w-2xl">
         <DialogHeader className="shrink-0 pr-6 text-left">
           <DialogTitle ref={titleRef} tabIndex={-1} className="font-display flex items-center gap-2 focus:outline-none">
@@ -688,6 +677,13 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
               const c = CRITERIA[step - 1];
               const answerVal = answers[c.key];
               const displayVal = c.key === "pvPctFairValue" ? percentLabel(answers.pvPctFairValue) : answerVal;
+              if (c.key === "pvPctFairValue") return (
+                <>
+                  <p className="font-medium text-sm">{c.question}</p>
+                  <LeasePaymentCriterion answers={answers} setAnswers={setAnswers} updateNumber={updateNumber} conclusion={paymentTest}
+                    readOnly={readOnly} importedNotes={importedNotes} importedEstimates={importedEstimates} onCalculateRate={() => setShowImplicitRateDialog(true)} />
+                </>
+              );
               return (
                 <>
                   {/* Question card */}
@@ -697,71 +693,9 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                     </CardContent>
                   </Card>
 
-                  {/* Provenance: what the AI read in the imported document for this criterion */}
-                  {(() => {
-                    if (!importedNotes) return null;
-                    const rows = (FIELDS_BY_CRITERION[c.key] ?? []).filter(([field]) => importedNotes[field]);
-                    if (rows.length === 0) return null;
-                    return (
-                      <div className="space-y-1.5">
-                        {rows.map(([field, label]) => (
-                          <DocSourceNote key={field} label={label} note={importedNotes[field]} />
-                        ))}
-                      </div>
-                    );
-                  })()}
-
-                  <LeaseReviewDetails title="How to answer and where to look">
-                  {/* Concept explanation */}
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
-                      <BookOpen className="h-4 w-4" />
-                      What this criterion means
-                    </div>
-                    <p className="text-sm text-muted-foreground leading-relaxed pl-6">
-                      {c.concept}
-                    </p>
-                  </div>
-
-                  {/* How to evaluate */}
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
-                      <FileText className="h-4 w-4" />
-                      How to evaluate this
-                    </div>
-                    <p className="text-sm text-muted-foreground leading-relaxed pl-6">
-                      {c.guide}
-                    </p>
-                  </div>
-
-                  {/* Document hint */}
-                  <div className="flex items-start gap-2 p-3 rounded-lg bg-blue-50 border border-blue-200">
-                    <FileText className="h-4 w-4 text-blue-600 mt-0.5 flex-shrink-0" />
-                    <p className="text-xs text-blue-800">
-                      <strong>Where to look:</strong> {c.documentHint}
-                    </p>
-                  </div>
-
-                  {/* Example */}
-                  <div className="flex items-start gap-2 p-3 rounded-lg bg-muted/30 border">
-                    <Lightbulb className="h-4 w-4 text-amber-600 mt-0.5 flex-shrink-0" />
-                    <p className="text-xs text-muted-foreground">
-                      {c.example}
-                    </p>
-                  </div>
-
-                  {/* Quick tip */}
-                  <div className="flex items-start gap-2">
-                    <AlertTriangle className="h-4 w-4 text-amber-500 mt-0.5 flex-shrink-0" />
-                    <p className="text-xs text-muted-foreground italic">
-                      {c.quickTip}
-                    </p>
-                  </div>
-                  </LeaseReviewDetails>
-
                   {/* Input area */}
-                  <div className="pt-2 border-t">
-                    <p className="text-sm font-semibold mb-3">Your answer:</p>
+                  <div>
+                    <p className="sr-only">Your answer:</p>
                     {c.isYesNo ? (
                       <div className="flex gap-3">
                         <Button
@@ -865,273 +799,6 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                               </div>
                             )}
                           </div>
-                        ) : c.key === "pvPctFairValue" ? (
-                          <div className="space-y-5">
-                            {/* Lease Term (carried forward) */}
-                            {answers.termMonths > 0 && (
-                              <div className="flex items-center gap-2 p-2 rounded-lg bg-muted/20 text-sm">
-                                <FileText className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-                                <span>Lease term from Criterion 3: <strong>{answers.termMonths} months</strong></span>
-                              </div>
-                            )}
-
-                            {/* Monthly Payment */}
-                            <div className="space-y-2">
-                              <Label htmlFor="monthlyPayment">Monthly Lease Payment ($)</Label>
-                              <Input disabled={readOnly}
-                                id="monthlyPayment"
-                                type="number"
-                                step="0.01"
-                                min={0}
-                                value={answers.monthlyPayment || ""}
-                                onChange={(e) => updateNumber("monthlyPayment", Number(e.target.value))}
-                                placeholder="Enter the monthly amount from the lease agreement"
-                              />
-                            </div>
-
-                            {/* Down payment / first payment at inception */}
-                            {firstInstallmentField}
-                            <div className="space-y-2">
-                              <Label htmlFor="wizardDownPayment">Separate down payment at inception ($)</Label>
-                              <Input disabled={readOnly}
-                                id="wizardDownPayment"
-                                type="number"
-                                step="0.01"
-                                min={0}
-                                value={answers.downPayment || ""}
-                                onChange={(e) => updateNumber("downPayment", Number(e.target.value))}
-                                placeholder="Optional — lump sum paid when the lease starts"
-                              />
-                              <p className="text-xs text-muted-foreground">
-                                Exclude refundable deposits. Do not enter the first regular rent here as well.
-                              </p>
-                            </div>
-
-                            {/* Tax: pre-tax or includes tax */}
-                            <div className="space-y-3">
-                              <div className="flex items-center gap-3 p-3 rounded-lg border bg-muted/20">
-                                <Checkbox disabled={readOnly}
-                                  id="paymentIncludesTax"
-                                  checked={answers.paymentIncludesTax}
-                                  onCheckedChange={(checked) => {
-                                    setAnswers((prev) => {
-                                      const next = {
-                                        ...prev,
-                                        paymentIncludesTax: checked === true,
-                                        ...(prev.leaseEndingTerms ? { leaseEndingTerms: { ...prev.leaseEndingTerms, taxTreatment: checked === true ? "recoverable" as const : "excluded" as const, grossMonthlyPayment: prev.monthlyPayment, paymentComponentsApplied: false, firstPaymentComponentsApplied: false, status: "draft" as const } } : {}),
-                                        taxType: checked === true ? prev.taxType : ("none" as AssessmentAnswers["taxType"]),
-                                        taxRate: checked === true ? prev.taxRate : 0,
-                                      };
-                                      return next;
-                                    });
-                                  }}
-                                />
-                                <div>
-                                  <Label htmlFor="paymentIncludesTax" className="cursor-pointer">Rental includes recoverable sales tax</Label>
-                                  <p className="text-xs text-muted-foreground">Exclude only tax the client can recover; do not assume all taxes on the rental are recoverable.</p>
-                                </div>
-                              </div>
-
-                              {answers.paymentIncludesTax && (
-                                <div className="space-y-2 pl-2 border-l-2 border-brand/30">
-                                  <Label>Province / Tax Rate</Label>
-                                  <Select
-                                    value={answers.taxType}
-                                    onValueChange={(val) => {
-                                      const rates: Record<string, number> = {
-                                        none: 0,
-                                        gst: 5,
-                                        hst_on: 13,
-                                        hst_ns_nb_nl: 15,
-                                        hst_pe: 14,
-                                        pst_bc: 7,
-                                        pst_mb: 7,
-                                        pst_sk: 6,
-                                        qst: 9.975,
-                                      };
-                                      setAnswers((prev) => {
-                                        const next = {
-                                          ...prev,
-                                          taxType: val as AssessmentAnswers["taxType"],
-                                          taxRate: rates[val] || 0,
-                                          ...(prev.leaseEndingTerms ? { leaseEndingTerms: { ...prev.leaseEndingTerms, taxRate: rates[val] || 0, status: "draft" as const } } : {}),
-                                        };
-                                        return next;
-                                      });
-                                    }}
-                                  >
-                                    <SelectTrigger>
-                                      <SelectValue placeholder="Select province / tax rate" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                      <SelectItem value="gst">Alberta / GST only (5%)</SelectItem>
-                                      <SelectItem value="hst_on">Ontario / HST (13%)</SelectItem>
-                                      <SelectItem value="hst_ns_nb_nl">NS / NB / NL / PE / HST (15%)</SelectItem>
-                                      <SelectItem value="hst_pe">Prince Edward Island / HST (14%)</SelectItem>
-                                      <SelectItem value="pst_bc">British Columbia / GST+PST (12% total)</SelectItem>
-                                      <SelectItem value="pst_mb">Manitoba / GST+PST (12% total)</SelectItem>
-                                      <SelectItem value="pst_sk">Saskatchewan / GST+PST (11% total)</SelectItem>
-                                      <SelectItem value="qst">Quebec / GST+QST (14.975% total)</SelectItem>
-                                    </SelectContent>
-                                  </Select>
-                                  {answers.taxRate > 0 && answers.monthlyPayment > 0 && (
-                                    <div className="flex items-center gap-2 p-2 rounded-lg bg-blue-50 border border-blue-200 text-sm">
-                                      <Calculator className="h-4 w-4 text-blue-600 flex-shrink-0" />
-                                      <span className="text-blue-800">
-                                        Pre-tax payment = <strong>${(answers.monthlyPayment / (1 + answers.taxRate / 100)).toFixed(2)}</strong>
-                                        <span className="text-blue-600"> (tax stripped automatically)</span>
-                                      </span>
-                                    </div>
-                                  )}
-                                </div>
-                              )}
-                            </div>
-
-                            {/* Fair Value */}
-                            <div className="space-y-3">
-                              <Label htmlFor="fairValue">Fair Value of Leased Asset ($)</Label>
-                              <Input disabled={readOnly}
-                                id="fairValue"
-                                type="number"
-                                step="1"
-                                min={0}
-                                value={answers.fairValue || ""}
-                                onChange={(e) => updateNumber("fairValue", Number(e.target.value))}
-                                placeholder="Enter the fair market value at inception"
-                              />
-                              {importedEstimates?.fairValue != null && importedEstimates.fairValue > 0 && (
-                                <EstimateSuggestion
-                                  label="Fair value"
-                                  display={`$${importedEstimates.fairValue.toLocaleString()}`}
-                                  reasoning="A fair-value suggestion only. Verify against the asset's cash price, comparable sales or a valuation."
-                                  applied={answers.fairValue === importedEstimates.fairValue}
-                                  onApply={() => updateNumber("fairValue", importedEstimates.fairValue as number)}
-                                />
-                              )}
-                              <div className="p-3 rounded-lg bg-blue-50 border border-blue-200 space-y-2">
-                                <p className="text-sm font-semibold text-blue-900">How to Determine Fair Value</p>
-                                <p className="text-xs text-blue-800 leading-relaxed">
-                                  Fair value is what the asset would cost the lessee to purchase it outright at lease inception. This is your benchmark — the PV of lease payments is compared against this number.
-                                </p>
-                                <div className="space-y-1.5 mt-1">
-                                  <div className="flex items-start gap-2">
-                                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600 mt-0.5 flex-shrink-0" />
-                                    <p className="text-xs text-blue-800"><strong>Best source:</strong> Ask the lessor for the cash purchase price at inception. For vehicle and small truck leases, this is often shown directly on the lease invoice or agreement as the "capitalized cost" or "agreed value."</p>
-                                  </div>
-                                  <div className="flex items-start gap-2">
-                                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600 mt-0.5 flex-shrink-0" />
-                                    <p className="text-xs text-blue-800"><strong>Manufacturer MSRP:</strong> For vehicles and standard equipment, the manufacturer's suggested retail price is a reasonable proxy. Deduct any fleet or volume discounts the lessee would realistically receive.</p>
-                                  </div>
-                                  <div className="flex items-start gap-2">
-                                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600 mt-0.5 flex-shrink-0" />
-                                    <p className="text-xs text-blue-800"><strong>Used market:</strong> For older or specialized assets, check equivalent listings on marketplace sites or industry auction results.</p>
-                                  </div>
-                                  <div className="flex items-start gap-2">
-                                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600 mt-0.5 flex-shrink-0" />
-                                    <p className="text-xs text-blue-800"><strong>Appraisal:</strong> For high-value assets (buildings, aircraft, custom manufacturing lines), a formal appraisal from a qualified valuator is the gold standard.</p>
-                                  </div>
-                                  <div className="flex items-start gap-2">
-                                    <XCircle className="h-3.5 w-3.5 text-red-500 mt-0.5 flex-shrink-0" />
-                                    <p className="text-xs text-blue-800"><strong>Do NOT use:</strong> The total of all lease payments (undiscounted). That is not fair value — it ignores the time value of money and may include the buyout.</p>
-                                  </div>
-                                </div>
-                              </div>
-                            </div>
-
-                            {/* Payment Timing */}
-                            <div className="flex items-center gap-3 p-3 rounded-lg border bg-muted/20">
-                              <Checkbox disabled={readOnly}
-                                id="paymentAtBeginning"
-                                checked={answers.paymentAtBeginning}
-                                onCheckedChange={(checked) => {
-                                  setAnswers((prev) => {
-                                    const next = { ...prev, paymentAtBeginning: checked === true };
-                                    return next;
-                                  });
-                                }}
-                              />
-                              <div>
-                                <Label htmlFor="paymentAtBeginning" className="cursor-pointer">First payment due at lease inception</Label>
-                                <p className="text-xs text-muted-foreground">Typical for vehicle and equipment leases in Canada. Uncheck if the first payment is 30 days after signing.</p>
-                              </div>
-                            </div>
-
-                            {/* Discount Rate */}
-                            <div className="space-y-3">
-                              <Label htmlFor="interestRate">Discount Rate (annual %)</Label>
-                              <Input disabled={readOnly}
-                                id="interestRate"
-                                type="number"
-                                step="0.01"
-                                min={0.01}
-                                value={assessmentRate(answers) || ""}
-                                onChange={(e) => updateNumber("interestRate", Number(e.target.value))}
-                                placeholder="e.g. 6.5"
-                              />
-                              <p className="text-xs text-muted-foreground">Use a supported rate from the agreement, calculate the implicit rate below, or enter the client's supported borrowing rate in the review fields. A general AI market-rate guess is not used.</p>
-                              {/* ASPE 3856 low-rate warning inside wizard */}
-                              {answers.interestRate > 0 && answers.interestRate < 3 && (
-                                <div className={`rounded-lg border p-3 flex items-start gap-2 ${answers.interestRate < 1 ? "bg-red-50 border-red-200" : "bg-amber-50 border-amber-200"}`}>
-                                  <AlertTriangle className={`h-4 w-4 shrink-0 mt-0.5 ${answers.interestRate < 1 ? "text-red-600" : "text-amber-600"}`} />
-                                  <div className="space-y-1">
-                                    <p className={`text-xs font-semibold ${answers.interestRate < 1 ? "text-red-900" : "text-amber-900"}`}>
-                                      {answers.interestRate < 1 ? "Very Low Rate — ASPE 3856 FV Adjustment Required" : "Low Rate — ASPE 3856 FV Adjustment May Be Required"}
-                                    </p>
-                                    <p className={`text-xs ${answers.interestRate < 1 ? "text-red-800" : "text-amber-800"}`}>
-                                      The rate of {answers.interestRate.toFixed(2)}% is below market. After classification, the loan/lease detail page will suggest a fair value rate (prime + 2%) for ASPE 3856 compliance.
-                                    </p>
-                                  </div>
-                                </div>
-                              )}
-
-                              <div className="flex items-center gap-2">
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="text-xs h-8 gap-1"
-                                  disabled={answers.fairValue <= 0 || answers.monthlyPayment <= 0 || answers.termMonths <= 0}
-                                  onClick={() => setShowImplicitRateDialog(true)}
-                                >
-                                  <Calculator className="h-3.5 w-3.5" />
-                                  Calculate Implicit Rate
-                                </Button>
-                                {answers.fairValue <= 0 || answers.monthlyPayment <= 0 || answers.termMonths <= 0 ? (
-                                  <span className="text-xs text-muted-foreground">Enter payment, fair value, and term first</span>
-                                ) : null}
-                              </div>
-
-                              {/* IBR Guidance */}
-                              <div className="p-3 rounded-lg bg-blue-50 border border-blue-200 space-y-2">
-                                <p className="text-sm font-semibold text-blue-900">How to Determine the Right Rate</p>
-                                <p className="text-xs text-blue-800 leading-relaxed">
-                                  ASPE requires the <strong>lower</strong> of the lease's implicit rate, if determinable, and the lessee's supported incremental borrowing rate (IBR). If the implicit rate cannot be determined, use the supported IBR. If neither is supported, keep the assessment in review.
-                                </p>
-                                <div className="space-y-2 mt-2">
-                                  <div className="p-2 rounded bg-white/60 border border-blue-100">
-                                    <p className="text-xs font-semibold text-blue-900">1. Incremental Borrowing Rate (IBR)</p>
-                                    <p className="text-xs text-blue-800">
-                                      The rate the lessee would pay to borrow funds to buy this asset, with similar collateral and term. Here's how to estimate it:
-                                    </p>
-                                    <ul className="text-xs text-blue-800 list-disc list-inside mt-1 space-y-0.5">
-                                      <li><strong>Has existing debt?</strong> Use the weighted average interest rate on current loans (bank term loans, lines of credit, mortgages).</li>
-                                      <li><strong>No existing debt?</strong> Use the rate a bank would offer for a similar secured loan. A reasonable proxy: current prime rate + 2% to 4% depending on creditworthiness.</li>
-                                      <li><strong>Vehicle lease?</strong> Many captive finance companies (e.g., Toyota Financial) publish lease rates in the 3%–8% range. Use the higher end if the lessee has average credit.</li>
-                                      <li><strong>Equipment lease?</strong> Independent lessors typically charge 6%–12%. A 7-year term might be at the higher end.</li>
-                                    </ul>
-                                  </div>
-                                  <div className="p-2 rounded bg-white/60 border border-blue-100">
-                                    <p className="text-xs font-semibold text-blue-900">2. Safe Default (if uncertain)</p>
-                                    <p className="text-xs text-blue-800">
-                                      Obtain a supported rate for similar financing from a lender quote or comparable borrowing terms. Document the source and date. Do not choose a rate to obtain a preferred classification; if support is missing, keep the assessment in review.
-                                    </p>
-                                  </div>
-                                </div>
-                              </div>
-                            </div>
-
-                            {/* Calculated Result */}
-                            <LeasePaymentTest conclusion={paymentTest} />
-                          </div>
                         ) : (
                           <div className="space-y-2">
                             <Label htmlFor={c.key}>{c.thresholdLabel}</Label>
@@ -1151,7 +818,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                           </div>
                         )}
                         <div className="flex items-center gap-2 p-3 rounded-lg bg-muted/30 text-sm">
-                          {c.key === "pvPctFairValue" && !paymentTest.minimum ? <span>{paymentTest.draftComparison ? "Draft calculation shown above. Confirm the supporting inputs before this criterion can be approved." : "Complete the input checklist above to calculate this test."}</span> : (answerVal as number) >= (c.threshold ?? 0) ? (
+                          {(answerVal as number) >= (c.threshold ?? 0) ? (
                             <>
                               <CheckCircle2 className="h-4 w-4 text-emerald-600" />
                               <span>This criterion is <strong>met</strong> ({displayVal}{c.unit}{" >= "}{c.threshold}{c.unit})</span>
@@ -1166,6 +833,68 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                       </div>
                     )}
                   </div>
+                  {/* Provenance: what the AI read in the imported document for this criterion */}
+                  {(() => {
+                    if (!importedNotes) return null;
+                    const rows = (FIELDS_BY_CRITERION[c.key] ?? []).filter(([field]) => importedNotes[field]);
+                    if (rows.length === 0) return null;
+                    return (
+                      <LeaseReviewDetails title={`Source notes (${rows.length})`}>
+                        {rows.map(([field, label]) => (
+                          <DocSourceNote key={field} label={label} note={importedNotes[field]} />
+                        ))}
+                      </LeaseReviewDetails>
+                    );
+                  })()}
+
+                  <LeaseReviewDetails title="How to answer and where to look">
+                  {/* Concept explanation */}
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
+                      <BookOpen className="h-4 w-4" />
+                      What this criterion means
+                    </div>
+                    <p className="text-sm text-muted-foreground leading-relaxed pl-6">
+                      {c.concept}
+                    </p>
+                  </div>
+
+                  {/* How to evaluate */}
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
+                      <FileText className="h-4 w-4" />
+                      How to evaluate this
+                    </div>
+                    <p className="text-sm text-muted-foreground leading-relaxed pl-6">
+                      {c.guide}
+                    </p>
+                  </div>
+
+                  {/* Document hint */}
+                  <div className="flex items-start gap-2 p-3 rounded-lg bg-blue-50 border border-blue-200">
+                    <FileText className="h-4 w-4 text-blue-600 mt-0.5 flex-shrink-0" />
+                    <p className="text-xs text-blue-800">
+                      <strong>Where to look:</strong> {c.documentHint}
+                    </p>
+                  </div>
+
+                  {/* Example */}
+                  <div className="flex items-start gap-2 p-3 rounded-lg bg-muted/30 border">
+                    <Lightbulb className="h-4 w-4 text-amber-600 mt-0.5 flex-shrink-0" />
+                    <p className="text-xs text-muted-foreground">
+                      {c.example}
+                    </p>
+                  </div>
+
+                  {/* Quick tip */}
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="h-4 w-4 text-amber-500 mt-0.5 flex-shrink-0" />
+                    <p className="text-xs text-muted-foreground italic">
+                      {c.quickTip}
+                    </p>
+                  </div>
+                  </LeaseReviewDetails>
+
                 </>
               );
             })()}
@@ -1191,10 +920,8 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                 <p className="text-xs">{conclusion.status === "needs_review" ? "Next: resolve the missing or conflicting evidence below. Classification cannot be confirmed yet." : "Not yet confirmed. Check the supporting evidence, then confirm to continue."}</p>
               </CardContent>
             </Card>
-            <LeasePaymentTest conclusion={conclusion} />
-
-            <LeaseReviewDetails title="Classification tests and evidence" needsAttention={conclusion.status === "needs_review"}>
-              {CRITERIA.map((c) => {
+            <div className="rounded-lg border divide-y" data-testid="classification-test-rows">
+              {CRITERIA.map((c, ci) => {
                 let met = false;
                 if (c.isYesNo) {
                   met = answers[c.key] as boolean;
@@ -1202,7 +929,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                   met = (answers[c.key] as number) >= (c.threshold ?? 0);
                 }
                 return (
-                  <div key={c.key} className="flex items-start justify-between gap-3 text-sm py-1 border-b last:border-0">
+                  <div key={c.key} className="flex items-center justify-between gap-3 text-sm px-3 py-1.5">
                     <span className="flex items-start gap-2">
                       {met ? (
                         <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" />
@@ -1219,12 +946,18 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
                             : paymentTest.draftComparison ? `${percentLabel(paymentTest.draftComparison.minimum.percent)}% — draft, confirm below`
                             : "Inputs needed — see checklist"
                           : c.key === "leaseTermPct" && conclusion.lifePercent == null ? "Enter term and useful life" : `${answers[c.key]}${c.unit}`)}
+                      <Button type="button" size="sm" variant="ghost" className="ml-2 h-8 px-2 text-xs text-foreground" data-testid={`button-edit-criterion-${ci + 1}`} aria-label={`Edit ${c.title}`} onClick={() => setStep(ci + 1)}>Edit</Button>
                     </span>
                   </div>
                 );
               })}
-            </LeaseReviewDetails>
-            <LeaseEndingFields value={answers.leaseEndingTerms} months={answers.termMonths} readOnly={readOnly} onChange={leaseEndingTerms => setAnswers(prev => ({ ...prev, leaseEndingTerms }))} />
+            </div>
+            <LeasePaymentTest conclusion={conclusion} compact />
+            <details className="rounded-lg border px-3 py-2 text-sm" data-testid="details-payment-breakdown">
+              <summary className="cursor-pointer font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Full minimum lease payment breakdown</summary>
+              <div className="mt-2"><LeasePaymentTest conclusion={conclusion} /></div>
+            </details>
+            <LeaseEndingFields compact value={answers.leaseEndingTerms} months={answers.termMonths} readOnly={readOnly} onChange={leaseEndingTerms => setAnswers(prev => ({ ...prev, leaseEndingTerms }))} />
 
             {conclusion.status === "operating" && (
               <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-50 border border-amber-200 text-sm">
@@ -1472,28 +1205,29 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
             <LeaseReviewDetails title="Rent payments and calculation inputs">
               <dl className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
                 <div><dt className="text-muted-foreground">Monthly rent used (after tax and services)</dt><dd>{formatCurrency(preTaxMonthlyPayment(answers))}</dd></div>
-                <div><dt className="text-muted-foreground">Discount rate used</dt><dd>{assessmentRate(answers)}%</dd></div>
+                <div><dt className="text-muted-foreground">Discount rate used</dt><dd>{Number(assessmentRate(answers).toFixed(5))}%</dd></div>
                 <div><dt className="text-muted-foreground">Lease term</dt><dd>{answers.termMonths} months</dd></div>
                 <div><dt className="text-muted-foreground">Asset fair value at the start</dt><dd>{formatCurrency(answers.fairValue)}</dd></div>
                 <div><dt className="text-muted-foreground">Rent due</dt><dd>{answers.paymentAtBeginning ? "At the start of each period" : "At the end of each period"}</dd></div>
                 <div><dt className="text-muted-foreground">Separate upfront payment</dt><dd>{formatCurrency(answers.downPayment)}</dd></div>
               </dl>
               {answers.firstPaymentAmount != null && <p className="text-sm">First rent used (after tax and services): <strong>{formatCurrency(financingFirstPayment(answers) ?? 0)}</strong>. This replaces the first regular rent; it is not an extra payment.</p>}
-              <p className="text-xs text-muted-foreground">To change rent, term, fair value or payment timing, go Back to the assessment and use Back to reach the relevant question. Changes require classification to be confirmed again.</p>
+              <p className="text-xs text-muted-foreground">To change rent, term, fair value or payment timing, use Edit classification. Changes require classification to be confirmed again.</p>
             </LeaseReviewDetails>
-            <LeaseEndingFields value={answers.leaseEndingTerms} months={answers.termMonths} readOnly={readOnly} onChange={leaseEndingTerms => setAnswers(prev => ({ ...prev, leaseEndingTerms }))} />
+            <LeaseEvidenceSummary ending={answers.leaseEndingTerms} months={answers.termMonths} rate={assessmentRate(answers)} onEdit={() => setStep(6)} />
           </div>
         )}
-        {step === 7 && answers.leaseEndingTerms && <LeaseEndingFields value={answers.leaseEndingTerms} months={answers.termMonths} readOnly={readOnly} onChange={leaseEndingTerms => setAnswers(prev => ({ ...prev, leaseEndingTerms }))} />}
-        {changedSinceConclusion && <p role="alert" className="text-sm text-amber-800">These changes affect the assessment. Go back and confirm the classification before saving.</p>}
+        {step === 7 && <LeaseEvidenceSummary ending={answers.leaseEndingTerms} months={answers.termMonths} onEdit={() => setStep(6)} />}
+        {changedSinceConclusion && <div role="alert" className="flex flex-wrap items-center gap-2 text-sm text-amber-800"><span>These changes affect the assessment. Confirm the classification again before saving.</span><Button type="button" size="sm" variant="outline" onClick={() => setStep(6)}>Return to review</Button></div>}
         </DialogBody>
         <DialogFooter className="shrink-0 border-t pt-3 gap-2">
           <div className="flex flex-wrap gap-2 w-full sm:justify-end [&>button]:min-h-11 [&>button]:h-auto [&>button]:whitespace-normal [&>button]:py-2">
             {step > 0 && (
               <Button
                 variant="outline"
+                disabled={saving}
                 onClick={() => {
-                  if (step === 8) {
+                  if (step === 8 || step === 7) {
                     setStep(6);
                   } else {
                     setStep((s) => s - 1);
@@ -1514,14 +1248,21 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
             {step === 6 && result.isCapitalLease && <Button disabled={!canProceed()} onClick={() => { setConfirmedAssessment(assessmentKey); setStep(8); }}>Confirm classification &amp; calculate</Button>}
             {(step === totalSteps - 1 || step === 8) && (
               <Button disabled={readOnly || changedSinceConclusion || (step === 8 && !result.isCapitalLease)}
-                onClick={() => {
-                  onConfirm(result);
-                  handleClose();
+                onClick={async () => {
+                  setSaving(true);
+                  try {
+                    await onConfirm(result);
+                    handleClose();
+                  } catch (error) {
+                    toast({ title: "Lease was not saved", description: getErrorMessage(error), variant: "destructive" });
+                  } finally {
+                    setSaving(false);
+                  }
                 }}
                 className="gap-2"
               >
                 <CheckCircle2 className="h-4 w-4" />
-                {finalAction === "save"
+                {saving ? "Saving…" : finalAction === "save"
                   ? answers.leaseEndingTerms?.status === "draft" ? "Save draft lease changes" : "Save lease changes"
                   : answers.leaseEndingTerms?.status === "draft" ? "Continue with draft to lease form" : "Confirm & continue to lease form"}
               </Button>

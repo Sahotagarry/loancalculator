@@ -6,10 +6,19 @@ import { isLoanOutstandingAt } from "./rollforward-eligibility";
 import type { Loan } from "@workspace/db";
 
 describe("lease ending API boundary", () => {
+  it("requires an explicit tax answer before new review approval and retains calculated-rate provenance", () => {
+    const raw = { version: 1, kind: "none", amount: 0, basis: "stated", source: "Reviewed return clause",
+      settlementMonth: 48, status: "reviewed", issues: [], implicitRate: 6, implicitRateBasis: "calculated" };
+    expect(() => validateLeaseEnding(raw, 48)).toThrow("Resolve recoverable taxes");
+    const parsed = validateLeaseEnding({ ...raw, taxTreatment: "excluded" }, 48);
+    expect(parsed.implicitRateBasis).toBe("calculated");
+    const legacy = { ...raw, taxTreatment: "excluded", implicitRateBasis: undefined };
+    expect(JSON.parse(JSON.stringify(validateLeaseEnding(legacy, 48)))).not.toHaveProperty("implicitRateBasis");
+  });
   it("rejects purchase conflicts and unsupported operating approval at the server boundary", () => {
     const terms: LeaseEndingTerms = { version: 1, kind: "guaranteed_residual", amount: 8949.5,
       basis: "stated", source: "Synthetic sale shortfall guarantee", settlementMonth: 48,
-      status: "reviewed", issues: [], implicitRate: 7.5306177 };
+      status: "reviewed", issues: [], taxTreatment: "excluded", implicitRate: 7.5306177 };
     const contract = { isCapitalLease: true, fairValue: 95000, monthlyPayment: 2003.24,
       termMonths: 48, paymentTiming: "beginning", transferOfOwnership: false,
       bargainPurchaseOption: false, leaseTermPct: 40 };
@@ -24,7 +33,7 @@ describe("lease ending API boundary", () => {
   });
   it("projects reviewed accounting without rounding the implicit-rate evidence", () => {
     const ending = validateLeaseEnding({ version: 1, kind: "guaranteed_residual", amount: 8949.5, basis: "stated",
-      source: "Return/sale shortfall guarantee", settlementMonth: 48, issues: [], status: "reviewed", implicitRate: 7.5306177 }, 48);
+      source: "Return/sale shortfall guarantee", settlementMonth: 48, issues: [], status: "reviewed", taxTreatment: "excluded", implicitRate: 7.5306177 }, 48);
     const projection = leaseAccountingProjection({ isCapitalLease: true, fairValue: 89949.5, monthlyPayment: 2003.24,
       termMonths: 48, downPayment: 0, paymentTiming: "beginning", paymentFrequency: "monthly", startDate: "2026-03-30" }, ending);
     expect(projection.principal).toBe("89949.50");
@@ -35,7 +44,7 @@ describe("lease ending API boundary", () => {
     expect((projection.leaseEndingTerms as typeof ending).discountRate).toBe(7.5306177);
   });
   const reviewed: LeaseEndingTerms = { version: 1, kind: "guaranteed_residual", amount: 1000,
-    basis: "stated", source: "Synthetic guarantee", settlementMonth: 48, status: "reviewed", issues: [], discountRate: 6 };
+    basis: "stated", source: "Synthetic guarantee", settlementMonth: 48, status: "reviewed", issues: [], taxTreatment: "excluded", discountRate: 6 };
   const base = { isCapitalLease: true, fairValue: 50000, monthlyPayment: 1050, termMonths: 48,
     termYears: 4, amortizationYears: 4, startDate: "2026-01-01", paymentTiming: "end",
     paymentFrequency: "monthly", downPayment: 0, interestRate: 6 };

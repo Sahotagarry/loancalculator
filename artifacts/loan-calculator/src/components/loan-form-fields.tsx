@@ -1,4 +1,6 @@
-import { DEFAULT_LOAN_INTEREST_METHOD, isDaily, updateLeaseSettlementForTerm, leaseAssetAmortizationYears, type InterestMethod } from "@workspace/amortization";
+import { DEFAULT_LOAN_INTEREST_METHOD, isDaily, leaseAssetAmortizationYears, type InterestMethod } from "@workspace/amortization";
+import { resolveLeaseFormChange } from "@/lib/lease-form-updates";
+import { AssessedCapitalLeaseForm } from "./assessed-capital-lease-form";
 import { InterestMethodField } from "./interest-method-field";
 import { useState, type Dispatch, type SetStateAction } from "react";
 import { LeaseEndingFields } from "./lease-ending-fields";
@@ -188,20 +190,13 @@ interface LoanFormFieldsProps {
   form: LoanFormState;
   setForm: Dispatch<SetStateAction<LoanFormState>>;
   mode?: LoanFormMode;
+  onReviewAssessment?: () => void;
 }
 
-export function LoanFormFields({ form, setForm: persistForm, mode = "loan" }: LoanFormFieldsProps) {
+export function LoanFormFields({ form, setForm: persistForm, mode = "loan", onReviewAssessment }: LoanFormFieldsProps) {
   const setForm: Dispatch<SetStateAction<LoanFormState>> = action => persistForm(prev => {
     const next = typeof action === "function" ? action(prev) : action;
-    const financialFields: Array<keyof LoanFormState> = ["principal", "downPayment", "interestRate", "leaseAssessmentRate", "amortizationYears", "termYears", "termMonths", "startDate", "paymentFrequency", "paymentTiming", "firstPaymentDate", "firstPaymentAmount", "monthlyPayment", "paymentOverride", "balloonPayment", "fairValue", "ioMonths", "graceMonths", "transferOfOwnership", "bargainPurchaseOption", "leaseTermPct", "assetUsefulLife", "specializedAsset", "isCapitalLease"];
-    if (next.leaseEndingTerms && next.leaseEndingTerms === prev.leaseEndingTerms && financialFields.some(key => next[key] !== prev[key])) {
-      const oldMonths = prev.termMonths ?? Math.round(prev.termYears * 12);
-      const months = next.termMonths ?? Math.round(next.termYears * 12);
-      return { ...next, leaseEndingTerms: oldMonths !== months
-        ? updateLeaseSettlementForTerm(next.leaseEndingTerms, oldMonths, months)
-        : { ...next.leaseEndingTerms, status: "draft" } };
-    }
-    return next;
+    return resolveLeaseFormChange(prev, next);
   });
   const isOperating = mode === "operating_lease";
   const isDebt = !isOperating;
@@ -296,6 +291,7 @@ export function LoanFormFields({ form, setForm: persistForm, mode = "loan" }: Lo
     if (amortUnit === "periods") setAmortUnit("months");
   }
 
+  if (mode === "capital_lease" && onReviewAssessment) return <AssessedCapitalLeaseForm form={form} setForm={setForm} onReview={onReviewAssessment} />;
   return (
     <div className="space-y-6 py-4">
       {form.leaseEndingTerms?.status === "draft" && <p className="text-sm text-amber-800">Draft ending terms: saving is allowed, but accounting reports remain unavailable until the financial inputs and ending evidence are reviewed. The existing balloon is the prior reviewed amount, not a new conclusion.</p>}

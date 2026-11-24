@@ -16,7 +16,7 @@ import { readFileSync } from "node:fs";
 const ending: LeaseEndingTerms = {
   version: 1, kind: "guaranteed_residual", amount: 8949.50, basis: "stated",
   source: "Synthetic agreement: client covers sale shortfall.", settlementMonth: 48,
-  issues: [], status: "reviewed", implicitRate: 7.5306177, discountRate: 7.5306177,
+  issues: [], status: "reviewed", taxTreatment: "excluded", implicitRate: 7.5306177, discountRate: 7.5306177,
 };
 const answers = {
   leaseEndingTerms: ending, transferOfOwnership: false, bargainPurchaseOption: false,
@@ -49,8 +49,8 @@ describe("plain-language lease review components", () => {
     expect(assessment).toContain("<LeasePaymentTest conclusion={conclusion}");
     expect(assessment).not.toContain("Supplementary rent-only comparison");
     expect(assessment).toContain("paymentTest.draftComparison");
-    expect(assessment).toContain("Inputs needed — see checklist");
-    expect(source).not.toContain("importedEstimates?.interestRate");
+    expect(assessment).toContain("Inputs needed");
+    expect(source).toContain("<LeasePaymentCriterion answers={answers}");
     expect(source).not.toContain("reasoning={importedEstimates.reasoning}");
   });
   it("counts 48 rentals separately from the unpaid settlement accrual without assuming a buyout", () => {
@@ -91,7 +91,9 @@ describe("plain-language lease review components", () => {
     expect(status(ending, "Inception date is required")).toContain("complete the required fields");
     const fields = readFileSync(new URL("../components/loan-form-fields.tsx", import.meta.url), "utf8");
     expect(fields).toContain('"startDate"');
-    expect(fields).toContain('status: "draft"');
+    expect(fields).toContain("resolveLeaseFormChange(prev, next)");
+    const updates = readFileSync(new URL("./lease-form-updates.ts", import.meta.url), "utf8");
+    expect(updates).toContain('status: "draft"');
     expect(fields).toContain("Draft ending terms: saving is allowed");
   });
   it("shows truck opening amounts first, explains the guarantee, and never repeats classification percentages", () => {
@@ -152,7 +154,7 @@ describe("plain-language lease review components", () => {
     expect(html).toContain("<fieldset disabled");
     expect(html).toContain('for="');
     const controls = html.match(/<(?:input|textarea|select)\b[^>]*>/g) ?? [];
-    expect(controls).toHaveLength(10);
+    expect(controls).toHaveLength(9);
     for (const control of controls) expect(control).toMatch(/\bname="[^"]+"/);
     expect(leaseEndingSummary({ ...ending, kind: "optional_purchase" })).toContain("not included");
     expect(leaseEndingSummary({ ...ending, kind: "lessor_residual" })).toContain("not included");
@@ -164,6 +166,7 @@ describe("plain-language lease review components", () => {
     expect(source).toContain("setConfirmedAssessment(assessmentKey); setStep(8)");
     expect(source).toContain("readOnly || changedSinceConclusion || (step === 8 && !result.isCapitalLease)");
     expect(source).not.toContain("being conservative errs toward operating");
-    expect(source).toContain("Do not choose a rate to obtain a preferred classification");
+    const criterion = readFileSync(new URL("../components/lease-payment-criterion.tsx", import.meta.url), "utf8");
+    expect(criterion).toContain("Do not choose a rate to obtain a preferred classification");
   });
 });

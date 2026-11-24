@@ -18,6 +18,9 @@ export interface LeaseClassificationInput {
   leaseAssessmentRate?: Numeric;
   paymentTiming?: string | null;
   leaseEndingTerms?: unknown;
+  rentSteps?: unknown;
+  freeRentMonths?: number | null;
+  rentEscalationRate?: Numeric;
 }
 
 /** Classification support, never the opening asset or liability. No stored PV percentage is evidence. */
@@ -44,6 +47,12 @@ export function assessLeaseClassification(a: LeaseClassificationInput) {
   const rate = rateValue == null ? NaN : Number(rateValue);
   const fairValue = Number(a.fairValue);
   const gross = Number(a.paymentOverride ?? a.monthlyPayment);
+  const steps = Array.isArray(a.rentSteps) ? a.rentSteps : [];
+  const unsupportedRent = Number(a.freeRentMonths ?? 0) > 0 || Number(a.rentEscalationRate ?? 0) !== 0 ||
+    steps.some(step => !step || !Number.isFinite(Number(step.monthlyRent)) ||
+      Math.abs(Number(step.monthlyRent) - (ending?.grossMonthlyPayment ?? gross)) > 0.005);
+  const rentScheduleIssue = "This lease has stepped, escalating or rent-free rentals. The automatic capital-lease calculation currently supports level rentals only; review the full payment schedule before confirming classification.";
+  if (unsupportedRent) issues.push(rentScheduleIssue);
   const net = (value: number) => Math.round(100 * (
     (ending?.taxTreatment === "recoverable" && Number(ending.taxRate) > 0 ? value / (1 + Number(ending.taxRate) / 100) : value)
     - (ending?.servicesMonthly ?? 0))) / 100;
@@ -51,7 +60,7 @@ export function assessLeaseClassification(a: LeaseClassificationInput) {
   const first = a.firstPaymentAmount == null ? null : ending && !ending.firstPaymentComponentsApplied
     ? net(ending.grossFirstPaymentAmount ?? Number(a.firstPaymentAmount)) : Number(a.firstPaymentAmount);
   let rental: { pv: number; percent: number; meets: boolean } | null = null;
-  if (fairValue > 0 && payment > 0 && Number.isFinite(rate) && rate >= 0 &&
+  if (!unsupportedRent && fairValue > 0 && payment > 0 && Number.isFinite(rate) && rate >= 0 &&
       (rate > 0 || [ending?.implicitRate, ending?.incrementalBorrowingRate, ending?.discountRate].includes(0))) {
     try {
       const pv = leaseRentalPresentValue({ monthlyPayment: payment, firstPaymentAmount: first,
@@ -63,6 +72,7 @@ export function assessLeaseClassification(a: LeaseClassificationInput) {
   // Show the arithmetic while staff review the evidence, without treating that
   // draft result as an approved classification basis.
   const comparisonInputsMissing: string[] = [];
+  if (unsupportedRent) comparisonInputsMissing.push(rentScheduleIssue);
   if (!Number.isFinite(fairValue) || fairValue <= 0) comparisonInputsMissing.push("Enter the asset's fair value.");
   if (!Number.isFinite(payment) || payment <= 0) comparisonInputsMissing.push("Enter a positive monthly rental, excluding the applicable taxes and services.");
   if (!Number.isInteger(months) || months <= 0) comparisonInputsMissing.push("Enter the lease term in whole months.");
@@ -79,10 +89,11 @@ export function assessLeaseClassification(a: LeaseClassificationInput) {
   if (ending && (!Number.isInteger(ending.settlementMonth) || ending.settlementMonth! < months)) {
     comparisonInputsMissing.push("Confirm when the ending amount is settled, at or after the final rental.");
   }
-  if (ending && (ending.servicesMonthly != null && (!Number.isFinite(ending.servicesMonthly) || ending.servicesMonthly < 0) ||
-      ending.taxRate != null && (!Number.isFinite(ending.taxRate) || ending.taxRate < 0) ||
-      ending.taxTreatment === "recoverable" && !(Number(ending.taxRate) > 0))) {
-    comparisonInputsMissing.push("Correct the tax rate and monthly service amount.");
+  if (ending?.servicesMonthly != null && (!Number.isFinite(ending.servicesMonthly) || ending.servicesMonthly < 0)) {
+    comparisonInputsMissing.push("Services included each month must be zero or a positive dollar amount.");
+  }
+  if (ending?.taxTreatment === "recoverable" && (!Number.isFinite(ending.taxRate) || !(Number(ending.taxRate) > 0))) {
+    comparisonInputsMissing.push("The rental is marked as including recoverable tax. Enter the included tax rate, or choose Payments exclude taxes if the entered rental is before tax.");
   }
   if (!rental && !comparisonInputsMissing.length) {
     comparisonInputsMissing.push("Check payment timing, the first rental and any upfront payment; these inputs could not produce a rental present value.");

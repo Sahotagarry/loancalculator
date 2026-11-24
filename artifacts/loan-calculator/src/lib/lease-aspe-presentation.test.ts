@@ -8,10 +8,20 @@ import { buildFieldRows } from "../components/import-document-dialog";
 import { LeaseEndingFields } from "../components/lease-ending-fields";
 
 const ending: LeaseEndingTerms = { version: 1, kind: "guaranteed_residual", amount: 13322,
-  basis: "stated", source: "Client covers sale shortfall.", settlementMonth: 48, issues: [], status: "reviewed",
+  basis: "stated", source: "Client covers sale shortfall.", settlementMonth: 48, issues: [], status: "reviewed", taxTreatment: "excluded",
   commencement: { date: "2026-04-01", basis: "inferred", confirmed: false, source: "Based on the agreement date—confirm." } };
 
 describe("clear ASPE lease presentation", () => {
+  it("lets staff supply a missing import date before approval rather than leaving a read-only final-form dead end", () => {
+    const value = { ...ending, commencement: { date: "", basis: "inferred" as const, confirmed: false,
+      source: "Enter and confirm the lease start date." } };
+    const html = renderToStaticMarkup(createElement(LeaseEndingFields, { value, months: 48, compact: true, onChange: () => {} }));
+    expect(html).toContain("Lease start date — enter and confirm");
+    expect(html).toContain('name="leaseSuggestedStartDate"');
+    expect(html.match(/<input[^>]*name="leaseCommencementConfirmed"[^>]*>/)?.[0]).toContain('disabled=""');
+    expect(assessLeaseClassification({ monthlyPayment: 3117.7, termMonths: 48, fairValue: 139994,
+      leaseEndingTerms: { ...value, implicitRate: 7.3687834794 } }).status).toBe("needs_review");
+  });
   it("shows a draft full-payment comparison and concrete actions, never a rent-only substitute", () => {
     const conclusion = assessLeaseClassification({ monthlyPayment: 3117.7, termMonths: 48, fairValue: 139994, paymentTiming: "beginning",
       leaseEndingTerms: { ...ending, implicitRate: 7.3687834794, status: "draft", taxTreatment: "unresolved" } });
@@ -36,6 +46,23 @@ describe("clear ASPE lease presentation", () => {
     expect(html).toContain("Choose what the client must do");
     expect(html).not.toContain("Unavailable");
     expect(html).not.toContain("0.0%");
+  });
+  it("explains the precise tax correction and separates calculation blockers from approval confirmations", () => {
+    const terms = { ...ending, implicitRate: 7.3687834794, status: "draft" as const, taxTreatment: "recoverable" as const, taxRate: 0 };
+    const conclusion = assessLeaseClassification({ termMonths: 48, fairValue: 139994, monthlyPayment: 3117.7, leaseEndingTerms: terms });
+    const html = renderToStaticMarkup(createElement(LeasePaymentTest, { conclusion }));
+    expect(html).toContain("Needed to calculate:");
+    expect(html).toContain("Enter the included tax rate");
+    expect(html).toContain("choose Payments exclude taxes");
+    expect(html).toContain("Separate confirmations before approval:");
+    expect(html).not.toContain("Correct the tax rate and monthly service amount");
+  });
+  it("enables the included-tax field only when the rental includes recoverable tax", () => {
+    const render = (taxTreatment: LeaseEndingTerms["taxTreatment"]) => renderToStaticMarkup(createElement(LeaseEndingFields, {
+      value: { ...ending, status: "draft", taxTreatment, taxRate: 0 }, months: 48, onChange: () => {},
+    })).match(/<input[^>]*name="leaseTaxRate"[^>]*>/)?.[0];
+    expect(render("excluded")).toBeUndefined();
+    expect(render("recoverable")).not.toContain('disabled=""');
   });
   it("explains why the review confirmation cannot yet be checked", () => {
     const html = renderToStaticMarkup(createElement(LeaseEndingFields, {

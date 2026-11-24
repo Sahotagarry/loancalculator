@@ -31,6 +31,8 @@ export interface LeaseEndingTerms {
   refundableDeposit?: number;
   incrementalBorrowingRate?: number | null;
   implicitRate?: number | null;
+  /** Present only for a rate solved by this application, not a quoted contract rate. */
+  implicitRateBasis?: "calculated";
   discountRate?: number | null;
   paymentComponentsApplied?: boolean;
   grossMonthlyPayment?: number;
@@ -89,6 +91,7 @@ const validationMessages = {
   settlement: "Confirm settlement timing at or after the final rental period.",
   commencement: "Confirm inferred commencement against delivery or commencement evidence.",
   tax: "Resolve recoverable taxes, non-recoverable taxes and services separately.",
+  taxRate: "The rental is marked as including recoverable tax. Enter the included tax rate, or choose Payments exclude taxes if the entered rental is before tax.",
   services: "Service amount must be non-negative.",
   deposit: "Refundable deposit must be non-negative.",
 } as const;
@@ -96,7 +99,7 @@ const machineValidationMessages = new Set<string>(Object.values(validationMessag
 
 /** AI supplies operands and operative clauses; only this function supplies arithmetic. */
 export function normalizeLeaseEnding(input: LeaseEndingTerms, termMonths: number): LeaseEndingTerms {
-  const result: LeaseEndingTerms = { ...input, issues: (input.issues ?? []).filter(message => !machineValidationMessages.has(message)) };
+  const result: LeaseEndingTerms = { ...input, taxTreatment: input.taxTreatment ?? "unresolved", issues: (input.issues ?? []).filter(message => !machineValidationMessages.has(message)) };
   const issue = (message: string) => { if (!result.issues.includes(message)) result.issues.push(message); };
   if (input.version !== 1) issue(validationMessages.version);
   if (!Number.isInteger(termMonths) || termMonths <= 0) issue(validationMessages.term);
@@ -147,7 +150,8 @@ export function normalizeLeaseEnding(input: LeaseEndingTerms, termMonths: number
   if (input.kind === "none" && result.amount !== 0) issue(validationMessages.zero);
   if (!Number.isInteger(input.settlementMonth) || input.settlementMonth! < termMonths) issue(validationMessages.settlement);
   if (input.commencement?.basis === "inferred" && !input.commencement.confirmed) issue(validationMessages.commencement);
-  if (input.taxTreatment === "unresolved") issue(validationMessages.tax);
+  if (result.taxTreatment === "unresolved") issue(validationMessages.tax);
+  if (input.taxTreatment === "recoverable" && (!nonnegative(input.taxRate) || input.taxRate === 0)) issue(validationMessages.taxRate);
   if (input.servicesMonthly != null && !nonnegative(input.servicesMonthly)) issue(validationMessages.services);
   if (input.refundableDeposit != null && !nonnegative(input.refundableDeposit)) issue(validationMessages.deposit);
   if (result.issues.length) result.status = "draft";

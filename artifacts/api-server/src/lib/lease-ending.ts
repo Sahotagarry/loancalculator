@@ -59,6 +59,7 @@ export const leaseEndingSchema = z.object({
   refundableDeposit: z.number().finite().nonnegative().optional(),
   incrementalBorrowingRate: z.number().finite().nonnegative().nullable().optional(),
   implicitRate: z.number().finite().nonnegative().nullable().optional(),
+  implicitRateBasis: z.literal("calculated").optional(),
   discountRate: z.number().finite().nonnegative().nullable().optional(),
   paymentComponentsApplied: z.boolean().optional(),
   grossMonthlyPayment: z.number().finite().nonnegative().optional(),

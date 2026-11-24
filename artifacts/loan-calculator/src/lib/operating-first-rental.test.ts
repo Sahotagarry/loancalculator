@@ -44,7 +44,8 @@ describe("operating first rental across create, reopen, re-evaluation and report
     const create = readFileSync(new URL("../pages/file-detail.tsx", import.meta.url), "utf8");
     const detail = readFileSync(new URL("../pages/loan-detail.tsx", import.meta.url), "utf8");
     expect(create.match(/calculateOperatingLeaseAssessment\(r, operatingStartDate, file.fiscalYearEnd\)/g)).toHaveLength(2);
-    expect(detail).toContain("calculateOperatingLeaseAssessment(result, loan.startDate, loan.fiscalYearEnd)");
+    expect(detail).toContain("calculateOperatingLeaseAssessment(result, calendar.startDate, loan.fiscalYearEnd)");
+    expect(detail).toContain("assessmentCalendarUpdate(result.answers, loan)");
     // Reopened cash and straight-line panels must both read the stored first rental.
     expect(detail.match(/firstPaymentAmount: loan.firstPaymentAmount == null \? null : Number\(loan.firstPaymentAmount\)/g)?.length)
       .toBeGreaterThanOrEqual(3);
