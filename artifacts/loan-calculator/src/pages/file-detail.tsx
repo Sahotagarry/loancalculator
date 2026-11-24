@@ -8,6 +8,7 @@ import { useQueries } from "@tanstack/react-query";
 import { useRoute, useLocation } from "wouter";
 import { Link } from "wouter";
 import { useGetFile, getGetFileQueryKey, useGetClient, useGetLoan, useListFiles, useListLoans, useCreateLoan, useDeleteLoan, useUpdateLoan, useUpdateFile, useRollForwardFile, useListMasterAgreements, useCreateMasterAgreement, useUpdateMasterAgreement, useDeleteMasterAgreement, getGetLoanQueryKey, getGetLoanQueryOptions, getGetFvDecisionHistoryQueryOptions, getListFilesQueryKey, getListLoansQueryKey, getListMasterAgreementsQueryKey, type MasterAgreement } from "@workspace/api-client-react";
+import { LoanListLoadState } from "@/components/loan-list-load-state";
 import { queryClient } from "@/lib/queryClient";
 import {
   Card,
@@ -213,6 +214,7 @@ export default function FileDetail() {
   const [assessmentOpen, setAssessmentOpen] = useState(false);
   const [assessmentResult, setAssessmentResult] = useState<AssessmentResult | null>(null);
   const [reviewingFormAssessment, setReviewingFormAssessment] = useState(false);
+  const [importedAssessmentEntryStep, setImportedAssessmentEntryStep] = useState<0 | 1>(1);
   const [operatingDialogOpen, setOperatingDialogOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
@@ -269,7 +271,7 @@ export default function FileDetail() {
 
   const { data: file } = useGetFile(fileId);
   const { data: client } = useGetClient(clientId);
-  const { data: loans } = useListLoans(fileId);
+  const { data: loans, isPending: loansLoading, isError: loansError, isFetching: loansFetching, refetch: refetchLoans } = useListLoans(fileId);
   const { data: masters } = useListMasterAgreements(fileId);
   const fvDecisionHistoryQueries = useQueries({
     queries: (loans ?? []).map((loan) => getGetFvDecisionHistoryQueryOptions(loan.id)),
@@ -446,8 +448,9 @@ export default function FileDetail() {
     setCreateOpen(true);
   };
 
-  const handleImportedLease = (result: DocumentImportResult) => {
+  const handleImportedLease = (result: DocumentImportResult, initialStep: 0 | 1 = 1) => {
     setReviewingFormAssessment(false);
+    setImportedAssessmentEntryStep(initialStep);
     const f = result.lease;
     setPendingSourceDoc(
       result.documentId ? { id: result.documentId, name: result.documentName ?? "document.pdf" } : null,
@@ -1576,7 +1579,10 @@ export default function FileDetail() {
                 </div>
               </div>
 
-              {loans && loans.length === 0 && (
+              <LoanListLoadState loading={loansLoading} failed={loansError} refreshing={loansFetching}
+                hasData={loans !== undefined} onRetry={() => { void refetchLoans(); }} />
+
+              {!loansLoading && !loansError && loans && loans.length === 0 && (
                 <Card className="border-dashed border-2 border-muted bg-muted/30">
                   <CardContent className="py-8 text-center space-y-3">
                     <div className="h-12 w-12 rounded-xl bg-muted flex items-center justify-center mx-auto">
@@ -3194,7 +3200,7 @@ export default function FileDetail() {
         onOpenChange={open => { setAssessmentOpen(open); if (!open) setReviewingFormAssessment(false); }}
         initialAnswers={importedAnswers}
         initialStraightLine={importedStraightLine}
-        initialStep={importedAnswers ? reviewingFormAssessment ? 6 : 1 : undefined}
+        initialStep={importedAnswers ? reviewingFormAssessment ? 6 : importedAssessmentEntryStep : undefined}
         importedNotes={importedNotes}
         importedEstimates={importedEstimates}
         onConfirm={(result) => {

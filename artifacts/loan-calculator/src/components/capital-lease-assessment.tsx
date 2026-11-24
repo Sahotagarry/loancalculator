@@ -5,7 +5,8 @@ export { preTaxMonthlyPayment, calculatePVFromAnswers } from "@/lib/lease-assess
 import { formatCurrency } from "@/lib/format";
 import { useState, useCallback, useEffect, useRef } from "react";
 import type { LeaseEndingTerms } from "@workspace/amortization";
-import { assessmentEntryStep, assessmentStepReady } from "@/lib/lease-payment-inputs";
+import { assessmentEntryStep, assessmentStepReady, assessmentStepBlockers } from "@/lib/lease-payment-inputs";
+import { AssessmentAdvanceButton } from "./assessment-advance-button";
 import { LeaseOpeningSummary } from "./lease-opening-summary";
 import { LeasePaymentTest } from "./lease-payment-test";
 import { LeasePaymentCriterion } from "./lease-payment-criterion";
@@ -360,11 +361,12 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
         rentEscalationRate: initialSLRef.current.rentEscalationRate,
       } : {}) };
       // Saved/documented values win; new imports prefer the asset-specific suggestion.
+      const isNewImport = !!initialRef.current && (initialStepRef.current === 0 || initialStepRef.current === 1);
       const life = chooseUsefulLife(startingAnswers.economicLife,
-        initialRef.current && initialStepRef.current === 1 ? importedEstimates?.economicLifeYears : null,
-        initialRef.current && initialStepRef.current === 1 ? startingAnswers.assetType : "");
+        isNewImport ? importedEstimates?.economicLifeYears : null,
+        isNewImport ? startingAnswers.assetType : "");
       setUsefulLifeSource(life.source);
-      if (initialRef.current && initialStepRef.current === 1 && !(startingAnswers.economicLife > 0)) {
+      if (isNewImport && !(startingAnswers.economicLife > 0)) {
         startingAnswers.economicLife = life.years;
         startingAnswers.leaseTermPct = startingAnswers.economicLife > 0 && startingAnswers.termMonths > 0
           ? Math.round(startingAnswers.termMonths / (startingAnswers.economicLife * 12) * 1000) / 10 : 0;
@@ -422,6 +424,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
   };
 
   const canProceed = () => assessmentStepReady(answers, step);
+  const nextBlockers = assessmentStepBlockers(answers, step);
 
   const result = computeResult();
   const conclusion = assessmentConclusion(answers);
@@ -569,7 +572,7 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
               variant="default"
               className="w-full h-12 text-base"
             >
-              Begin Criterion 1
+              Start lease assessment
             </Button>
           </div>
         )}
@@ -1101,12 +1104,12 @@ export default function CapitalLeaseAssessment({ open, onOpenChange, onConfirm, 
               </Button>
             )}
             {step > 0 && step < totalSteps - 1 && !(step === 6 && result.isCapitalLease) && (
-              <Button onClick={() => { if (step === 6) setConfirmedAssessment(assessmentKey); setStep(s => s + 1); }} disabled={!canProceed()} className="gap-2">
+              <AssessmentAdvanceButton onClick={() => { if (step === 6) setConfirmedAssessment(assessmentKey); setStep(s => s + 1); }} reasons={nextBlockers}>
                 {step === 6 ? "Confirm classification & continue" : "Next"}
                 <ArrowRight className="h-4 w-4" />
-              </Button>
+              </AssessmentAdvanceButton>
             )}
-            {step === 6 && result.isCapitalLease && <Button disabled={!canProceed()} onClick={() => { setConfirmedAssessment(assessmentKey); setStep(8); }}>Confirm classification &amp; calculate</Button>}
+            {step === 6 && result.isCapitalLease && <AssessmentAdvanceButton reasons={nextBlockers} onClick={() => { setConfirmedAssessment(assessmentKey); setStep(8); }}>Confirm classification &amp; calculate</AssessmentAdvanceButton>}
             {(step === totalSteps - 1 || step === 8) && (
               <Button disabled={readOnly || changedSinceConclusion || (step === 8 && !result.isCapitalLease)}
                 onClick={async () => {

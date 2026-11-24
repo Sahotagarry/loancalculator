@@ -1,6 +1,6 @@
 import type { LeaseEndingTerms } from "@workspace/amortization";
 import type { AssessmentAnswers } from "../components/capital-lease-assessment";
-import { assessmentConclusion } from "./lease-assessment-values";
+import { assessmentConclusion, leaseReviewIssueLabel } from "./lease-assessment-values";
 
 /** Results only summarize a completed assessment; repair happens in a criterion. */
 export function assessmentStepReady(a: AssessmentAnswers, step: number): boolean {
@@ -11,6 +11,29 @@ export function assessmentStepReady(a: AssessmentAnswers, step: number): boolean
     return result.status !== "needs_review" && result.minimum != null;
   }
   return true;
+}
+
+/** Explain the existing gate without relaxing any assessment requirements. */
+export function assessmentStepBlockers(a: AssessmentAnswers, step: number): string[] {
+  if (assessmentStepReady(a, step)) return [];
+  if (step === 3) {
+    return [
+      ...(!(Number.isFinite(a.economicLife) && a.economicLife > 0)
+        ? ["Enter an expected useful life greater than zero."] : []),
+      ...(!(Number.isInteger(a.termMonths) && a.termMonths > 0)
+        ? ["Enter the lease term as a positive whole number of months."] : []),
+    ];
+  }
+  const result = assessmentConclusion(a);
+  const reasons = [
+    ...result.issues.filter(issue => !issue.startsWith("Minimum lease payment comparison unavailable:")),
+    ...result.comparisonInputsMissing,
+  ].map(issue => issue.startsWith("Useful-life comparison unavailable:")
+    ? "In Criterion 3, enter a valid lease term and expected useful life."
+    : leaseReviewIssueLabel(issue).replace(/\bbelow\b/g, "in Criterion 4"));
+  return [...new Set(reasons.length ? reasons : [
+    "Complete and review the minimum lease payment inputs in Criterion 4.",
+  ])];
 }
 
 export function assessmentEntryStep(a: AssessmentAnswers, requested: number): number {

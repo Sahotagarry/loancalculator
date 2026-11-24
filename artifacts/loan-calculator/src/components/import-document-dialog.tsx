@@ -143,7 +143,7 @@ interface Props {
   onOpenChange: (open: boolean) => void;
   fileId: string;
   onUseLoan: (result: DocumentImportResult, events: ConfirmedImportEvent[]) => void;
-  onUseLease: (result: DocumentImportResult) => void;
+  onUseLease: (result: DocumentImportResult, initialStep: 0 | 1) => void;
   onUseMasterAgreement: (result: DocumentImportResult, facilityIndexes: number[]) => void;
 }
 
@@ -523,7 +523,7 @@ export default function ImportDocumentDialog({ open, onOpenChange, fileId, onUse
         )}
 
         </DialogBody>
-        <DialogFooter className={result?.classification === "lease" ? "shrink-0 border-t pt-3 gap-2 [&>button]:h-auto [&>button]:min-h-11 [&>button]:whitespace-normal [&>button]:py-2" : "flex-col sm:flex-row gap-2"}>
+        <DialogFooter className={result?.classification === "lease" ? "flex-col sm:flex-row sm:flex-wrap shrink-0 border-t pt-3 gap-2 [&>button]:h-auto [&>button]:min-h-11 [&>button]:whitespace-normal [&>button]:py-2" : "flex-col sm:flex-row gap-2"}>
           <Button variant="outline" onClick={() => handleOpenChange(false)}>
             Cancel
           </Button>
@@ -579,15 +579,26 @@ export default function ImportDocumentDialog({ open, onOpenChange, fileId, onUse
             </Button>
           )}
           {result?.classification === "lease" && (
+            <>
             <Button
-              className="gap-2"
+              variant="outline"
               onClick={() => {
-                onUseLease(result);
+                onUseLease(result, 0);
                 handleOpenChange(false);
               }}
             >
-              <Receipt className="h-4 w-4" /> Start Lease Assessment
+              Review lease assessment steps
             </Button>
+            <Button
+              className="gap-2"
+              onClick={() => {
+                onUseLease(result, 1);
+                handleOpenChange(false);
+              }}
+            >
+              <Receipt className="h-4 w-4" /> Start lease assessment
+            </Button>
+            </>
           )}
         </DialogFooter>
       </DialogContent>

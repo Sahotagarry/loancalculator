@@ -1,4 +1,5 @@
 import { createElement } from "react";
+import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { updateLeaseSettlementForTerm } from "@workspace/amortization";
@@ -7,6 +8,7 @@ import { LeaseEndingFields } from "../components/lease-ending-fields";
 import { applyCalculatedLeaseRate, assessmentAnswersForReview, assessmentRate, changeAssessmentTerm, normalizedAssessmentAnswers, leasePricingAssumption, calculateAssessmentImplicitRate, assessmentConclusion } from "./lease-assessment-values";
 import { reconcileCalculatedLeaseRate } from "./lease-assessment-values";
 import { assessmentCalendarUpdate } from "./lease-assessment-calendar";
+import { assessmentEntryStep } from "./lease-payment-inputs";
 
 const answers: AssessmentAnswers = {
   transferOfOwnership: false, bargainPurchaseOption: false, leaseTermPct: 0, pvPctFairValue: 0,
@@ -16,6 +18,44 @@ const answers: AssessmentAnswers = {
   leaseEndingTerms: { version: 1, kind: "guaranteed_residual", amount: 13322, basis: "stated",
     source: "Anonymous settlement evidence", settlementMonth: 60, issues: [], status: "draft" },
 };
+
+describe("PDF lease assessment entry choices", () => {
+  const dialog = readFileSync(new URL("../components/import-document-dialog.tsx", import.meta.url), "utf8");
+  const page = readFileSync(new URL("../pages/file-detail.tsx", import.meta.url), "utf8");
+  const wizard = readFileSync(new URL("../components/capital-lease-assessment.tsx", import.meta.url), "utf8");
+
+  it("offers a separate overview route alongside direct start and cancel", () => {
+    expect(dialog).toMatch(/onUseLease\(result, 0\)[\s\S]*?Review lease assessment steps/);
+    expect(dialog).toMatch(/onUseLease\(result, 1\)[\s\S]*?Start lease assessment/);
+    expect(dialog).toMatch(/onClick=\{\(\) => handleOpenChange\(false\)\}>\s*Cancel/);
+  });
+  it.each([0, 1])("honors entry step %s without changing the extracted answers", requested => {
+    const before = structuredClone(answers);
+    expect(assessmentEntryStep(answers, requested)).toBe(requested);
+    expect(answers).toEqual(before);
+  });
+  it("passes the explicit choice into the same import handler and preserves existing review routing", () => {
+    expect(page).toContain("setImportedAssessmentEntryStep(initialStep)");
+    expect(page).toContain("initialStep={importedAnswers ? reviewingFormAssessment ? 6 : importedAssessmentEntryStep : undefined}");
+    expect(page).toContain("onUseLease={handleImportedLease}");
+    const handler = page.slice(page.indexOf("const handleImportedLease"), page.indexOf("const getStatusBadges"));
+    for (const state of ["setPendingSourceDoc", "setImportedAnswers", "setImportedStraightLine", "setImportedLeaseMeta", "setImportedNotes", "setImportedEstimates"]) {
+      expect(handler).toContain(state);
+    }
+    expect(handler).not.toContain("importDoc.mutate");
+    expect(handler).not.toContain("createLoan.mutate");
+  });
+  it("initializes the same useful-life recommendation on both import routes", () => {
+    expect(wizard).toContain("initialStepRef.current === 0 || initialStepRef.current === 1");
+    expect(wizard).toContain("isNewImport ? importedEstimates?.economicLifeYears : null");
+  });
+  it("continues from the overview without resetting or rereading the PDF", () => {
+    const intro = wizard.slice(wizard.indexOf("{step === 0 && ("), wizard.indexOf("{/* Steps 1-5:"));
+    expect(intro).toMatch(/onClick=\{\(\) => setStep\(1\)\}[\s\S]*?Start lease assessment/);
+    expect(intro).not.toContain("setInputs(");
+    expect(intro).not.toContain(".mutate(");
+  });
+});
 
 describe("PDF lease calculation changes", () => {
   const base = { ...answers, termMonths: 48, leaseEndingTerms: {

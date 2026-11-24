@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { AssessmentAnswers } from "../components/capital-lease-assessment";
 import { LeasePaymentCriterion } from "../components/lease-payment-criterion";
 import { assessmentConclusion, assessmentAnswersForReview, normalizedAssessmentAnswers, preTaxMonthlyPayment } from "./lease-assessment-values";
-import { currentTaxTreatment, changeCriterionTaxTreatment, changeCriterionTaxRate, assessmentStepReady, assessmentEntryStep } from "./lease-payment-inputs";
+import { currentTaxTreatment, changeCriterionTaxTreatment, changeCriterionTaxRate, assessmentStepReady, assessmentEntryStep, assessmentStepBlockers } from "./lease-payment-inputs";
 
 const answers: AssessmentAnswers = {
   transferOfOwnership: false, bargainPurchaseOption: false, specializedAsset: false,
@@ -103,6 +103,32 @@ describe("compact lease-payment criterion", () => {
     // A different passing test must not expose an unfinished payment test on results.
     expect(assessmentStepReady({ ...ready, transferOfOwnership: true, fairValue: 0 }, 4)).toBe(false);
     expect(assessmentStepReady({ ...ready, economicLife: 4, fairValue: 0 }, 5)).toBe(false);
+  });
+  it("explains each missing useful-life input instead of leaving Next silently disabled", () => {
+    const reasons = assessmentStepBlockers({ ...answers, economicLife: 0, termMonths: 1.5 }, 3);
+    expect(reasons).toEqual([
+      "Enter an expected useful life greater than zero.",
+      "Enter the lease term as a positive whole number of months.",
+    ]);
+    expect(assessmentStepBlockers({ ...answers, economicLife: 10, termMonths: 48 }, 3)).toEqual([]);
+  });
+  it("includes specific missing payment inputs even when ownership already supports capital classification", () => {
+    expect(assessmentStepBlockers({ ...answers, transferOfOwnership: true, fairValue: 0 }, 4))
+      .toContain("Enter the asset's fair value.");
+  });
+  it("uses the same evidence requirements as Next and identifies the criterion to fix", () => {
+    const before = structuredClone(answers);
+    const reasons = assessmentStepBlockers(answers, 4);
+    expect(reasons.join(" ")).toContain("Criterion 4");
+    expect(reasons.join(" ")).not.toContain("below");
+    expect(new Set(reasons).size).toBe(reasons.length);
+    expect(answers).toEqual(before);
+    const ready = { ...answers, leaseEndingTerms: { ...answers.leaseEndingTerms!, status: "reviewed" as const,
+      commencement: { ...answers.leaseEndingTerms!.commencement!, confirmed: true } } };
+    for (const step of [1, 2, 3, 4, 5, 6, 7, 8]) {
+      expect(assessmentStepBlockers(ready, step).length === 0).toBe(assessmentStepReady(ready, step));
+      expect(assessmentStepBlockers(answers, step).length === 0).toBe(assessmentStepReady(answers, step));
+    }
   });
 });
 
