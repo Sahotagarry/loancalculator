@@ -11,6 +11,7 @@ import { leaseSourceChecks, leaseSourceFacts, recoverLeaseReserveOperands } from
 import { unresolvedLeaseEnding } from "./lease-ending";
 import { UserFacingError, type AzureSettings } from "./azure-settings";
 import { LEASE_USEFUL_LIFE_GUIDANCE } from "./lease-useful-life-guidance";
+import { LEASE_RATE_GUIDANCE, verifyLeaseFinancingRate } from "./import-lease-rate";
 
 const LEGACY_API_VERSION = "2024-10-21";
 
@@ -239,6 +240,7 @@ Extraction rules — CRITICAL:
 - For a lease, also fill "fieldNotes": an object mapping each NON-NULL extracted lease field name to a short note (max ~15 words) citing where/how you found it — quote the section or clause wording (e.g. "termMonths": "Section 2.1: term of five (5) years", "monthlyPayment": "$28.00/sf × 3,200 sf ÷ 12 (Section 4.1)"). Only include fields you actually extracted. Booleans you inferred as false because nothing was stated should NOT get a note.
 - For a lease, also fill "estimates": ONLY for economicLifeYears, fairValue, and interestRate that are NOT stated in the document, provide the best-supported professional ESTIMATE using the actual asset and agreement information. These are clearly labelled estimates, NOT extractions — never put them in the main lease fields. Set "reasoning" inside estimates to explain fair-value and interest-rate assumptions, and use the separate economicLifeReasoning for useful life. If you cannot estimate responsibly, use null.
 ${LEASE_USEFUL_LIFE_GUIDANCE}
+${LEASE_RATE_GUIDANCE}
 
 Lease rentals:
 - Return firstPaymentAmount only when the agreement states a distinct first rental. It replaces the first monthly rental; it is not a separate down payment, refundable deposit or terminal amount. Keep it on the same tax and service basis as monthlyPayment. Otherwise return null.
@@ -384,6 +386,26 @@ export async function extractLoanOrLease(settings: AzureSettings, documentText: 
     const duration = verifyDurations(documentText, lease, "lease");
     Object.assign(lease, { termMonths: duration.termMonths, termQuote: duration.termQuote, durationWarnings: duration.durationWarnings });
     const notes = { ...lease.fieldNotes };
+    const checkedRate = verifyLeaseFinancingRate(documentText, lease.interestRate);
+    lease.interestRate = checkedRate.rate;
+    const rateWarnings = new Set<string>();
+    if (checkedRate.warning) {
+      delete notes.interestRate;
+      rateWarnings.add(checkedRate.warning);
+    }
+    // Optional ending metadata also reaches the discount-rate selector. Never
+    // allow a misidentified pricing rate to bypass the main-field safeguard.
+    if (lease.leaseEndingTerms) {
+      for (const key of ["implicitRate", "discountRate"] as const) {
+        const checked = verifyLeaseFinancingRate(documentText, lease.leaseEndingTerms[key] ?? null);
+        if (checked.warning) {
+          lease.leaseEndingTerms[key] = null;
+          if (key === "implicitRate") delete lease.leaseEndingTerms.implicitRateBasis;
+          rateWarnings.add(checked.warning);
+        }
+      }
+    }
+    validated.data.reasoning = [validated.data.reasoning, ...rateWarnings].filter(Boolean).join(" ");
     if (lease.fairValue == null) {
       const proposedValue = proposedLeaseFairValue(documentText);
       if (proposedValue) {
