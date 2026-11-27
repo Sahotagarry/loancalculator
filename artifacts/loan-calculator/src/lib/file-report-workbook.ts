@@ -31,7 +31,9 @@ type Section = Workpaper["sections"][number];
 const ref = (i: number) => String(i + 1).padStart(2, "0");
 function tabName(index: number, purpose: string, name: string) {
   const prefix = `${ref(index)} ${purpose} - `;
-  const safe = name.replace(/[\\/?*[\]:\x00-\x1f]/g, " ").trim() || "Agreement";
+  // ExcelJS does not escape ASCII apostrophes in generated Print_Titles
+  // references. A typographic apostrophe keeps the tab readable and valid.
+  const safe = name.replace(/'/g, "\u2019").replace(/[\\/?*[\]:\x00-\x1f]/g, " ").trim() || "Agreement";
   return (prefix + safe).slice(0, 31).replace(/[\uD800-\uDBFF'\s]+$/g, "");
 }
 function reportDate(value: string) {

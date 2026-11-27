@@ -95,7 +95,7 @@ function rightHandTable(ws: Worksheet, wp: Workpaper, section: Section, top: num
 
   const data = subtotal ? section.rows.filter(r => r[0] !== "Total") : section.rows;
   const first = top + 3;
-  ws.addTable({
+  if (data.length) ws.addTable({
     name, ref: `H${first}`, headerRow: true, totalsRow: subtotal, style: tableStyle,
     columns: section.head.map((h, i) => ({
       name: h, filterButton: true,
@@ -104,6 +104,7 @@ function rightHandTable(ws: Worksheet, wp: Workpaper, section: Section, top: num
     })),
     rows: data.map(r => [...r]),
   });
+  else section.head.forEach((value, i) => { ws.getCell(first, i + 8).value = value; });
   ws.getCell(first, 8).font = ws.getCell(first, 9).font = { ...font, bold: true };
   for (let i = 0; i < data.length; i++) {
     const row = first + i + 1;
@@ -117,7 +118,8 @@ function rightHandTable(ws: Worksheet, wp: Workpaper, section: Section, top: num
   if (subtotal) {
     const sum = rounded(data.reduce((acc, _, i) => acc + Number(ws.getCell(first + i + 1, 9).value), 0));
     const total = ws.getCell(++end, 9);
-    total.value = { formula: `SUBTOTAL(109,${name}[${section.head[1]}])`, result: sum };
+    if (!data.length) ws.getCell(end, 8).value = "Total";
+    total.value = data.length ? { formula: `SUBTOTAL(109,${name}[${section.head[1]}])`, result: sum } : sum;
     total.numFmt = currency;
   }
   for (const note of section.notes ?? []) {

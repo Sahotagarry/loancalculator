@@ -85,7 +85,11 @@ export function reportTable(
   totalsLabel = "Total",
 ) {
   const totals = cols.some((c) => c.sum);
-  if (rows.length || totals)
+  // ExcelJS serializes empty structured tables, but Excel may reject them
+  // (exceljs/exceljs#2678). Keep empty sections as ordinary cells, including
+  // their zero totals, without inventing a repayment row.
+  const hasTable = rows.length > 0;
+  if (hasTable)
     ws.addTable({
       name,
       ref: `A${start}`,
@@ -108,7 +112,7 @@ export function reportTable(
     header.font = { ...font, bold: true, color: { argb: "FFFFFFFF" } };
     // Header-only evidence sections retain their original columns but do not
     // create an empty table or invent a first transaction for Excel to filter.
-    if (!rows.length && !totals)
+    if (!hasTable)
       header.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF37704C" } };
     let sum = 0,
       largest = 0;
@@ -137,10 +141,11 @@ export function reportTable(
       );
     if (totals) {
       const cell = ws.getCell(start + 1 + rows.length, i + 1);
+      if (!hasTable && i === 0) cell.value = totalsLabel;
       cell.font = { ...font, bold: true };
       cell.border = { top: { style: "thin", color: { argb: "FF37704C" } } };
       if (c.sum) {
-        cell.value = { formula: `SUBTOTAL(109,${name}[${c.name}])`, result: sum };
+        cell.value = hasTable ? { formula: `SUBTOTAL(109,${name}[${c.name}])`, result: sum } : sum;
         cell.numFmt = c.format ?? "General";
       }
     }
