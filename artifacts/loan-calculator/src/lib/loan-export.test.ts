@@ -124,7 +124,8 @@ describe("serialized Excel reports", () => {
     eqSubtotal(l.first[`D${op}`], l.first[`D${op - 1}`].v);
     eqSubtotal(l.first[`F${op}`], 60000);
     expect(l.first[`E${op}`]?.f).toBeUndefined();
-    const names = p.book.SheetNames;
+    expect(p.book.SheetNames.slice(1, 3)).toEqual(["Loan Repayment Summary", "Capital Lease Summary"]);
+    const names = p.book.SheetNames.filter(n => !["Loan Repayment Summary", "Capital Lease Summary"].includes(n));
     expect(names.map((n) => n.split(" - ")[0])).toEqual([
       "Lead Sheet",
       "01 Detail",
@@ -136,9 +137,9 @@ describe("serialized Excel reports", () => {
     expect(new Set(names.map((n) => n.toLowerCase())).size).toBe(6);
     expect(Math.max(...names.map((n) => n.length))).toBeLessThanOrEqual(31);
     const [loanWp, capWp] = buildFileWorkpapers(file);
-    checkSchedule(p.book.Sheets[names[2]], loanWp.schedule!, 4, "F");
-    checkSchedule(p.book.Sheets[names[4]], capWp.schedule!, 4, "F");
-    for (const idx of [1, 2, 3, 4]) expect(p.book.Sheets[names[idx]].A1.v).toContain(loan.name);
+    checkSchedule(p.book.Sheets[names[2]], loanWp.schedule!, 6, "F");
+    checkSchedule(p.book.Sheets[names[4]], capWp.schedule!, 6, "F");
+    for (const idx of [1, 2, 3, 4]) expect(p.book.Sheets[names[idx]].A3.v).toContain(loan.name);
     const rows = data(p.book.Sheets[names[1]]);
     expect(rows.find((r) => r[0] === "Down payment")?.[1]).toBe(-5000);
     expect(rows.find((r) => r[0] === "Stated rate")?.[1]).toBe(0.03125);

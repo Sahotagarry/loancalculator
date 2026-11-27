@@ -22,8 +22,10 @@ import {
   rateFormat,
   reportTable,
   wrap,
+  workpaperHeader,
 } from "./excel-report-style";
 import { scheduleTable } from "./loan-report-workbook";
+import { buildFileRepaymentSummaries } from "./file-repayment-summaries";
 
 type Section = Workpaper["sections"][number];
 const ref = (i: number) => String(i + 1).padStart(2, "0");
@@ -74,12 +76,11 @@ function detailValue(
   }
   return { value: v };
 }
-function detailSheet(ws: Worksheet, wp: Workpaper, index: number) {
+function detailSheet(ws: Worksheet, wp: Workpaper, index: number, summary = false) {
   const n = Math.max(2, ...wp.sections.map((s) => s.head.length));
   for (let i = 1; i <= n; i++) ws.getColumn(i).width = i === 1 ? 47 : i === 2 ? 56 : 26;
-  heading(ws, 1, n, `${ref(index)} · ${wp.loanName} — ${wp.typeLabel} Workpaper`);
-  ws.mergeCells(2, 1, 2, n);
-  ws.getCell("A2").value = `${wp.clientName} · Year ended ${wp.fyeLabel}`;
+  workpaperHeader(ws, n, wp.clientName, wp.fyeLabel);
+  heading(ws, 3, n, summary ? wp.typeLabel : `${ref(index)} · ${wp.loanName} — ${wp.typeLabel} Workpaper`);
   let row = 4;
   wp.sections.forEach((s, idx) => {
     heading(ws, row++, n, s.title, true);
@@ -166,9 +167,8 @@ export function buildFileWorkbook(input: FileWorkpaperInput, includeDetails: boo
     leases = indices.filter((x) => x.operating);
   ws.getColumn(1).width = 41;
   ws.getColumn(2).width = 38;
-  heading(ws, 1, 9, `${input.clientName} — Debt & Lease Lead Sheet`);
-  ws.mergeCells("A2:I2");
-  ws.getCell("A2").value = `Year ended ${lead.fyeLabel}`;
+  workpaperHeader(ws, 9, input.clientName, lead.fyeLabel);
+  heading(ws, 3, 9, "Debt & Lease Lead Sheet");
   let row = 4;
   if (lead.debtRows.length) {
     heading(ws, row++, 9, "Loans & Capital Leases", true);
@@ -224,14 +224,20 @@ export function buildFileWorkbook(input: FileWorkpaperInput, includeDetails: boo
       "Total operating leases",
     );
   }
-  if (includeDetails)
+  if (includeDetails) {
+    for (const [i, summary] of buildFileRepaymentSummaries(input, excelNumbers).entries()) {
+      detailSheet(wb.addWorksheet(summary.typeLabel === "Loan Repayment Summary" ? "Loan Repayment Summary" : "Capital Lease Summary"),
+        summary, workpapers.length + i, true);
+    }
     workpapers.forEach((wp, i) => {
       detailSheet(wb.addWorksheet(tabName(i, "Detail", wp.loanName)), wp, i);
       if (wp.schedule?.length) {
         const sched = wb.addWorksheet(tabName(i, "Schedule", wp.loanName));
-        scheduleTable(sched, `Schedule_${i + 1}`, 3, wp.schedule, "package");
-        heading(sched, 1, 6, `${ref(i)} · ${wp.loanName} — ${wp.typeLabel} Schedule`);
+        scheduleTable(sched, `Schedule_${i + 1}`, 5, wp.schedule, "package");
+        workpaperHeader(sched, 6, wp.clientName, wp.fyeLabel);
+        heading(sched, 3, 6, `${ref(i)} · ${wp.loanName} — ${wp.typeLabel} Schedule`);
       }
     });
+  }
   return wb;
 }

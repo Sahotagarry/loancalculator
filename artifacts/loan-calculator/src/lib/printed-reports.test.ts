@@ -206,6 +206,10 @@ it("prints the fictional mixed-instrument file using the booked calculation and 
       const content = doc.internal.pages[page].join("\n");
       expect(content).toContain(`(Page ${page} of ${count})`);
       expect(content).toContain("2026");
+      if (doc === documents.consolidated || doc === documents["lead-sheet"] || doc === documents.agreement) {
+        expect(content).toContain("Client name:");
+        expect(content).toContain("Year-end:");
+      }
     }
   }
   const textOf = (doc: jsPDF) => doc.internal.pages.slice(1).flat().join("\n");
@@ -214,6 +218,11 @@ it("prints the fictional mixed-instrument file using the booked calculation and 
     workpaper.indexOf("(Terms)"),
   );
   const packageText = textOf(documents.consolidated);
+  expect(packageText).toContain("Loan Repayment Summary Workpaper");
+  expect(packageText).toContain("Capital Lease Summary Workpaper");
+  expect(packageText).toContain("Less: amount representing interest");
+  expect(packageText).toContain("Capital lease liability at year end");
+  expect(workpaper).not.toContain("Loan Repayment Summary Workpaper");
   const operating = packageText.slice(
     packageText.indexOf("Operating Lease Workpaper"),
   );

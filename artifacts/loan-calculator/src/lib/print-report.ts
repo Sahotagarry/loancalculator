@@ -6,6 +6,7 @@ export interface PrintIdentity {
   title: string;
   subject: string;
   period?: string;
+  clientName?: string;
 }
 type Cell = string | number;
 export interface PrintTable {
@@ -60,9 +61,14 @@ export class PrintReport {
       .setTextColor(34);
   }
   private layoutHeader() {
-    this.font(10);
+    this.font(10, !!this.identity.clientName);
+    const subject = this.identity.clientName ? [
+      `Client name: ${this.identity.clientName}`,
+      this.identity.period ? `Year-end: ${this.identity.period.replace(/^(?:Year ended|Reporting year-end:)\s*/i, "")}` : "",
+      ...this.identity.subject.split("\n").filter(line => line !== this.identity.clientName),
+    ].filter(Boolean).join("\n") : this.identity.subject;
     const full: string[] = this.doc.splitTextToSize(
-      printable(this.identity.subject),
+      printable(subject),
       this.width,
     );
     // Exceptionally long legal names must not consume the entire running header.
@@ -73,7 +79,7 @@ export class PrintReport {
     this.top = 28 + this.headerLines.length * 4.5;
     this.y = this.top;
     this.decoratePage();
-    if (full.length > 5) this.paragraph(this.identity.subject);
+    if (full.length > 5) this.paragraph(subject);
   }
   private decoratePage() {
     const page = this.doc.getCurrentPageInfo().pageNumber;
@@ -81,7 +87,7 @@ export class PrintReport {
     this.decorated.add(page);
     this.font(16, true);
     this.doc.text(this.identity.title, inset, 17);
-    this.font(10);
+    this.font(10, !!this.identity.clientName);
     this.headerLines.forEach((line, i) =>
       this.doc.text(line, inset, 23 + 4.5 * i),
     );

@@ -60,6 +60,21 @@ export const column = (name: string, width: number, format?: string, sum?: boole
 });
 export const amount = (name: string, sum = false) => column(name, 19, moneyFormat, sum);
 
+/** Shared top-left identification on every consolidated-workpaper worksheet. */
+export function workpaperHeader(ws: Worksheet, columns: number, clientName: string, yearEnd: string) {
+  for (const [index, text] of [`Client name: ${clientName}`, `Year-end: ${yearEnd}`].entries()) {
+    const row = index + 1;
+    ws.mergeCells(row, 1, row, columns);
+    const cell = ws.getCell(row, 1);
+    cell.value = text;
+    cell.font = { ...font, bold: true, size: 12 };
+    cell.alignment = { horizontal: "left", vertical: "middle", wrapText: true };
+    wrap(ws, row, text, Array.from({ length: columns }, (_, i) => ws.getColumn(i + 1).width ?? 12).reduce((a, b) => a + b, 0));
+    ws.getRow(row).height = Math.max(20, ws.getRow(row).height ?? 0);
+  }
+  ws.pageSetup.printTitlesRow = "1:3";
+}
+
 /** Write typed cells, never infer a numeric or formula value from arbitrary text. */
 export function reportTable(
   ws: Worksheet,

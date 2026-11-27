@@ -1,4 +1,5 @@
 import { savedLeaseConclusion } from "./lease-assessment-values";
+import { buildFileRepaymentSummaries } from "./file-repayment-summaries";
 import { saveAs } from "file-saver";
 import { PrintReport, type PrintTable, type Orientation } from "./print-report";
 import { printRateTimeline } from "./print-rate-evidence";
@@ -731,7 +732,7 @@ function buildOperatingLeaseWorkpaper(
 
 function workpaperIdentity(wp: Workpaper, inPackage: boolean) {
   return { title: `${inPackage ? "Consolidated Workpapers  /  " : ""}${wp.typeLabel} Workpaper`,
-    subject: `${wp.loanName}\n${wp.clientName}`, period: `Year ended ${wp.fyeLabel}` };
+    subject: wp.loanName, clientName: wp.clientName, period: `Year ended ${wp.fyeLabel}` };
 }
 
 function renderWorkpaperPdf(report: PrintReport, wp: Workpaper, inPackage: boolean) {
@@ -946,7 +947,7 @@ export function buildFileWorkpapers(input: FileWorkpaperInput, cells = displayNu
 
 function renderLeadSheetPdf(input: FileWorkpaperInput, lead: LeadSheetData, inPackage: boolean) {
   const report = new PrintReport({ title: inPackage ? "Consolidated Workpapers  /  Lead Sheet" : "Debt & Lease Lead Sheet",
-    subject: input.clientName, period: `Year ended ${lead.fyeLabel}` }, "landscape");
+    subject: input.clientName, clientName: input.clientName, period: `Year ended ${lead.fyeLabel}` }, "landscape");
   if (lead.debtRows.length) {
     report.table({ title: "Loans and capital leases", head: ["Agreement", "Type", "Rate", "Maturity", "Balance", "Current", "Long-term", "Interest expense"], rows: lead.debtRows,
       foot: [lead.debtTotals], widths: [20, 13, 7, 12, 12, 12, 12, 12], right: [2, 4, 5, 6, 7] });
@@ -963,6 +964,7 @@ export function exportFileWorkpapersPdf(input: FileWorkpaperInput): void {
   const workpapers = buildFileWorkpapers(input);
   if (!workpapers.length) return;
   const report = renderLeadSheetPdf(input, buildLeadSheet(input, workpapers), true);
+  for (const summary of buildFileRepaymentSummaries(input)) renderWorkpaperPdf(report, summary, true);
   for (const wp of workpapers) renderWorkpaperPdf(report, wp, true);
   report.finish().save(`${input.clientName}_Debt_Lease_Workpapers.pdf`);
 }
